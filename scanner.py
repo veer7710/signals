@@ -76,7 +76,7 @@ def send(msg):
         data={"chat_id": CHAT_ID, "text": msg, "parse_mode": "HTML"},
         timeout=15,
     )
-send("✅ test — bot pipeline works")
+
 
 def get(ticker, period, interval):
     d = yf.download(ticker, period=period, interval=interval, progress=False)
