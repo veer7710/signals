@@ -191,3 +191,4 @@ if alerts:
     print("Sent:", len(alerts), "alert(s)")
 else:
     print("No new signals this run.")
+
