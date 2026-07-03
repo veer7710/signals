@@ -252,6 +252,11 @@ paper=jload(PAPER_FILE,{
     "loose":{"balance":PAPER_START,"open":[],"closed":[]},
     "strict":{"balance":PAPER_START,"open":[],"closed":[]},
     "start":PAPER_START,"last_hb":"","last_week":""})
+# migrate/repair if an old-format paper.json is present
+if "loose" not in paper or "strict" not in paper:
+    paper={"loose":{"balance":PAPER_START,"open":[],"closed":[]},
+           "strict":{"balance":PAPER_START,"open":[],"closed":[]},
+           "start":PAPER_START,"last_hb":"","last_week":""}
 now=datetime.now(timezone.utc)
 alerts=[]; state_changes={}; log_changed=False
 
@@ -406,6 +411,7 @@ if state.get("wk")!=wk_key and now.weekday()==6 and now.hour==20:
         f"📊 Paper (week)\n"
         f"Loose £{L['balance']:.0f} ({lp:+.0f}) · {ln} trades · {lwr} win\n"
         f"Strict £{S['balance']:.0f} ({sp:+.0f}) · {sn} trades · {swr} win")
+    out.append(weekly(log))   # A/B/S signal win rates
     state_changes["wk"]=wk_key
 
 # ---- send + persist ----
