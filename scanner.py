@@ -1,19 +1,14 @@
 # ============================================================
-# SIGNAL SCANNER v9 = v8 + LIQUIDITY SWEEP signals + report fix
-#
-#  FIX: hourly report was repeating alongside signals — its
-#  "already sent this hour" memory lived in paper.json, which
-#  isn't saved unless the workflow commits it. Memory moved to
-#  state.json (always committed). ALSO check your yml line reads:
-#      git add state.json log.json paper.json || true
-#
-#  NEW: [SWEEP] signals — liquidity sweep reversal on 15m for
-#  gold/silver/FX/indices: price wicks through a 20-bar high/low
-#  (stop-hunt) then closes back inside -> reversal signal.
-#  Stop beyond the sweep wick, ~2R target, hold intraday ~1-3h.
-#  Tracked in the log as tier "S" so the weekly recap grades
-#  sweeps separately from A/B. Sweep trades also enter the loose
-#  paper book.
+# SIGNAL SCANNER v10
+#  = v9 (sweeps, confluence, dual paper books) PLUS:
+#  - DAILY 4pm UK report (replaces hourly): yesterday's P&L per
+#    book, closes, carried-over opens, balances
+#  - WEEKLY STOCK WATCHLIST (Sundays): top-3 uptrending stocks by
+#    momentum, tracked as tier W — exit warning fires automatically
+#    if a pick breaks its stop
+#  - Close notifications restored (✅/❌/⏰ per resolved trade)
+#  - Expanded universe: +EUR/GBP +EUR/JPY +GBP/JPY +JP225
+#    +Meta +Google +AMD +Netflix
 # ============================================================
 
 import os, json, time, requests
@@ -33,15 +28,23 @@ SYMBOLS = {
     "AUD/USD":   ("AUDUSD=X", "FX"),
     "USD/CAD":   ("USDCAD=X", "FX"),
     "NZD/USD":   ("NZDUSD=X", "FX"),
+    "EUR/GBP":   ("EURGBP=X", "FX"),
+    "EUR/JPY":   ("EURJPY=X", "FX"),
+    "GBP/JPY":   ("GBPJPY=X", "FX"),
     "US500":     ("ES=F",     "INDEX"),
     "US100":     ("NQ=F",     "INDEX"),
     "UK100":     ("^FTSE",    "INDEX"),
     "DE40":      ("^GDAXI",   "INDEX"),
+    "JP225":     ("^N225",    "INDEX"),
     "Apple":     ("AAPL",     "STOCK"),
     "Microsoft": ("MSFT",     "STOCK"),
     "Nvidia":    ("NVDA",     "STOCK"),
     "Tesla":     ("TSLA",     "STOCK"),
     "Amazon":    ("AMZN",     "STOCK"),
+    "Meta":      ("META",     "STOCK"),
+    "Google":    ("GOOGL",    "STOCK"),
+    "AMD":       ("AMD",      "STOCK"),
+    "Netflix":   ("NFLX",     "STOCK"),
 }
 MUST_INCLUDE = {"METAL":"BREAKOUT","ENERGY":"BREAKOUT","FX":"MOMENTUM",
                 "INDEX":"TREND","STOCK":"TREND"}
@@ -200,13 +203,47 @@ def resolve(log, closer):
                 if closer: closer(s,r)
     return msgs, changed
 
+def stock_watchlist(log, now):
+    """Top-3 uptrending stocks by 1-month momentum. Each pick is
+    logged as tier W with a 2xATR stop and 1-week expiry, so the
+    resolution system warns automatically if one breaks down."""
+    scores=[]
+    for name,(tk,klass) in SYMBOLS.items():
+        if klass!="STOCK": continue
+        try:
+            d=get(tk,"6mo","1d")
+            if len(d)<60: continue
+            c=d["Close"]
+            e50,e200=ema(c,50),ema(c,200)
+            if not (e50.iloc[-1]>e200.iloc[-1] and float(c.iloc[-1])>float(e50.iloc[-1])):
+                continue
+            mom=float(c.iloc[-1]/c.iloc[-21]-1)
+            a=float(atr_s(d["High"],d["Low"],c).iloc[-1])
+            scores.append((mom,name,tk,float(c.iloc[-1]),a))
+        except Exception:
+            pass
+    scores.sort(reverse=True)
+    if not scores:
+        return "📈 Weekly stocks: none in uptrends right now — sitting out is the trade.", False
+    lines=["📈 Weekly stock watchlist (uptrend + momentum)"]
+    changed=False
+    for mom,name,tk,px,a in scores[:3]:
+        stop=px-2*a; tp=px+3*a
+        lines.append(f"{name} ~{px:.2f} · 1mo {mom*100:+.1f}% · exit below {stop:.2f}")
+        log.append({"name":name,"ticker":tk,"tf":"1d","tier":"W","side":1,
+                    "entry":px,"stop":stop,"tp":tp,"expiry_h":168,
+                    "time":now.isoformat(),"session":"weekly","status":"open"})
+        changed=True
+    lines.append("Risk ≤2% each if trading · bring this list to Claude for the news check")
+    return "\n".join(lines), changed
+
 def weekly(log):
     cut=datetime.now(timezone.utc)-timedelta(days=7)
     done=[s for s in log if s["status"] in("win","loss","expired")
           and datetime.fromisoformat(s["time"])>cut]
     if not done: return "📊 <b>Weekly recap</b>\nNo resolved signals yet."
     out=["📊 <b>Weekly recap</b> (7d)"]
-    for tier in("A","B","S"):
+    for tier in("A","B","S","W"):
         ts=[s for s in done if s["tier"]==tier]
         if not ts: continue
         w=sum(1 for s in ts if s["status"]=="win")
@@ -242,6 +279,7 @@ def paper_resolve(book):
                 pnl=(r[1]-tr["entry"])*tr["side"]*tr["units"]
                 book["balance"]=round(book["balance"]+pnl,2)
                 tr["result"],tr["pnl"]=r[0],round(pnl,2)
+                tr["closed_t"]=datetime.now(timezone.utc).isoformat()
                 book["closed"].append(tr); events.append((tr,r[0],pnl))
     book["open"]=[t for t in book["open"] if "result" not in t]
     return events
@@ -260,8 +298,13 @@ if "loose" not in paper or "strict" not in paper:
 now=datetime.now(timezone.utc)
 alerts=[]; state_changes={}; log_changed=False
 
-# resolve strict log (for your weekly recap)
-_,log_changed=resolve(log,None)
+# resolve strict log — with close notifications restored
+res_msgs=[]
+def _closer(s, r):
+    ic = "✅" if r[0]=="win" else "❌" if r[0]=="loss" else "⏰"
+    word = {"win":"hit target","loss":"stopped","expired":"expired"}[r[0]]
+    res_msgs.append(f"{ic} {s['name']} ({s['tf']}) [{s['tier']}] {word}")
+_, log_changed = resolve(log, _closer)
 
 # resolve BOTH paper books before opening new ones
 loose_events=paper_resolve(paper["loose"])
@@ -375,7 +418,7 @@ for name,(tk,klass) in SYMBOLS.items():
             print(f"{key} failed: {e}")
 
 # ---- assemble outbound ----
-out=list(alerts)
+out=res_msgs+list(alerts)
 
 def book_stats(book, hours=None):
     cl=book["closed"]
@@ -386,20 +429,24 @@ def book_stats(book, hours=None):
     wr=f"{100*w/n:.0f}%" if n else "—"
     return n, wr
 
-# hourly report — split, minimal. Memory in STATE (bug fix).
-# Quiet hours: nothing 00:00-09:59; at 10:00 one combined overnight report.
-hb_key=now.strftime("%Y-%m-%dT%H")
-quiet = 0 <= now.hour < 10
-if state.get("hb")!=hb_key and not quiet:
+# DAILY report — once a day at 4pm UK (15:00 UTC during summer time).
+# Shows: profit/loss from trades closed in the last 24h, how many
+# closed, and how many are still open (carried over).
+day_key=now.strftime("%Y-%m-%d")
+if state.get("daily")!=day_key and now.hour==15:
+    def day_stats(book):
+        cut=now-timedelta(hours=24)
+        cl=[t for t in book["closed"]
+            if datetime.fromisoformat(t.get("closed_t", t["time"]))>cut]
+        return sum(t.get("pnl",0) for t in cl), len(cl), len(book["open"])
     L,S=paper["loose"],paper["strict"]
-    window = 11 if now.hour==10 else 1
-    lc,lwr=book_stats(L,window); sc,swr=book_stats(S,window)
-    label = "overnight" if now.hour==10 else "hr"
+    lp,lc,lo=day_stats(L); sp2,sc2,so=day_stats(S)
     out.append(
-        f"⏱ Paper ({label})\n"
-        f"Loose £{L['balance']:.0f} · {lc} closed · {lwr} win\n"
-        f"Strict £{S['balance']:.0f} · {sc} closed · {swr} win")
-    state_changes["hb"]=hb_key
+        f"📅 Paper daily\n"
+        f"Loose {lp:+.2f} · {lc} closed · {lo} open\n"
+        f"Strict {sp2:+.2f} · {sc2} closed · {so} open\n"
+        f"Balances: L £{L['balance']:.2f} / S £{S['balance']:.2f}")
+    state_changes["daily"]=day_key
 
 # weekly report — split, minimal (Sun 8pm). Memory in STATE.
 wk_key=now.strftime("%Y-%W")
@@ -411,7 +458,10 @@ if state.get("wk")!=wk_key and now.weekday()==6 and now.hour==20:
         f"📊 Paper (week)\n"
         f"Loose £{L['balance']:.0f} ({lp:+.0f}) · {ln} trades · {lwr} win\n"
         f"Strict £{S['balance']:.0f} ({sp:+.0f}) · {sn} trades · {swr} win")
-    out.append(weekly(log))   # A/B/S signal win rates
+    out.append(weekly(log))   # A/B/S/W signal win rates
+    wl_msg, wl_changed = stock_watchlist(log, now)
+    out.append(wl_msg)
+    log_changed = log_changed or wl_changed
     state_changes["wk"]=wk_key
 
 # ---- send + persist ----
