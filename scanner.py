@@ -1,14 +1,14 @@
 # ============================================================
-# SIGNAL SCANNER v10
-#  = v9 (sweeps, confluence, dual paper books) PLUS:
-#  - DAILY 4pm UK report (replaces hourly): yesterday's P&L per
-#    book, closes, carried-over opens, balances
-#  - WEEKLY STOCK WATCHLIST (Sundays): top-3 uptrending stocks by
-#    momentum, tracked as tier W — exit warning fires automatically
-#    if a pick breaks its stop
-#  - Close notifications restored (✅/❌/⏰ per resolved trade)
-#  - Expanded universe: +EUR/GBP +EUR/JPY +GBP/JPY +JP225
-#    +Meta +Google +AMD +Netflix
+# SIGNAL SCANNER v12 = v11 + crypto (Bitcoin/Ethereum) in the
+#  PAPER book only — weekend markets to test against. Crypto
+#  never appears in your signal alerts (not tradeable on UK CFD
+#  accounts). Real spread costs applied like everything else.
+#  Every paper trade now pays a realistic spread/slippage cost
+#  on close (per asset class). Research is unanimous that costs
+#  are the #1 silent account-killer, so the paper balances now
+#  reflect what real fills would actually do — decision-grade.
+#  All v10 features unchanged: daily 4pm report, Sunday watchlist
+#  + tier recap, close notifications, sweeps, 24 markets.
 # ============================================================
 
 import os, json, time, requests
@@ -45,6 +45,8 @@ SYMBOLS = {
     "Google":    ("GOOGL",    "STOCK"),
     "AMD":       ("AMD",      "STOCK"),
     "Netflix":   ("NFLX",     "STOCK"),
+    "Bitcoin":   ("BTC-USD",  "CRYPTO"),   # paper book only
+    "Ethereum":  ("ETH-USD",  "CRYPTO"),   # paper book only
 }
 MUST_INCLUDE = {"METAL":"BREAKOUT","ENERGY":"BREAKOUT","FX":"MOMENTUM",
                 "INDEX":"TREND","STOCK":"TREND"}
@@ -62,6 +64,9 @@ MIN_SCORE_P, ADX_DEAD_P, COOL_P = 2, 8, 45
 
 STOP_ATR, TP_ATR, MIN_ATR_PCT, FRESH_FLIP = 1.5, 2.5, 0.0004, 3
 PAPER_START, PAPER_RISK = 150.0, 0.02
+# realistic round-trip spread cost as % of price, per asset class
+SPREAD_PCT = {"METAL":0.0004,"ENERGY":0.0006,"FX":0.0002,
+              "INDEX":0.0003,"STOCK":0.0005,"CRYPTO":0.0010}
 
 STATE_FILE, LOG_FILE, PAPER_FILE = "state.json", "log.json", "paper.json"
 BOT_TOKEN, CHAT_ID = os.environ["TG_TOKEN"], os.environ["TG_CHAT"]
@@ -277,6 +282,7 @@ def paper_resolve(book):
                     r=("expired",float(df["Close"].iloc[-1]))
             if r:
                 pnl=(r[1]-tr["entry"])*tr["side"]*tr["units"]
+                pnl-=tr.get("spr",0.0)*tr["units"]     # spread/slippage cost
                 book["balance"]=round(book["balance"]+pnl,2)
                 tr["result"],tr["pnl"]=r[0],round(pnl,2)
                 tr["closed_t"]=datetime.now(timezone.utc).isoformat()
@@ -334,7 +340,7 @@ for name,(tk,klass) in SYMBOLS.items():
                         np.where(score.iloc[idx]<=-MIN_SCORE,-1,0)))
             prev=state.get(key,{"sig":0,"t":"2000-01-01T00:00:00+00:00"})
             fired_dir=0
-            if sig_strict!=0 and sig_strict!=prev["sig"] \
+            if sig_strict!=0 and klass!="CRYPTO" and sig_strict!=prev["sig"] \
                and now-datetime.fromisoformat(prev["t"])>=timedelta(minutes=cool) \
                and (v.iloc[idx-FRESH_FLIP:idx][MUST_INCLUDE[klass]]!=sig_strict).any() \
                and must==sig_strict and (not np.isfinite(adx_now) or adx_now>=ADX_DEAD):
@@ -365,7 +371,7 @@ for name,(tk,klass) in SYMBOLS.items():
                         rc=book["balance"]*PAPER_RISK
                         book["open"].append({"name":name,"ticker":tk,"tf":interval,
                             "side":sig_strict,"entry":price,"stop":stop,"tp":tp,
-                            "units":rc/stop_d if stop_d>0 else 0,
+                            "units":rc/stop_d if stop_d>0 else 0,"spr":price*SPREAD_PCT[klass],
                             "expiry_h":exp_h,"time":now.isoformat()})
 
             # ---- LOOSE signal (paper only) ----
@@ -381,7 +387,7 @@ for name,(tk,klass) in SYMBOLS.items():
                 rc=paper["loose"]["balance"]*PAPER_RISK
                 paper["loose"]["open"].append({"name":name,"ticker":tk,"tf":interval,
                     "side":sig_p,"entry":price,"stop":stop,"tp":tp,
-                    "units":rc/stop_d if stop_d>0 else 0,
+                    "units":rc/stop_d if stop_d>0 else 0,"spr":price*SPREAD_PCT[klass],
                     "expiry_h":exp_h,"time":now.isoformat()})
                 state_changes[pkey]={"sig":sig_p,"t":now.isoformat()}
 
@@ -411,7 +417,7 @@ for name,(tk,klass) in SYMBOLS.items():
                             rc=paper["loose"]["balance"]*PAPER_RISK
                             paper["loose"]["open"].append({"name":name,"ticker":tk,
                                 "tf":"15m","side":sw,"entry":price,"stop":stop,"tp":tp,
-                                "units":rc/risk if risk>0 else 0,
+                                "units":rc/risk if risk>0 else 0,"spr":price*SPREAD_PCT[klass],
                                 "expiry_h":6,"time":now.isoformat()})
                         state_changes[skey]={"sig":sw,"t":now.isoformat()}
         except Exception as e:
