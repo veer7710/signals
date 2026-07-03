@@ -1,30 +1,19 @@
 # ============================================================
-# SIGNAL SCANNER v8 = v7 (unchanged) + AUTO PAPER-TRADER
+# SIGNAL SCANNER v9 = v8 + LIQUIDITY SWEEP signals + report fix
 #
-# TWO ENGINES RUN SIDE BY SIDE:
+#  FIX: hourly report was repeating alongside signals — its
+#  "already sent this hour" memory lived in paper.json, which
+#  isn't saved unless the workflow commits it. Memory moved to
+#  state.json (always committed). ALSO check your yml line reads:
+#      git add state.json log.json paper.json || true
 #
-#  A) SIGNALS TO YOU  — strict v7 rules, unchanged. Same alerts,
-#     same A/B tiers, same resolution + weekly recap. This is
-#     what you read and (later) trade for real.
-#
-#  B) PAPER ACCOUNT   — a self-running simulated account:
-#     * starts at PAPER_START (£150)
-#     * takes EVERY strict signal above (so you see those play out)
-#       PLUS extra looser-filter signals for more frequency
-#     * sizes each trade at PAPER_RISK (2%) off the ATR stop
-#     * opens/closes itself against real prices, no input from you
-#     * reports briefly EVERY HOUR: open trades, closed this hour,
-#       wins/losses, and running balance
-#
-#  Frequency is loosened HONESTLY (lower score, no ADX floor,
-#  shorter cooldown) — NOT by forcing a quota. Some hours will be
-#  busy, some quiet. That's the real result.
-#
-#  NOTE: paper trades use next-candle prices and ignore spread/
-#  slippage, so paper profit will look BETTER than live ever would.
-#  Treat the balance as optimistic, and watch win-rate more than £.
-#
-# Requires yml that commits state.json, log.json, paper.json.
+#  NEW: [SWEEP] signals — liquidity sweep reversal on 15m for
+#  gold/silver/FX/indices: price wicks through a 20-bar high/low
+#  (stop-hunt) then closes back inside -> reversal signal.
+#  Stop beyond the sweep wick, ~2R target, hold intraday ~1-3h.
+#  Tracked in the log as tier "S" so the weekly recap grades
+#  sweeps separately from A/B. Sweep trades also enter the loose
+#  paper book.
 # ============================================================
 
 import os, json, time, requests
@@ -130,6 +119,23 @@ def adx(h,l,c,n=14):
     dx=100*(pdi-mdi).abs()/(pdi+mdi).replace(0,np.nan)
     return dx.ewm(alpha=1/n,adjust=False).mean()
 
+def sweep_signal(df, lookback=20):
+    """Liquidity sweep: wick through prior N-bar extreme, close back inside.
+    Returns (+1 bullish sweep / -1 bearish sweep / 0) for last closed candle,
+    plus the sweep wick extreme for stop placement."""
+    c,h,l,o = df["Close"],df["High"],df["Low"],df["Open"]
+    hh = h.rolling(lookback).max().shift()
+    ll = l.rolling(lookback).min().shift()
+    i = -2  # last CLOSED candle
+    try:
+        if l.iloc[i] < ll.iloc[i] and c.iloc[i] > ll.iloc[i] and c.iloc[i] > o.iloc[i]:
+            return 1, float(l.iloc[i])      # swept the lows, closed back up
+        if h.iloc[i] > hh.iloc[i] and c.iloc[i] < hh.iloc[i] and c.iloc[i] < o.iloc[i]:
+            return -1, float(h.iloc[i])     # swept the highs, closed back down
+    except Exception:
+        pass
+    return 0, 0.0
+
 def votes_df(df):
     c,h,l=df["Close"],df["High"],df["Low"]; v=pd.DataFrame(index=df.index)
     e9,e21,e200=ema(c,9),ema(c,21),ema(c,200)
@@ -200,7 +206,7 @@ def weekly(log):
           and datetime.fromisoformat(s["time"])>cut]
     if not done: return "📊 <b>Weekly recap</b>\nNo resolved signals yet."
     out=["📊 <b>Weekly recap</b> (7d)"]
-    for tier in("A","B"):
+    for tier in("A","B","S"):
         ts=[s for s in done if s["tier"]==tier]
         if not ts: continue
         w=sum(1 for s in ts if s["status"]=="win")
@@ -330,6 +336,36 @@ for name,(tk,klass) in SYMBOLS.items():
                     "units":rc/stop_d if stop_d>0 else 0,
                     "expiry_h":exp_h,"time":now.isoformat()})
                 state_changes[pkey]={"sig":sig_p,"t":now.isoformat()}
+
+            # ---- LIQUIDITY SWEEP (15m, metals/FX/indices) ----
+            if interval=="15m" and klass in ("METAL","FX","INDEX"):
+                sw, wick = sweep_signal(df)
+                skey=f"S|{key}"
+                sprev=state.get(skey,{"sig":0,"t":"2000-01-01T00:00:00+00:00"})
+                if sw!=0 and now-datetime.fromisoformat(sprev["t"])>=timedelta(minutes=90):
+                    buf=0.25*a
+                    stop=wick - sw*buf                 # beyond the sweep wick
+                    risk=abs(price-stop)
+                    if risk>=price*MIN_ATR_PCT:
+                        tp=price + sw*2.0*risk         # ~2R target
+                        sd_txt="🟢 LONG" if sw==1 else "🔴 SHORT"
+                        alerts.append(
+                            f"{sd_txt} <b>{name}</b> (15m) [SWEEP] · {sess(now)}\n"
+                            f"Entry ~{fmt(price,price)}\n"
+                            f"Stop {fmt(stop,price)} (−{fmt(risk,price)}) | "
+                            f"Target {fmt(tp,price)} (+{fmt(2*risk,price)})\n"
+                            f"intraday ~1-3h")
+                        log.append({"name":name,"ticker":tk,"tf":"15m","tier":"S",
+                            "side":sw,"entry":price,"stop":stop,"tp":tp,
+                            "expiry_h":6,"time":now.isoformat(),
+                            "session":sess(now),"status":"open"}); log_changed=True
+                        if not any(t["ticker"]==tk and t["tf"]=="15m" for t in paper["loose"]["open"]):
+                            rc=paper["loose"]["balance"]*PAPER_RISK
+                            paper["loose"]["open"].append({"name":name,"ticker":tk,
+                                "tf":"15m","side":sw,"entry":price,"stop":stop,"tp":tp,
+                                "units":rc/risk if risk>0 else 0,
+                                "expiry_h":6,"time":now.isoformat()})
+                        state_changes[skey]={"sig":sw,"t":now.isoformat()}
         except Exception as e:
             print(f"{key} failed: {e}")
 
@@ -345,24 +381,24 @@ def book_stats(book, hours=None):
     wr=f"{100*w/n:.0f}%" if n else "—"
     return n, wr
 
-# hourly report — split, minimal.
-# Quiet hours: no hourly between 00:00-09:59; at 10:00 one combined report.
+# hourly report — split, minimal. Memory in STATE (bug fix).
+# Quiet hours: nothing 00:00-09:59; at 10:00 one combined overnight report.
 hb_key=now.strftime("%Y-%m-%dT%H")
 quiet = 0 <= now.hour < 10
-if paper.get("last_hb")!=hb_key and not quiet:
+if state.get("hb")!=hb_key and not quiet:
     L,S=paper["loose"],paper["strict"]
-    window = 11 if now.hour==10 else 1   # 10am covers the overnight stretch
+    window = 11 if now.hour==10 else 1
     lc,lwr=book_stats(L,window); sc,swr=book_stats(S,window)
     label = "overnight" if now.hour==10 else "hr"
     out.append(
         f"⏱ Paper ({label})\n"
         f"Loose £{L['balance']:.0f} · {lc} closed · {lwr} win\n"
         f"Strict £{S['balance']:.0f} · {sc} closed · {swr} win")
-    paper["last_hb"]=hb_key
+    state_changes["hb"]=hb_key
 
-# weekly report — split, minimal (Sun 8pm)
+# weekly report — split, minimal (Sun 8pm). Memory in STATE.
 wk_key=now.strftime("%Y-%W")
-if paper.get("last_week")!=wk_key and now.weekday()==6 and now.hour==20:
+if state.get("wk")!=wk_key and now.weekday()==6 and now.hour==20:
     L,S=paper["loose"],paper["strict"]
     ln,lwr=book_stats(L); sn,swr=book_stats(S)
     lp=L["balance"]-paper["start"]; sp=S["balance"]-paper["start"]
@@ -370,7 +406,7 @@ if paper.get("last_week")!=wk_key and now.weekday()==6 and now.hour==20:
         f"📊 Paper (week)\n"
         f"Loose £{L['balance']:.0f} ({lp:+.0f}) · {ln} trades · {lwr} win\n"
         f"Strict £{S['balance']:.0f} ({sp:+.0f}) · {sn} trades · {swr} win")
-    paper["last_week"]=wk_key
+    state_changes["wk"]=wk_key
 
 # ---- send + persist ----
 if out:
@@ -386,4 +422,3 @@ else:
     if log_changed: jsave(LOG_FILE,log)
     jsave(PAPER_FILE,paper)
     print("No new signals this run.")
-
