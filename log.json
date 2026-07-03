@@ -99,5 +99,19 @@
   "time": "2026-07-03T13:04:56.680854+00:00",
   "session": "NY",
   "status": "open"
+ },
+ {
+  "name": "USD/CAD",
+  "ticker": "USDCAD=X",
+  "tf": "15m",
+  "tier": "S",
+  "side": -1,
+  "entry": 1.4203100204467773,
+  "stop": 1.420902380066793,
+  "tp": 1.419125301206746,
+  "expiry_h": 6,
+  "time": "2026-07-03T20:34:49.626406+00:00",
+  "session": "NY",
+  "status": "open"
  }
 ]
