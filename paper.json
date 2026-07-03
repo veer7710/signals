@@ -1,0 +1,28 @@
+{
+ "loose": {
+  "balance": 150.0,
+  "open": [
+   {
+    "name": "USD/CAD",
+    "ticker": "USDCAD=X",
+    "tf": "1h",
+    "side": 1,
+    "entry": 1.4197800159454346,
+    "stop": 1.4176491408199934,
+    "tp": 1.4233314744878367,
+    "units": 1407.8722700274614,
+    "expiry_h": 120,
+    "time": "2026-07-03T15:39:49.263609+00:00"
+   }
+  ],
+  "closed": []
+ },
+ "strict": {
+  "balance": 150.0,
+  "open": [],
+  "closed": []
+ },
+ "start": 150.0,
+ "last_hb": "",
+ "last_week": ""
+}
