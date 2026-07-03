@@ -85,5 +85,19 @@
   "session": "Asia",
   "status": "win",
   "points": 0.6161
+ },
+ {
+  "name": "USD/CAD",
+  "ticker": "USDCAD=X",
+  "tf": "1h",
+  "tier": "A",
+  "side": 1,
+  "entry": 1.4201899766921997,
+  "stop": 1.4180251455727708,
+  "tp": 1.4237980285579146,
+  "expiry_h": 120,
+  "time": "2026-07-03T13:04:56.680854+00:00",
+  "session": "NY",
+  "status": "open"
  }
 ]
