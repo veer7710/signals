@@ -1,0 +1,44 @@
+[
+ {
+  "name": "EUR/USD",
+  "ticker": "EURUSD=X",
+  "tf": "15m",
+  "tier": "B",
+  "side": -1,
+  "entry": 1.1425960063934326,
+  "stop": 1.143356836125607,
+  "tp": 1.1413279568398085,
+  "expiry_h": 24,
+  "time": "2026-07-03T00:02:23.417482+00:00",
+  "session": "Asia",
+  "status": "open"
+ },
+ {
+  "name": "USD/CAD",
+  "ticker": "USDCAD=X",
+  "tf": "15m",
+  "tier": "A",
+  "side": 1,
+  "entry": 1.419029951095581,
+  "stop": 1.41761574839263,
+  "tp": 1.4213869556004997,
+  "expiry_h": 24,
+  "time": "2026-07-03T00:02:23.417482+00:00",
+  "session": "Asia",
+  "status": "open"
+ },
+ {
+  "name": "US500",
+  "ticker": "ES=F",
+  "tf": "15m",
+  "tier": "B",
+  "side": 1,
+  "entry": 7533.25,
+  "stop": 7517.877570201057,
+  "tp": 7558.870716331571,
+  "expiry_h": 24,
+  "time": "2026-07-03T00:02:23.417482+00:00",
+  "session": "Asia",
+  "status": "open"
+ }
+]
