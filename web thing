@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Signals — Bot Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --ink:#0B1017; --panel:#121A24; --panel2:#0F1620;
+    --gold:#E8B84B; --silver:#A9B4C2;
+    --up:#3DD68C; --down:#F06A5D;
+    --txt:#EDF2F7; --mut:#8A97A8; --line:#1E2936;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--ink);color:var(--txt);
+    font-family:'Space Grotesk',system-ui,sans-serif;
+    padding:16px;max-width:640px;margin:0 auto;}
+  .mono{font-family:'IBM Plex Mono',monospace}
+
+  header{display:flex;justify-content:space-between;align-items:baseline;
+    padding-bottom:14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+  header h1{font-size:1.05rem;font-weight:700;letter-spacing:.04em}
+  header h1 span{color:var(--gold)}
+  .live{font-size:.7rem;color:var(--mut)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+    background:var(--up);margin-right:5px;animation:pulse 2s infinite}
+  .dot.stale{background:var(--down);animation:none}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
+
+  .books{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+  .book{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:14px 14px 12px;position:relative;overflow:hidden}
+  .book::before{content:"";position:absolute;top:0;left:0;right:0;height:2px}
+  .book.loose::before{background:var(--gold)}
+  .book.strict::before{background:var(--silver)}
+  .book .label{font-size:.65rem;letter-spacing:.12em;text-transform:uppercase;color:var(--mut)}
+  .book .bal{font-size:1.7rem;font-weight:600;margin-top:4px}
+  .book .delta{font-size:.78rem;margin-top:2px}
+  .pos{color:var(--up)} .neg{color:var(--down)}
+
+  section{margin-bottom:18px}
+  h2{font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--mut);margin-bottom:8px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+
+  canvas{width:100%;height:140px;display:block}
+  .legend{display:flex;gap:14px;font-size:.68rem;color:var(--mut);margin-top:6px}
+  .swatch{display:inline-block;width:14px;height:3px;border-radius:2px;
+    vertical-align:middle;margin-right:5px}
+
+  .tiers{display:flex;gap:8px;flex-wrap:wrap}
+  .tier{background:var(--panel2);border:1px solid var(--line);border-radius:8px;
+    padding:8px 12px;font-size:.78rem}
+  .tier b{color:var(--gold)}
+
+  table{width:100%;border-collapse:collapse;font-size:.78rem}
+  th{color:var(--mut);text-align:left;font-weight:400;font-size:.65rem;
+    text-transform:uppercase;letter-spacing:.08em;padding:4px 6px}
+  td{padding:6px;border-top:1px solid var(--line)}
+  .num{text-align:right}
+  .side-l{color:var(--up)} .side-s{color:var(--down)}
+
+  .closed-row{display:flex;justify-content:space-between;align-items:center;
+    padding:7px 2px;border-top:1px solid var(--line);font-size:.8rem}
+  .closed-row:first-child{border-top:none}
+  .closed-info{color:var(--mut);font-size:.68rem}
+
+  .empty{color:var(--mut);font-size:.8rem;text-align:center;padding:14px 0}
+  footer{color:var(--mut);font-size:.65rem;text-align:center;
+    padding:14px 0 6px;border-top:1px solid var(--line)}
+</style>
+</head>
+<body>
+<header>
+  <h1>SIGNALS <span>/ paper desk</span></h1>
+  <div class="live"><span class="dot" id="dot"></span><span id="updated">loading…</span></div>
+</header>
+
+<div class="books">
+  <div class="book loose">
+    <div class="label">Loose book</div>
+    <div class="bal mono" id="looseBal">—</div>
+    <div class="delta mono" id="looseDelta"></div>
+  </div>
+  <div class="book strict">
+    <div class="label">Strict book</div>
+    <div class="bal mono" id="strictBal">—</div>
+    <div class="delta mono" id="strictDelta"></div>
+  </div>
+</div>
+
+<section>
+  <h2>Equity — the gold &amp; silver lines</h2>
+  <div class="panel">
+    <canvas id="curve" width="600" height="140"></canvas>
+    <div class="legend">
+      <span><span class="swatch" style="background:var(--gold)"></span>Loose</span>
+      <span><span class="swatch" style="background:var(--silver)"></span>Strict</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Signal win rate by tier</h2>
+  <div class="tiers" id="tiers"><div class="empty">no resolved signals yet</div></div>
+</section>
+
+<section>
+  <h2>Open paper trades</h2>
+  <div class="panel" id="openWrap">
+    <div class="empty">none open</div>
+  </div>
+</section>
+
+<section>
+  <h2>Recent closes</h2>
+  <div class="panel" id="closedWrap">
+    <div class="empty">nothing closed yet</div>
+  </div>
+</section>
+
+<footer>auto-refreshes every 5 min · paper trading only · not financial advice</footer>
+
+<script>
+const START = 150;
+const RAW = "https://raw.githubusercontent.com/veer7710/signals/main/";
+
+async function grab(name){
+  try{ const r = await fetch("./"+name+"?t="+Date.now());
+       if(r.ok) return await r.json(); }catch(e){}
+  try{ const r = await fetch(RAW+name+"?t="+Date.now());
+       if(r.ok) return await r.json(); }catch(e){}
+  return null;
+}
+const fmt£ = v => "£"+v.toFixed(2);
+const cls  = v => v>=0 ? "pos" : "neg";
+const sign = v => (v>=0?"+":"−")+Math.abs(v).toFixed(2);
+
+function book(el, delta, b){
+  document.getElementById(el).textContent = fmt£(b.balance);
+  const d = b.balance - START;
+  const dEl = document.getElementById(delta);
+  dEl.textContent = sign(d)+" all-time";
+  dEl.className = "delta mono "+cls(d);
+}
+
+function equitySeries(b){
+  const pts=[START];
+  (b.closed||[]).slice().sort((a,c)=>
+    (a.closed_t||a.time).localeCompare(c.closed_t||c.time))
+    .forEach(t=>pts.push(pts[pts.length-1]+(t.pnl||0)));
+  return pts;
+}
+
+function drawCurve(loose,strict){
+  const cv=document.getElementById("curve"), ctx=cv.getContext("2d");
+  const W=cv.width,H=cv.height; ctx.clearRect(0,0,W,H);
+  const all=[...loose,...strict];
+  const min=Math.min(...all)*0.999, max=Math.max(...all)*1.001||1;
+  const line=(pts,color)=>{
+    if(pts.length<2){ // flat start line
+      ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+      const y=H-( (pts[0]-min)/(max-min||1) )*H;
+      ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke();return;
+    }
+    ctx.strokeStyle=color;ctx.lineWidth=2;ctx.beginPath();
+    pts.forEach((p,i)=>{
+      const x=i/(pts.length-1)*W;
+      const y=H-((p-min)/(max-min||1))*(H-10)-5;
+      i?ctx.lineTo(x,y):ctx.moveTo(x,y);
+    });
+    ctx.stroke();
+  };
+  line(strict,getComputedStyle(document.body).getPropertyValue('--silver'));
+  line(loose, getComputedStyle(document.body).getPropertyValue('--gold'));
+}
+
+function tiers(log){
+  const wrap=document.getElementById("tiers");
+  const done=(log||[]).filter(s=>["win","loss","expired"].includes(s.status));
+  if(!done.length) return;
+  wrap.innerHTML="";
+  ["A","B","S","W"].forEach(t=>{
+    const ts=done.filter(s=>s.tier===t); if(!ts.length) return;
+    const w=ts.filter(s=>s.status==="win").length;
+    const el=document.createElement("div");
+    el.className="tier mono";
+    el.innerHTML=`<b>${t}</b> ${w}/${ts.length} · ${(100*w/ts.length).toFixed(0)}%`;
+    wrap.appendChild(el);
+  });
+}
+
+function openTrades(paper){
+  const rows=[...(paper.loose.open||[]).map(t=>({...t,bk:"L"})),
+              ...(paper.strict.open||[]).map(t=>({...t,bk:"S"}))];
+  const wrap=document.getElementById("openWrap");
+  if(!rows.length) return;
+  wrap.innerHTML=`<table><tr><th>Market</th><th>Side</th><th class="num">Entry</th><th class="num">Stop</th><th class="num">Target</th></tr>`+
+    rows.map(t=>`<tr class="mono">
+      <td>${t.name} <span class="closed-info">${t.tf}·${t.bk}</span></td>
+      <td class="${t.side===1?'side-l':'side-s'}">${t.side===1?"LONG":"SHORT"}</td>
+      <td class="num">${t.entry.toFixed(2)}</td>
+      <td class="num">${t.stop.toFixed(2)}</td>
+      <td class="num">${t.tp.toFixed(2)}</td></tr>`).join("")+`</table>`;
+}
+
+function closedList(paper){
+  const rows=[...(paper.loose.closed||[]),...(paper.strict.closed||[])]
+    .sort((a,b)=>(b.closed_t||b.time).localeCompare(a.closed_t||a.time))
+    .slice(0,12);
+  const wrap=document.getElementById("closedWrap");
+  if(!rows.length) return;
+  wrap.innerHTML=rows.map(t=>{
+    const ic=t.result==="win"?"✅":t.result==="loss"?"❌":"⏰";
+    const when=(t.closed_t||t.time).slice(5,16).replace("T"," ");
+    return `<div class="closed-row">
+      <div>${ic} ${t.name} <span class="closed-info">${t.tf} · ${when}</span></div>
+      <div class="mono ${cls(t.pnl||0)}">${sign(t.pnl||0)}</div></div>`;
+  }).join("");
+}
+
+async function load(){
+  const paper=await grab("paper.json");
+  const log  =await grab("log.json");
+  const dot=document.getElementById("dot"), up=document.getElementById("updated");
+  if(!paper){ up.textContent="no data yet — bot hasn't saved paper.json";
+              dot.classList.add("stale"); return; }
+  book("looseBal","looseDelta",paper.loose);
+  book("strictBal","strictDelta",paper.strict);
+  drawCurve(equitySeries(paper.loose),equitySeries(paper.strict));
+  if(log) tiers(log);
+  openTrades(paper); closedList(paper);
+  up.textContent="updated "+new Date().toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  dot.classList.remove("stale");
+}
+load();
+setInterval(load, 5*60*1000);
+</script>
+</body>
+</html>
