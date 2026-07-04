@@ -41,7 +41,8 @@
   "expiry_h": 24,
   "time": "2026-07-03T00:02:23.417482+00:00",
   "session": "Asia",
-  "status": "open"
+  "status": "expired",
+  "points": 21.0
  },
  {
   "name": "Gold",
@@ -55,7 +56,8 @@
   "expiry_h": 24,
   "time": "2026-07-03T01:28:51.087082+00:00",
   "session": "Asia",
-  "status": "open"
+  "status": "expired",
+  "points": -0.2002
  },
  {
   "name": "Gold",
@@ -112,6 +114,7 @@
   "expiry_h": 6,
   "time": "2026-07-03T20:34:49.626406+00:00",
   "session": "NY",
-  "status": "open"
+  "status": "expired",
+  "points": 0.0005
  }
 ]
