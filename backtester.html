@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Strategy Lab</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=IBM+Plex+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{--ink:#0B1017;--panel:#121A24;--panel2:#0F1620;--gold:#E8B84B;--silver:#A9B4C2;
+--up:#3DD68C;--down:#F06A5D;--txt:#EDF2F7;--mut:#8A97A8;--line:#1E2936}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--ink);color:var(--txt);font-family:'Space Grotesk',system-ui,sans-serif;
+padding:16px;max-width:680px;margin:0 auto}
+.mono{font-family:'IBM Plex Mono',monospace}
+header{display:flex;justify-content:space-between;align-items:baseline;
+padding-bottom:12px;border-bottom:1px solid var(--line);margin-bottom:14px}
+h1{font-size:1.05rem;font-weight:700}h1 span{color:var(--gold)}
+.tag{font-size:.65rem;color:var(--mut)}
+h2{font-size:.68rem;letter-spacing:.13em;text-transform:uppercase;color:var(--mut);margin:14px 0 6px}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+label{display:block;font-size:.7rem;color:var(--mut);margin:8px 0 3px}
+select,input{width:100%;background:var(--panel2);color:var(--txt);border:1px solid var(--line);
+border-radius:7px;padding:9px 10px;font-family:'IBM Plex Mono',monospace;font-size:.85rem}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+button{width:100%;margin-top:14px;background:var(--gold);color:#1a1408;border:none;
+border-radius:8px;padding:13px;font-family:'Space Grotesk';font-weight:700;font-size:.95rem}
+button:disabled{opacity:.5}
+.cards{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:10px}
+.card .k{font-size:.6rem;letter-spacing:.1em;text-transform:uppercase;color:var(--mut)}
+.card .v{font-size:1.15rem;font-weight:600;margin-top:3px}
+.pos{color:var(--up)}.neg{color:var(--down)}
+canvas{width:100%;height:150px;display:block}
+table{width:100%;border-collapse:collapse;font-size:.72rem;margin-top:6px}
+th{color:var(--mut);text-align:left;font-weight:400;font-size:.6rem;text-transform:uppercase;padding:3px 5px}
+td{padding:5px;border-top:1px solid var(--line)}
+.note{font-size:.66rem;color:var(--mut);margin-top:12px;line-height:1.5}
+.star{color:var(--gold)}
+#status{font-size:.72rem;color:var(--mut);margin-top:8px}
+</style>
+</head>
+<body>
+<header><h1>STRATEGY <span>LAB</span></h1><div class="tag">honest backtesting · paper only</div></header>
+
+<div class="panel">
+  <div class="grid2">
+    <div><label>Market</label>
+      <select id="sym"><option>GOLD</option><option>US500</option><option>EURUSD</option><option>GBPUSD</option></select></div>
+    <div><label>Timeframe (data window)</label>
+      <select id="tf">
+        <option value="15m">15m — last 60 days</option>
+        <option value="1h" selected>1H — last 2 years</option>
+        <option value="4h">4H — last 2 years</option>
+        <option value="1d">1D — last 2 years</option>
+      </select></div>
+  </div>
+  <label>Strategy</label>
+  <select id="strat">
+    <option value="conf">★ Confluence 7-condition (most filtered — recommended structure)</option>
+    <option value="pullback">Trend Pullback (EMA200 + EMA21 dip + momentum)</option>
+    <option value="donchian">Donchian Breakout (Turtle-style, 55-bar)</option>
+    <option value="emacross">EMA Crossover (9/21 + 200 filter)</option>
+    <option value="rsi">RSI Mean Reversion (30/70)</option>
+    <option value="boll">Bollinger Band Breakout</option>
+    <option value="macd">MACD Trend</option>
+  </select>
+  <div class="grid3">
+    <div><label>Start £</label><input id="bal" type="number" value="100"></div>
+    <div><label>Risk %/trade</label><input id="risk" type="number" value="1" step="0.25"></div>
+    <div><label>Max trades/day</label><input id="mpd" type="number" value="3"></div>
+  </div>
+  <div class="grid3">
+    <div><label>Stop (xATR)</label><input id="satr" type="number" value="1.5" step="0.1"></div>
+    <div><label>Target (xATR)</label><input id="tatr" type="number" value="2.5" step="0.1"></div>
+    <div><label>Trailing</label><select id="trail"><option value="0">Off</option><option value="1.5">On (1.5 ATR)</option></select></div>
+  </div>
+  <label>Session filter (7:00–21:00 UTC only)</label>
+  <select id="sess"><option value="1">On</option><option value="0">Off</option></select>
+  <button id="run">Run backtest</button>
+  <div id="status">Loading data…</div>
+</div>
+
+<div id="results" style="display:none">
+  <div class="cards">
+    <div class="card"><div class="k">Net P&L</div><div class="v mono" id="net">—</div></div>
+    <div class="card"><div class="k">Win rate</div><div class="v mono" id="wr">—</div></div>
+    <div class="card"><div class="k">Trades</div><div class="v mono" id="nt">—</div></div>
+    <div class="card"><div class="k">Profit factor</div><div class="v mono" id="pf">—</div></div>
+    <div class="card"><div class="k">Expectancy</div><div class="v mono" id="exp">—</div></div>
+    <div class="card"><div class="k">Max drawdown</div><div class="v mono" id="dd">—</div></div>
+  </div>
+  <h2>Equity curve</h2>
+  <div class="panel"><canvas id="curve" width="640" height="150"></canvas></div>
+  <h2>Last trades</h2>
+  <div class="panel" style="max-height:260px;overflow:auto">
+    <table id="tbl"><tr><th>Side</th><th>Entry</th><th>Exit</th><th>R</th><th>P&L</th></tr></table>
+  </div>
+</div>
+
+<p class="note">Engine rules (fixed, for honesty): signals only on closed candles · entries fill at next candle's open ·
+spread + slippage charged every trade · if a candle hits stop AND target, the STOP wins ·
+results compound. <span class="star">★</span> "Recommended" = most-filtered structure (7 aligned conditions, the design
+pattern used by credible EAs) — it is NOT a promise of profit. A losing result here is real information:
+it means that combination had no edge on this data. Backtests never guarantee future results.</p>
+
+<script>
+const SPREAD={GOLD:0.0004,US500:0.0003,EURUSD:0.0002,GBPUSD:0.00025};
+let DATA={};
+async function loadAll(){
+  const syms=["GOLD","US500","EURUSD","GBPUSD"];
+  for(const s of syms){
+    for(const tf of ["15m","1h"]){
+      try{const r=await fetch(`./data/${s}_${tf}.json?t=${Date.now()}`);
+        if(r.ok) DATA[`${s}_${tf}`]=await r.json();}catch(e){}
+    }
+  }
+  const ok=Object.keys(DATA).length;
+  document.getElementById("status").textContent = ok?
+    `Data loaded (${ok} sets). Pick settings and run.` :
+    "No data found — run the fetch-data workflow in GitHub Actions first.";
+}
+loadAll();
+
+function resample(rows,hours){ // rows [t,o,h,l,c] hourly -> N-hour bars
+  const out=[];let cur=null;
+  for(const [t,o,h,l,c] of rows){
+    const bucket=Math.floor(t/(hours*3600));
+    if(!cur||cur.b!==bucket){if(cur)out.push([cur.t,cur.o,cur.h,cur.l,cur.c]);
+      cur={b:bucket,t,o,h,l,c};}
+    else{cur.h=Math.max(cur.h,h);cur.l=Math.min(cur.l,l);cur.c=c;}
+  }
+  if(cur)out.push([cur.t,cur.o,cur.h,cur.l,cur.c]);
+  return out;
+}
+function ema(a,n){const k=2/(n+1);let e=a[0];return a.map(v=>e=v*k+e*(1-k));}
+function atrArr(H,L,C,n=14){const tr=H.map((h,i)=>i?Math.max(h-L[i],Math.abs(h-C[i-1]),Math.abs(L[i]-C[i-1])):h-L[i]);
+  const k=1/n;let e=tr[0];return tr.map(v=>e=v*k+e*(1-k));}
+function rsiArr(C,n=14){let up=0,dn=0;const out=[50];
+  for(let i=1;i<C.length;i++){const d=C[i]-C[i-1];
+    up=(up*(n-1)+Math.max(d,0))/n;dn=(dn*(n-1)+Math.max(-d,0))/n;
+    out.push(dn===0?100:100-100/(1+up/dn));}return out;}
+
+function signal(strat,i,ctx){
+  const{C,O,H,L,e9,e21,e150,e200,e510,A,R,hi20,lo20,hi55,lo55,mid,sd2,macd,macds}=ctx;
+  const c=C[i],o=O[i],h=H[i],l=L[i],a=A[i];
+  switch(strat){
+    case"emacross":
+      if(e9[i]>e21[i]&&e9[i-1]<=e21[i-1]&&c>e200[i])return 1;
+      if(e9[i]<e21[i]&&e9[i-1]>=e21[i-1]&&c<e200[i])return -1;return 0;
+    case"rsi":
+      if(R[i]<30&&R[i-1]>=30)return 1;
+      if(R[i]>70&&R[i-1]<=70)return -1;return 0;
+    case"donchian":
+      if(c>hi55[i]&&e21[i]>e200[i])return 1;
+      if(c<lo55[i]&&e21[i]<e200[i])return -1;return 0;
+    case"boll":
+      if(c>mid[i]+sd2[i])return 1;
+      if(c<mid[i]-sd2[i])return -1;return 0;
+    case"macd":
+      if(macd[i]>macds[i]&&macd[i-1]<=macds[i-1]&&macd[i]>0)return 1;
+      if(macd[i]<macds[i]&&macd[i-1]>=macds[i-1]&&macd[i]<0)return -1;return 0;
+    case"pullback":
+      if(c>e200[i]&&l<=e21[i]&&c>o)return 1;
+      if(c<e200[i]&&h>=e21[i]&&c<o)return -1;return 0;
+    case"conf":{
+      const sep=Math.abs(e150[i]-e510[i])>0.5*a;
+      if(e150[i]>e510[i]&&sep&&c>e150[i]&&c>e510[i]&&c>hi20[i]+0.1*a&&
+         R[i]>=40&&R[i]<=65&&c>C[i-1])return 1;
+      if(e150[i]<e510[i]&&sep&&c<e150[i]&&c<e510[i]&&c<lo20[i]-0.1*a&&
+         R[i]>=35&&R[i]<=60&&c<C[i-1])return -1;return 0;}
+  }
+  return 0;
+}
+
+document.getElementById("run").onclick=()=>{
+  const sym=document.getElementById("sym").value;
+  const tf=document.getElementById("tf").value;
+  const strat=document.getElementById("strat").value;
+  const bal0=+document.getElementById("bal").value||100;
+  const risk=(+document.getElementById("risk").value||1)/100;
+  const mpd=+document.getElementById("mpd").value||3;
+  const sATR=+document.getElementById("satr").value||1.5;
+  const tATR=+document.getElementById("tatr").value||2.5;
+  const trail=+document.getElementById("trail").value;
+  const sess=document.getElementById("sess").value==="1";
+
+  let rows = tf==="15m"?DATA[`${sym}_15m`]:DATA[`${sym}_1h`];
+  if(!rows){document.getElementById("status").textContent="Data missing for that choice — run fetch-data workflow.";return;}
+  if(tf==="4h")rows=resample(rows,4);
+  if(tf==="1d")rows=resample(rows,24);
+
+  const T=rows.map(r=>r[0]),O=rows.map(r=>r[1]),H=rows.map(r=>r[2]),
+        L=rows.map(r=>r[3]),C=rows.map(r=>r[4]);
+  const ctx={C,O,H,L,
+    e9:ema(C,9),e21:ema(C,21),e150:ema(C,150),e200:ema(C,200),e510:ema(C,510),
+    A:atrArr(H,L,C),R:rsiArr(C)};
+  ctx.hi20=C.map((_,i)=>i>=20?Math.max(...H.slice(i-20,i)):Infinity);
+  ctx.lo20=C.map((_,i)=>i>=20?Math.min(...L.slice(i-20,i)):-Infinity);
+  ctx.hi55=C.map((_,i)=>i>=55?Math.max(...H.slice(i-55,i)):Infinity);
+  ctx.lo55=C.map((_,i)=>i>=55?Math.min(...L.slice(i-55,i)):-Infinity);
+  ctx.mid=C.map((_,i)=>{if(i<20)return C[i];let s=0;for(let j=i-19;j<=i;j++)s+=C[j];return s/20;});
+  ctx.sd2=C.map((_,i)=>{if(i<20)return 1e9;let m=ctx.mid[i],s=0;
+    for(let j=i-19;j<=i;j++)s+=(C[j]-m)**2;return 2*Math.sqrt(s/20);});
+  const mline=ema(C,12).map((v,i)=>v-ema(C,26)[i]);
+  ctx.macd=mline;ctx.macds=ema(mline,9);
+
+  const spread=SPREAD[sym]*1.5;
+  let eq=bal0,pos=null,trades=[],curve=[eq],day=null,n=0;
+  const warm=Math.max(520,60);
+  for(let i=warm;i<rows.length-1;i++){
+    const dt=new Date(T[i]*1000),hr=dt.getUTCHours(),dd=dt.toISOString().slice(0,10);
+    if(dd!==day){day=dd;n=0;}
+    const a=ctx.A[i];if(!isFinite(a)||a<=0)continue;
+
+    if(pos){
+      if(trail>0){
+        const p=(C[i]-pos.e)*pos.d;
+        if(p>=a){pos.sl=pos.d===1?Math.max(pos.sl,C[i]-trail*a):Math.min(pos.sl,C[i]+trail*a);}
+      }
+      const hs=pos.d===1?L[i]<=pos.sl:H[i]>=pos.sl;
+      const ht=pos.d===1?H[i]>=pos.tp:L[i]<=pos.tp;
+      if(hs||ht){
+        const px=hs?pos.sl:pos.tp;   // ties -> stop
+        let R_=(px-pos.e)*pos.d/pos.sd - (pos.e*spread)/pos.sd;
+        const pnl=eq*risk*R_;eq+=pnl;curve.push(eq);
+        trades.push({d:pos.d,e:pos.e,x:px,R:R_,pnl});pos=null;
+      }
+      continue;
+    }
+    if(sess&&(hr<7||hr>=21))continue;
+    if(n>=mpd)continue;
+    const s=signal(strat,i,ctx);
+    if(s===0)continue;
+    const e=O[i+1],sd=sATR*a;
+    pos={d:s,e,sl:e-s*sd,tp:e+s*tATR*a,sd};n++;
+  }
+
+  const wins=trades.filter(t=>t.pnl>0);
+  const gp=wins.reduce((s,t)=>s+t.pnl,0),
+        gl=Math.abs(trades.filter(t=>t.pnl<=0).reduce((s,t)=>s+t.pnl,0));
+  let peak=-1e9,mdd=0;for(const e of curve){peak=Math.max(peak,e);mdd=Math.max(mdd,(peak-e)/peak);}
+  const net=eq-bal0;
+  const set=(id,v,col)=>{const el=document.getElementById(id);el.textContent=v;
+    el.className="v mono "+(col||"");};
+  set("net",(net>=0?"+":"−")+"£"+Math.abs(net).toFixed(2),net>=0?"pos":"neg");
+  set("wr",trades.length?(100*wins.length/trades.length).toFixed(0)+"%":"—");
+  set("nt",trades.length);
+  set("pf",gl>0?(gp/gl).toFixed(2):"∞",gp>gl?"pos":"neg");
+  const exp=trades.length?trades.reduce((s,t)=>s+t.R,0)/trades.length:0;
+  set("exp",exp.toFixed(2)+"R",exp>=0?"pos":"neg");
+  set("dd",(100*mdd).toFixed(1)+"%","neg");
+
+  const cv=document.getElementById("curve"),cx=cv.getContext("2d");
+  cx.clearRect(0,0,cv.width,cv.height);
+  const mn=Math.min(...curve),mx=Math.max(...curve);
+  cx.strokeStyle=net>=0?"#3DD68C":"#F06A5D";cx.lineWidth=2;cx.beginPath();
+  curve.forEach((v,i)=>{const x=i/(curve.length-1||1)*cv.width;
+    const y=cv.height-((v-mn)/((mx-mn)||1))*(cv.height-10)-5;
+    i?cx.lineTo(x,y):cx.moveTo(x,y);});
+  cx.stroke();
+
+  const tbl=document.getElementById("tbl");
+  tbl.innerHTML="<tr><th>Side</th><th>Entry</th><th>Exit</th><th>R</th><th>P&L</th></tr>"+
+    trades.slice(-40).reverse().map(t=>
+      `<tr class="mono"><td class="${t.d===1?'pos':'neg'}">${t.d===1?"LONG":"SHORT"}</td>
+      <td>${t.e.toFixed(4)}</td><td>${t.x.toFixed(4)}</td>
+      <td class="${t.R>=0?'pos':'neg'}">${t.R.toFixed(2)}</td>
+      <td class="${t.pnl>=0?'pos':'neg'}">${t.pnl>=0?"+":"−"}£${Math.abs(t.pnl).toFixed(2)}</td></tr>`).join("");
+  document.getElementById("results").style.display="block";
+  document.getElementById("status").textContent=
+    `Done: ${sym} · ${tf} · ${trades.length} trades. Try other strategies/timeframes and compare.`;
+};
+</script>
+</body>
+</html>
