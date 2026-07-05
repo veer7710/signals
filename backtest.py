@@ -104,7 +104,7 @@ def get_data(ticker):
     wait = 0.5 - (time.time() - _last_call[0])
     if wait > 0: time.sleep(wait)
     for _ in range(2):
-        d = yf.download(ticker, period="60d", interval="15m", progress=False)
+        d = yf.download(ticker, period="60d", interval="5m", progress=False)
         _last_call[0] = time.time()
         if isinstance(d.columns, pd.MultiIndex):
             d.columns = d.columns.get_level_values(0)
@@ -173,7 +173,7 @@ def in_session(hour, sess):
 
 # ---------------- trade container ----------------
 def simulate_trade(d, i_entry, direction, stop_dist, trail_mult, atr_at,
-                   cost_pct, max_bars=96*3):
+                   cost_pct, max_bars=12):   # 12 x 5m = 1 hour max hold
     """Walk forward from entry. Partial 50% at +1R -> stop to BE ->
     ATR trail on remainder. Ties resolve as the stop. Returns
     (net_R, bars_held) or None if data runs out immediately."""
