@@ -233,3 +233,115 @@ REGISTRY = {
     "ema_pullback": ema_pullback,
     "capped_target_trap": capped_target_trap,
 }
+
+
+# ===================== ADDITIONAL HYPOTHESES (cross-market tests) ===========
+def tsmom(s: Series, lookback=50, rr=3.0, stop_atr=2.0):
+    """TIME-SERIES MOMENTUM — the most replicated systematic edge in finance
+    (Moskowitz, Ooi & Pedersen 2012). Rule: if price is above where it was
+    `lookback` bars ago, be long; below, be short. Nothing else.
+
+    Included because it is nearly parameter-free and has decades of published
+    out-of-sample evidence at the daily/monthly scale. The open question this
+    tests is whether it survives INTRADAY, where costs bite.
+    """
+    def sig(ctx, i):
+        a = ctx["atr"][i]
+        if a is None or a <= 0 or i <= lookback:
+            return None
+        past = s.c[i - lookback]
+        st = 1 if s.c[i] > past else -1
+        # only act on the bar the state FLIPS, otherwise it re-enters endlessly
+        prev = 1 if s.c[i - 1] > s.c[i - 1 - lookback] else -1
+        if st == prev:
+            return None
+        px, d = s.c[i], stop_atr * a
+        return {"side": st, "stop": px - st * d, "target": px + st * rr * d,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+def ma_cross(s: Series, fast="ema20", slow="ema100", rr=3.0, stop_atr=2.0):
+    """Moving-average crossover. The oldest trend rule there is, and a fair
+    baseline: if a new idea cannot beat this, it has not earned its complexity."""
+    def sig(ctx, i):
+        a = ctx["atr"][i]
+        if a is None or a <= 0:
+            return None
+        now = 1 if ctx[fast][i] > ctx[slow][i] else -1
+        prev = 1 if ctx[fast][i - 1] > ctx[slow][i - 1] else -1
+        if now == prev:
+            return None
+        px, d = s.c[i], stop_atr * a
+        return {"side": now, "stop": px - now * d, "target": px + now * rr * d,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+def mean_revert(s: Series, dev=2.5, rr=1.5, stop_atr=2.0, ma="ema50"):
+    """MEAN REVERSION — fade price stretched `dev` x ATR from a moving average,
+    targeting a move back toward it. The natural opposite of trend following.
+
+    Tested because trend and mean reversion cannot both be right in the same
+    regime, and knowing which one gold actually rewards is worth more than
+    assuming.
+    """
+    def sig(ctx, i):
+        a = ctx["atr"][i]
+        if a is None or a <= 0:
+            return None
+        m = ctx[ma][i]
+        stretch = (s.c[i] - m) / a
+        st = 0
+        if stretch >= dev:
+            st = -1
+        elif stretch <= -dev:
+            st = 1
+        if st == 0:
+            return None
+        prev = (s.c[i - 1] - ctx[ma][i - 1]) / (ctx["atr"][i - 1] or a)
+        if (st == -1 and prev >= dev) or (st == 1 and prev <= -dev):
+            return None                       # only on the bar it first stretches
+        px, d = s.c[i], stop_atr * a
+        return {"side": st, "stop": px - st * d, "target": px + st * rr * d,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+def orb(s: Series, open_hour=7, range_bars=2, rr=2.0, stop_atr=1.0):
+    """OPENING RANGE BREAKOUT. Define a range in the first `range_bars` bars
+    after `open_hour` UTC (London), then trade a break of it that session.
+
+    Session effects are one of the better-documented intraday regularities, so
+    this tests whether gold's London open carries any.
+    """
+    def sig(ctx, i):
+        a = ctx["atr"][i]
+        if a is None or a <= 0:
+            return None
+        h = hour_utc(s.ts[i])
+        start = open_hour + range_bars
+        if not (start <= h < start + 4):      # only trade the hours after the range
+            return None
+        lo_i = i - (h - open_hour)
+        if lo_i < 1:
+            return None
+        hi = max(s.h[lo_i:lo_i + range_bars]) if lo_i + range_bars <= i else None
+        lo = min(s.l[lo_i:lo_i + range_bars]) if lo_i + range_bars <= i else None
+        if hi is None or lo is None or hi <= lo:
+            return None
+        st = 1 if s.c[i] > hi else (-1 if s.c[i] < lo else 0)
+        if st == 0:
+            return None
+        px, d = s.c[i], stop_atr * a
+        return {"side": st, "stop": px - st * d, "target": px + st * rr * d,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+REGISTRY.update({
+    "tsmom": tsmom,
+    "ma_cross": ma_cross,
+    "mean_revert": mean_revert,
+    "orb": orb,
+})

@@ -116,3 +116,42 @@ Engine must pass `python3 JARVIS/research/test_engine.py` first.
 - **Conclusion:** the gold result is most likely an artifact of the 2024-2026
   gold bull run, not a structural edge. E-004 downgraded PROMISING -> UNPROVEN.
   Do not build an EA on it without a much stronger case.
+
+## E-010 — Cross-market scan of 8 strategies (NOTHING PASSES)
+- **Test:** `robustness.py` — every strategy on GOLD/US500/EURUSD/GBPUSD, 1h,
+  2+ years, full retail costs. Then the full study gauntlet on the survivor.
+- **Result — markets with positive expectancy:**
+
+  | strategy | GOLD | US500 | EURUSD | GBPUSD | +ve |
+  |---|---|---|---|---|---|
+  | ma_cross | +0.200 | +0.046 | +0.008 | -0.052 | 3/4 |
+  | donchian_trend | +0.198 | +0.130 | -0.146 | -0.067 | 2/4 |
+  | tsmom | +0.076 | +0.044 | -0.151 | -0.290 | 2/4 |
+  | liquidity_sweep | +0.001 | -0.033 | -0.170 | -0.238 | **1/4** |
+  | ema_pullback | -0.142 | -0.004 | -0.247 | -0.080 | 0/4 |
+  | mean_revert | -0.062 | -0.034 | -0.096 | -0.084 | 0/4 |
+  | orb | -0.140 | -0.089 | -0.291 | -0.299 | 0/4 |
+
+- **The survivor failed too.** `ma_cross` on gold: t-stat 1.22 (needs >2),
+  only 3/6 walk-forward folds positive and all three are the last three
+  (the 2025-26 gold rally), longs +0.704R vs shorts **-0.199R**. On US500 its
+  edge vanishes entirely at 3x spread.
+- **Conclusion:** after 8 strategies x 4 markets with costs, walk-forward,
+  Monte Carlo and direction splits, **NOTHING reaches PROMISING.** The
+  apparent winners are long-biased and concentrated in gold's bull run.
+- **Liquidity sweep specifically: 1/4 markets = likely artifact.** This is
+  the second independent test to find no edge in the concept as implemented.
+- **What this means:** finding a real edge is not a weekend task. The
+  infrastructure to TEST honestly now exists, which is the precondition for
+  everything else. That is the actual achievement so far.
+
+## E-011 — Where the published evidence actually lives (RESEARCH DIRECTION)
+Trend following's strong published record (Moskowitz/Ooi/Pedersen; AQR's
+"A Century of Evidence") is on **daily-and-slower** timeframes across a
+**diversified basket of 50+ instruments** — not intraday on one symbol.
+Every test here has been 1h on 4 correlated instruments, which is close to the
+hardest possible version of the game: highest cost drag, lowest signal, no
+diversification.
+**Next test to run:** daily data across 20-40 uncorrelated futures/FX/indices,
+simple trend rules. If an edge exists anywhere reachable, it is most likely
+there. Requires daily history the repo does not yet hold.
