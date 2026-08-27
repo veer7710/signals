@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# JARVIS resume — prints the checkpoint so a new session starts informed.
+# Usage:  ./JARVIS/bin/resume
+set -uo pipefail
+cd "$(dirname "$0")/../.." || exit 1
+S=JARVIS/state
+bar(){ printf '=%.0s' {1..70}; echo; }
+
+bar; echo "  JARVIS — RESUME"; bar
+echo "branch : $(git rev-parse --abbrev-ref HEAD 2>/dev/null)"
+echo "commit : $(git log -1 --format='%h %s' 2>/dev/null)"
+echo "dirty  : $(git status --porcelain 2>/dev/null | wc -l) uncommitted file(s)"
+echo
+
+echo "--- PHASE ---"
+sed -n '/^## Phase/,/^$/p' "$S/PROJECT_STATUS.md" 2>/dev/null | tail -n +2
+echo "--- WHERE THE LAST SESSION STOPPED ---"
+sed -n '/^## Where the work stopped/,/^## /p' "$S/SESSION_STATE.md" 2>/dev/null | sed '1d;$d'
+echo "--- NEXT ACTIONS ---"
+grep -E '^## A-' "$S/NEXT_ACTIONS.md" 2>/dev/null | sed 's/^## /  /'
+echo
+echo "--- EXPERIMENT VERDICTS ---"
+grep -E '^## E-' "$S/EXPERIMENTS.md" 2>/dev/null | sed 's/^## /  /'
+echo
+echo "--- ENGINE HEALTH ---"
+if python3 JARVIS/research/test_engine.py >/tmp/jarvis_tests.txt 2>&1; then
+  echo "  regression tests: ALL PASS ($(grep -c PASS /tmp/jarvis_tests.txt) checks)"
+else
+  echo "  regression tests: FAILING — backtest results are NOT trustworthy"
+  grep FAIL /tmp/jarvis_tests.txt | head
+fi
+echo
+echo "--- BLOCKED ON VEER ---"
+grep -E 'BLOCKED ON VEER' "$S/NEXT_ACTIONS.md" 2>/dev/null | sed 's/^## /  /'
+echo
+bar
+echo "Full continuation prompt: $S/NEXT_SESSION_PROMPT.md"
+bar
