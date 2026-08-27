@@ -1,0 +1,1200 @@
+//@version=6
+// =============================================================================
+//  LIQUIDITY ENGINE  v2.0
+//  Absorption vs cascade at documented liquidity.  Pine v6 · non-repainting.
+// =============================================================================
+//  WHAT THIS SCRIPT BELIEVES
+//  Two order populations rest at an obvious level. Take-profit / limit orders
+//  sit ON the level - they reverse price. Stop orders sit JUST BEYOND it - when
+//  they fire they ACCELERATE price (Osler 2003/2005: stop clusters cause price
+//  cascades). So a wick through a high is not information. It is the moment two
+//  opposite forces meet. The information is which one won, and that is only
+//  visible AFTER the pierce - as expansion (stops won, do not fade) or as
+//  compression plus a close back inside (limits absorbed it, fade it).
+//
+//  THEREFORE: this script never trades the pierce. It trades the resolution.
+//
+//  SEQUENCE
+//    Level -> Pierce -> Failure to expand -> Reclaim -> CISD -> Entry -> Stop
+//
+// -----------------------------------------------------------------------------
+//  WHAT IS NEW IN v2.0 (and why)
+//
+//  FIXED - previous-day high/low were a day too old. request.security on "D"
+//    with lookahead_off already returns the LAST CLOSED daily bar. Asking for
+//    high[1] on top of that returned the day BEFORE yesterday. The two most
+//    important levels on the chart were both wrong.
+//  FIXED - higher-timeframe context was one full HTF bar stale for the same
+//    reason (close[1] inside a lookahead_off request). On a 20x HTF that is a
+//    long time to be looking backwards.
+//  FIXED - the score was not out of 7. Old component 7 was
+//    "(session? ok : true) and (fvg? ok : true)". With both options off - the
+//    defaults - it was ALWAYS true. Component 5 needed useHtf, so with HTF off
+//    it was unreachable. "3 of 7" was really "2 of 6". Score max is now
+//    computed from the components that are actually switched on, and printed.
+//  FIXED - "Cluster equal highs/lows" did not switch clustering off. The merge
+//    ran regardless; the toggle only changed a cosmetic flag.
+//  FIXED - the round-number test almost never fired. Tolerance was ATR x 0.06
+//    (about 6 cents on M1 gold) against a 10-dollar grid. Dead score component.
+//    Now a fraction of ATR, and the grid includes halves.
+//  FIXED - "Prior extreme must be older than N bars" did nothing. The gate was
+//    age >= max(pivLen, priorAge), and a level's age is already pivLen the
+//    instant it is registered, so any priorAge <= pivLen was free. Now
+//    age >= pivLen + priorAge.
+//  FIXED - the rejection counters could not see the two biggest rejection
+//    classes. cCand was incremented inside "if sigDir != 0", and sigDir was
+//    only set after the significance and cascade-veto checks had already
+//    passed. Setups killed by those two were invisible - which is exactly the
+//    "script is silent and I do not know why" failure the counters exist for.
+//  FIXED - printed signals did not match tracked signals. A BUY could print
+//    while a setup was already live, and nothing recorded it. Standing rule
+//    here is that every printed signal gets taken, so what prints is now
+//    exactly what the stats table measures.
+//  FIXED - a closed setup used to hold the slot for clearBars bars, silently
+//    blocking new signals. Drawing lifetime and state lifetime are now
+//    separate. This matters most for re-entries, which happen immediately
+//    after a stop.
+//  FIXED - zero-thickness zones. A pivot bar that closed at its own extreme
+//    produced a box with no height, so the zone was invisible.
+//
+//  ADDED - CISD (change in state of delivery) as the confirmation trigger.
+//    Mark the open of the last unbroken run of same-direction closes into the
+//    extreme; confirmation is a BODY close through that open. It fires earlier
+//    than a swing-based structure shift and it is parameter-free. It exists
+//    here for one reason: it is the standard answer to "I entered, got stopped,
+//    and then price ran exactly where I said it would" - the entry was placed
+//    before the sweep instead of after it.
+//  ADDED - GIVE-UP MEASUREMENT. Every time a setup is stopped out, the script
+//    keeps watching for N bars and records how far price then travelled in the
+//    ORIGINAL direction. Printed in the stats table as an average in points.
+//    This is a measurement, not a filter: it runs whether or not re-entry is
+//    enabled, and it is the number that decides whether re-entry is worth
+//    having at all.
+//  ADDED - RE-ENTRY module. If a stopped trade's level is reclaimed on a close
+//    within N bars, the script re-enters the ORIGINAL direction with the stop
+//    behind the sweep extreme - usually a much tighter stop than the first
+//    attempt. Labelled RE, counted separately in the stats table so it can be
+//    judged on its own numbers rather than blended into the main line.
+//  ADDED - relative volume on the sweep bar as one score component. Honest
+//    caveat: on spot/CFD gold "volume" is one broker's tick count, so this
+//    measures ACTIVITY, not traded size. Activity spikes at real sweeps are
+//    still real. It is a score point, never a gate, and it switches itself off
+//    on symbols with no volume feed.
+//  ADDED - conviction test on the reclaim (LuxAlgo's dashed-sweep case needs a
+//    rejection wick on the retest, not just any trade back through the level).
+//
+// -----------------------------------------------------------------------------
+//  BORROWED FROM LUXALGO, DELIBERATELY
+//   · Liquidity Swings: a level is a ZONE, not a line, and its significance is
+//     MEASURED by how many bars trade back into it - direct evidence of resting
+//     orders rather than a guess. The visit count is printed on the level.
+//   · Liquidity Sweeps: TWO sweep types, not one. A wick pierce with an
+//     immediate close back inside (drawn dotted) is a stop raid. A close
+//     THROUGH the level that then fails on the retest (drawn dashed) is a
+//     trapped breakout. Both are here as route (a) and route (b).
+//   · Not borrowed: their volume filter as a primary gate, for the CFD reason
+//     above.
+//
+//  LINEAGE - this pattern predates the liquidity vocabulary by 30 years.
+//  Connors & Raschke, "Street Smarts" (1995), Turtle Soup: a new 20-bar extreme
+//  where the previous extreme is at least 3-4 bars old, entered on a stop back
+//  through the prior level, stop beyond the new extreme. Turtle Soup Plus One
+//  allows the reclaim a bar later and requires the breakout bar to CLOSE beyond
+//  the level - it is hunting the traders who entered on that close.
+//
+//  LEFT OUT ON PURPOSE
+//   · Fibonacci / OTE entries - failed their one direct controlled test.
+//   · Order blocks as a separate object - they are support and resistance,
+//     which is already the whole first half of this script.
+//   · Kill zones as a hard gate - session volatility seasonality is robust,
+//     session profitability is not. Optional score point, default off.
+//   · Weighted confidence scores - every weight is a free parameter. The score
+//     here is equal-weight binary tests. Nothing to tune, nothing to curve-fit.
+//
+//  NON-REPAINTING
+//   · Every decision reads bar [1], a closed bar.
+//   · Pivots are read as ta.pivothigh(...)[1].
+//   · request.security uses lookahead_off.
+//   · ONE deliberate exception: the armed-level touch test may read the live
+//     bar's high/low. That test is MONOTONE - once low <= level it can never
+//     become false again inside the bar - so a printed signal can never be
+//     withdrawn. It exists because that fill happens AT the level, and paying
+//     the next open instead throws away the best price in the whole setup.
+//     Switch it off with "Live touch on armed levels" if you want bar-close
+//     purity.
+//
+//  HONEST WARNING
+//  A public 7-year test of the popular version of this idea (sweep, structure
+//  shift, FVG, inside session windows) on 2.55M EURUSD 1-minute bars found the
+//  best of 54 variations reached a 56% hit rate and not one was profitable
+//  after a 0.5-pip cost. The patterns are real; a naive rule built on them is
+//  not an edge. What separates this build is the cascade filter, the CISD
+//  confirmation and the cost-to-risk filter. Whether that is enough is an
+//  empirical question, which is what the stats table is for.
+//
+//  READ THIS BEFORE YOU TRADE IT - THE COST PROBLEM, IN PLAIN NUMBERS
+//  Gold's round-trip cost is roughly 0.30 in price. This script's stop sits
+//  beyond the sweep wick, which on M1 gold is normally 1.5 to 2.5 in price.
+//  That is a cost of about 12-20% of the risk: survivable.
+//  A stop of 0.5 in price - which is what a fixed small cash risk forces at
+//  larger lot sizes - is a cost of 60% of the risk. Nothing survives that.
+//  So the stop distance has to come from the LEVEL, and the lot size has to
+//  come from the stop. Not the other way round.
+// =============================================================================
+
+indicator("Liquidity Engine", "LiqEng", overlay = true,
+     max_lines_count = 500, max_boxes_count = 500, max_labels_count = 500)
+
+// ============================ 1. INPUTS =====================================
+
+gA = "A · Core"
+pivLen    = input.int(6,     "Swing size (pivot bars each side)", minval = 2, maxval = 50, group = gA)
+minSig    = input.int(2,     "Min level significance to trade (0-5)", minval = 0, maxval = 5, group = gA)
+reclaimBar= input.int(5,     "Reclaim window (bars)", minval = 1, maxval = 20, group = gA,
+     tooltip = "Past this many bars the pierce is a genuine break, not a sweep.")
+expandAtr = input.float(0.35,"Cascade cutoff: close beyond level (x ATR)", minval = 0.05, step = 0.05, group = gA,
+     tooltip = "If price CLOSES this far past the level, the stop cluster won. The level is killed and never faded.")
+minScore  = input.int(4,     "Min setup score", minval = 0, maxval = 8, group = gA,
+     tooltip = "Compared against the max shown in the panel, which depends on which score components are switched on.")
+reqExtreme= input.bool(true, "Level must be a genuine N-bar extreme", group = gA)
+extLook   = input.int(14,    "   N-bar extreme lookback", minval = 5, maxval = 200, group = gA)
+priorAge  = input.int(3,     "Level must be this many bars old past confirmation", minval = 0, maxval = 50, group = gA,
+     tooltip = "A level that only just formed has nothing resting behind it yet.")
+
+gA2 = "A2 · Cost & risk ceiling"
+maxRiskAtr= input.float(1.6, "Reject setup if stop wider than (x ATR)", minval = 0.2, step = 0.1, group = gA2)
+maxCostR  = input.float(20.0,"Reject setup if cost exceeds (% of risk)", minval = 0, maxval = 100, step = 0.5, group = gA2,
+     tooltip = "Cost as a share of risk is what kills low-timeframe versions of this idea. 20% is already ugly; below 10% is where this style works.")
+costPts   = input.float(0.30,"Round-trip cost (price: spread + slippage)", minval = 0, step = 0.01, group = gA2)
+ptSize    = input.float(0.0, "1 point = (0 = auto from symbol)", minval = 0, step = 0.01, group = gA2,
+     tooltip = "XAUUSD: 1.0 means 4036 -> 4056 is 20 points. Auto uses mintick x 100.")
+
+gB = "B · Liquidity map"
+useEqual  = input.bool(true,  "Cluster equal highs / equal lows", group = gB)
+eqTolAtr  = input.float(0.25, "   equal tolerance (x ATR)", minval = 0.02, step = 0.05, group = gB)
+interMode = input.string("Count", "Measure interaction by", options = ["Count", "Volume"], group = gB,
+     tooltip = "Count = bars that traded back into the zone. Volume only means something on a futures chart.")
+minInter  = input.int(0,      "Min interactions before a level is tradeable", minval = 0, maxval = 20, group = gB)
+zoneAtr   = input.float(0.10, "External-level zone thickness (x ATR)", minval = 0.01, step = 0.05, group = gB)
+useRound  = input.bool(true,  "Score round numbers", group = gB)
+roundStep = input.float(0.0,  "   round step (0 = auto)", minval = 0, step = 0.1, group = gB)
+roundTol  = input.float(0.20, "   round tolerance (x ATR)", minval = 0.02, step = 0.02, group = gB)
+usePrevD  = input.bool(true,  "Include previous day high / low", group = gB)
+maxLvls   = input.int(20,     "Max levels held", minval = 4, maxval = 40, group = gB)
+lvlMaxAge = input.int(600,    "Forget levels older than (bars)", minval = 50, group = gB)
+
+gC = "C · Context (score inputs, never hard gates)"
+useHtf    = input.bool(true,  "Use higher-timeframe context", group = gC)
+htfAuto   = input.bool(true,  "   auto-map HTFs from chart TF", group = gC,
+     tooltip = "M1/M3 map to M5 and M15. M5 maps to H1 and H4. A 1-minute chart is never mapped to the hour: that relationship carries no information at this scale.")
+htf1Man   = input.timeframe("60",  "   HTF 1 (manual)", group = gC)
+htf2Man   = input.timeframe("240", "   HTF 2 (manual)", group = gC)
+useRvol   = input.bool(true,  "Score relative volume on the sweep bar", group = gC,
+     tooltip = "On spot/CFD gold this is broker tick count - it measures ACTIVITY, not traded size. Auto-disables on symbols with no volume feed.")
+rvolLen   = input.int(50,     "   relative volume baseline (bars)", minval = 10, group = gC)
+rvolHi    = input.float(1.5,  "   'busy' above (x median)", minval = 1.0, step = 0.1, group = gC)
+useSessSc = input.bool(false, "Score London/NY overlap", group = gC)
+sessStr   = input.session("1200-1700", "   session (chart time)", group = gC)
+useFvgSc  = input.bool(false, "Score displacement gap on the reclaim leg", group = gC)
+
+gE = "E · Confirmation"
+confMode  = input.string("CISD", "Confirmation trigger", options = ["CISD", "Structure shift", "None"], group = gE,
+     tooltip = "CISD: a body close through the open of the last unbroken run of same-direction closes into the extreme. Fires earlier than a swing break and has no parameters. Structure shift: a body close through the last opposing internal swing.")
+confGate  = input.bool(true,  "   confirmation is REQUIRED, not just scored", group = gE)
+confWin   = input.int(3,      "   confirmation stays valid for (bars)", minval = 1, maxval = 10, group = gE)
+stopEntry = input.bool(true,  "Fill at the level when price trades back through it", group = gE,
+     tooltip = "Turtle Soup entry mechanics. When the sweep bar CLOSES beyond the level, a resting order at the level is a legitimate fill on the following bars - and it is a far better price than the next open, which is what the cost problem needs.")
+liveTouch = input.bool(true,  "   live touch on armed levels", group = gE,
+     tooltip = "Reads the forming bar for the armed-level touch only. Monotone: a printed signal can never be withdrawn. Off = bar-close purity, worse fills.")
+needWick  = input.bool(true,  "Reclaim must show rejection (wick or body conviction)", group = gE)
+noCascade = input.bool(true,  "Never fade a pierce that agrees with a strong trend", group = gE,
+     tooltip = "The Osler cascade rule. The single most defensible filter in the script.")
+effLen    = input.int(20,     "   trend efficiency length", minval = 5, group = gE)
+effHi     = input.float(0.45, "   'strong trend' efficiency above", minval = 0.1, maxval = 1, step = 0.05, group = gE)
+
+gD = "D · Risk & targets"
+slBufAtr  = input.float(0.15, "Stop buffer beyond sweep wick (x ATR)", minval = 0, step = 0.05, group = gD)
+tp1Mode   = input.string("Opposing liquidity", "TP1", options = ["Opposing liquidity", "Fixed R"], group = gD)
+tp1R      = input.float(1.5,  "   TP1 fixed R", minval = 0.2, step = 0.1, group = gD)
+minRR     = input.float(1.2,  "Reject setup if TP1 R:R below", minval = 0, step = 0.1, group = gD)
+useTp2    = input.bool(true,  "Runner to TP2 (half off at TP1, stop to entry)", group = gD)
+tp2R      = input.float(3.0,  "   TP2 R if no further level", minval = 0.5, step = 0.1, group = gD)
+
+gR = "R · Give-up measurement & re-entry"
+guWinBars = input.int(20,    "Measure give-up for N bars after a stop", minval = 3, maxval = 200, group = gR,
+     tooltip = "Pure measurement, always on. Answers: after being stopped, how far did price then go in the direction I originally wanted?")
+reOn      = input.bool(true, "Re-enter when a stopped level is reclaimed", group = gR)
+reBars    = input.int(8,     "   reclaim must happen within (bars)", minval = 1, maxval = 50, group = gR)
+reMaxSweep= input.float(1.2, "   ignore if the sweep went deeper than (x ATR)", minval = 0.2, step = 0.1, group = gR,
+     tooltip = "If price went a long way past the stop it was a real break, not a raid on my stop.")
+
+gF = "F · Display"
+showSignals = input.bool(true, "Signals ON (off = map only)", group = gF)
+showLvls    = input.bool(true, "Liquidity map", group = gF)
+showMinor   = input.bool(true, "   minor levels too", group = gF)
+showZones   = input.bool(true, "   zones", group = gF)
+zoneAll     = input.bool(false,"   zones on minor levels too", group = gF)
+showCount   = input.bool(true, "   visit count on major levels", group = gF)
+showSweep   = input.bool(true, "Sweep area on an armed level", group = gF)
+showTrade   = input.bool(true, "Entry / stop / target lines", group = gF)
+showStruct  = input.bool(false,"Structure labels (CHoCH)", group = gF)
+showPanel   = input.bool(false,"Diagnostic panel", group = gF)
+showStats   = input.bool(true, "Stats table", group = gF)
+clearBars   = input.int(3,     "Clear trade lines N bars after close", minval = 0, maxval = 50, group = gF)
+fadeBars    = input.int(15,    "Delete dead level after N bars", minval = 0, maxval = 200, group = gF)
+cUp   = input.color(#26A69A, "Long",  inline = "x", group = gF)
+cDn   = input.color(#EF5350, "Short", inline = "x", group = gF)
+cMaj  = input.color(color.new(#FF5252, 10), "Sell-side (highs)", inline = "y", group = gF)
+cMin  = input.color(color.new(#FF5252, 65), "  faint",           inline = "y", group = gF)
+cLoMaj= input.color(color.new(#26C6A6, 10), "Buy-side (lows)",   inline = "z", group = gF)
+cLoMin= input.color(color.new(#26C6A6, 65), "  faint",           inline = "z", group = gF)
+cGhost= input.color(color.new(color.gray, 82), "Dead", inline = "y", group = gF)
+
+// ========================= 2. FOUNDATIONS ===================================
+pt   = ptSize > 0 ? ptSize : syminfo.mintick * 100
+atr  = ta.atr(14)
+
+// closed-bar reads - every decision uses only these
+i1   = bar_index - 1
+o1   = open[1]
+h1   = high[1]
+l1   = low[1]
+c1   = close[1]
+atr1 = nz(atr[1], nz(ta.tr[1], syminfo.mintick * 10))
+rng1 = math.max(h1 - l1, syminfo.mintick)
+body1= math.abs(c1 - o1)
+
+// N-bar extremes at global scope - ta.* inside a loop is illegal in Pine
+hiN  = ta.highest(high, extLook)[1]
+loN  = ta.lowest(low,  extLook)[1]
+
+// --- cost arithmetic. The smallest stop that can carry the cost gate.
+minRiskPx = maxCostR > 0 ? costPts / (maxCostR / 100.0) : 0.0
+// If the cost FLOOR sits above the risk CEILING, no setup can ever qualify and
+// the script goes silent with no explanation. Detected, resolved by widening
+// the ceiling just enough, and reported so the widening is never invisible.
+gateConflict = minRiskPx > maxRiskAtr * atr1
+effRiskCap   = math.max(maxRiskAtr * atr1, gateConflict ? minRiskPx * 1.15 : 0.0)
+
+// --- regime: Kaufman efficiency ratio. One number, no ADX stack.
+netMove = math.abs(c1 - nz(close[1 + effLen], c1))
+pathSum = math.sum(math.abs(ta.change(close)), effLen)[1]
+effRat  = pathSum > 0 ? netMove / pathSum : 0.0
+volExp  = atr1 > ta.sma(atr, 50)[1]
+trendUp = c1 > nz(close[1 + effLen], c1)
+strongTrend = effRat >= effHi
+
+// --- higher timeframe. Mapped to match how these timeframes actually relate:
+// M1/M3 get M5 and M15. M5 gets H1 and H4. Nothing maps M1 to the hour.
+tfSec = timeframe.in_seconds(timeframe.period)
+f_tf(int secs) =>
+    secs <= 60 ? "1" : secs <= 180 ? "3" : secs <= 300 ? "5" : secs <= 600 ? "10" :
+     secs <= 900 ? "15" : secs <= 1800 ? "30" : secs <= 3600 ? "60" :
+     secs <= 7200 ? "120" : secs <= 14400 ? "240" : secs <= 43200 ? "720" :
+     secs <= 86400 ? "1D" : "1W"
+
+string autoH1 = tfSec <= 180 ? "5" : tfSec <= 300 ? "60" : tfSec <= 900 ? "60" : f_tf(tfSec * 4)
+string autoH2 = tfSec <= 180 ? "15" : tfSec <= 300 ? "240" : tfSec <= 900 ? "240" : f_tf(tfSec * 16)
+htf1  = htfAuto ? autoH1 : htf1Man
+htf2  = htfAuto ? autoH2 : htf2Man
+
+// lookahead_off ALREADY returns only the last CLOSED higher-timeframe bar.
+// Adding [1] on top of that - which the previous version did - threw away a
+// whole HTF bar of information for no safety gain.
+h1c = request.security(syminfo.tickerid, htf1, close, lookahead = barmerge.lookahead_off)
+h1e = request.security(syminfo.tickerid, htf1, ta.ema(close, 20), lookahead = barmerge.lookahead_off)
+h2c = request.security(syminfo.tickerid, htf2, close, lookahead = barmerge.lookahead_off)
+h2e = request.security(syminfo.tickerid, htf2, ta.ema(close, 20), lookahead = barmerge.lookahead_off)
+htfRaw  = (na(h1c) or na(h1e) ? 0 : (h1c > h1e ? 1 : -1)) + (na(h2c) or na(h2e) ? 0 : (h2c > h2e ? 1 : -1))
+htfBias = useHtf ? htfRaw : 0
+
+// same fix: "D" + lookahead_off is already yesterday. high[1] was the day
+// before yesterday, so both previous-day levels were plotted a day out.
+pdhRaw = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
+pdlRaw = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
+pdh = usePrevD ? pdhRaw : na
+pdl = usePrevD ? pdlRaw : na
+
+inSess = not na(time(timeframe.period, sessStr))
+
+// --- relative volume. Auto-disables where there is no usable feed.
+volMed  = ta.median(volume, rvolLen)[1]
+volOk   = useRvol and not na(volMed) and volMed > 0
+rvol    = volOk ? nz(volume[1], 0.0) / volMed : 1.0
+
+// --- round-number grid. Tolerance is now a real fraction of ATR: the old
+// --- ATR x 0.06 made this component effectively unreachable.
+rBase = roundStep > 0 ? roundStep : math.pow(10, math.floor(math.log10(math.max(close, syminfo.mintick)))) / 100.0
+f_isRound(float p) =>
+    bool r = false
+    if useRound and rBase > 0
+        float tol = math.max(roundTol * atr1, syminfo.mintick)
+        float d1  = math.abs(p - math.round(p / rBase) * rBase)
+        float d2  = math.abs(p - math.round(p / (rBase * 0.5)) * (rBase * 0.5))
+        r := math.min(d1, d2) <= tol
+    r
+
+// ==================== 3. CONFIRMATION PRIMITIVES ============================
+// CISD - change in state of delivery.
+//  1. find the last unbroken run of same-direction CLOSES
+//  2. the level is the OPEN of the first bar of that run
+//  3. confirmation is a BODY close through it (a wick does not count - that is
+//     the whole point: a wick through it IS the stop run)
+var float bearOpen = na
+var int   bearLen  = 0
+var float bullOpen = na
+var int   bullLen  = 0
+var float cisdUpLvl = na
+var float cisdDnLvl = na
+
+down1 = c1 < o1
+up1   = c1 > o1
+
+if down1
+    if bullLen > 0
+        cisdDnLvl := bullOpen
+        bullLen   := 0
+    if bearLen == 0
+        bearOpen := o1
+    bearLen += 1
+else if up1
+    if bearLen > 0
+        cisdUpLvl := bearOpen
+        bearLen   := 0
+    if bullLen == 0
+        bullOpen := o1
+    bullLen += 1
+
+var int cisdUpBar = -99999
+var int cisdDnBar = -99999
+if not na(cisdUpLvl) and c1 > cisdUpLvl
+    cisdUpBar := i1
+    cisdUpLvl := na            // consumed - one confirmation per delivery run
+if not na(cisdDnLvl) and c1 < cisdDnLvl
+    cisdDnBar := i1
+    cisdDnLvl := na
+cisdUp = (i1 - cisdUpBar) <= confWin
+cisdDn = (i1 - cisdDnBar) <= confWin
+
+// internal structure - a shorter swing than the level-forming swing, so
+// "structure shift" means something faster, without a second free parameter
+inLen = math.max(2, int(pivLen / 3))
+iph   = ta.pivothigh(high, inLen, inLen)[1]
+ipl   = ta.pivotlow(low,  inLen, inLen)[1]
+var float lastIH = na
+var float lastIL = na
+if not na(iph)
+    lastIH := iph
+if not na(ipl)
+    lastIL := ipl
+
+// a structure shift is an EVENT, not a state. Testing "c1 > lastIH" alone
+// stays true every bar after the break, so the filter filtered nothing.
+mssUpRaw = not na(lastIH) and c1 > lastIH and math.max(o1, c1) > lastIH and nz(close[2], c1) <= lastIH
+mssDnRaw = not na(lastIL) and c1 < lastIL and math.min(o1, c1) < lastIL and nz(close[2], c1) >= lastIL
+var int mssUpBar = -99999
+var int mssDnBar = -99999
+if mssUpRaw
+    mssUpBar := i1
+if mssDnRaw
+    mssDnBar := i1
+mssUp = (i1 - mssUpBar) <= confWin
+mssDn = (i1 - mssDnBar) <= confWin
+
+confUp = confMode == "CISD" ? cisdUp : confMode == "Structure shift" ? mssUp : true
+confDn = confMode == "CISD" ? cisdDn : confMode == "Structure shift" ? mssDn : true
+
+fvgUp = low[1] > high[3]
+fvgDn = high[1] < low[3]
+
+// ============================ 4. LEVELS =====================================
+type Lvl
+    float px
+    float zTop
+    float zBtm
+    int   bar
+    bool  isHigh
+    int   touches  = 1
+    int   inter    = 0
+    float ivol     = 0.0
+    bool  eq       = false
+    bool  round    = false
+    bool  isExt    = false
+    int   sig      = 0
+    bool  pierced  = false
+    int   pBar     = 0
+    float beyond   = 0.0
+    float maxClose = 0.0
+    bool  armed    = false
+    bool  dead     = false
+    int   deadBar  = 0
+    line  ln       = na
+    box   bx       = na
+    box   sw       = na
+    label lb       = na
+
+var array<Lvl> L = array.new<Lvl>()
+
+// pivots read one bar late: a live bar can never revoke a confirmed pivot
+ph    = ta.pivothigh(high, pivLen, pivLen)[1]
+pl    = ta.pivotlow(low,  pivLen, pivLen)[1]
+pBarX = bar_index - 1 - pivLen
+minZone = math.max(zoneAtr * atr1 * 0.35, syminfo.mintick * 2)
+
+// major structure: body close through the highest UNBROKEN pivot high
+var float majH = na
+var float majL = na
+var bool  majHBroken = false
+var bool  majLBroken = false
+var int   structDir = 0
+if not na(ph)
+    majH := (na(majH) or majHBroken) ? ph : math.max(majH, ph)
+    majHBroken := false
+if not na(pl)
+    majL := (na(majL) or majLBroken) ? pl : math.min(majL, pl)
+    majLBroken := false
+bosUp = not na(majH) and not majHBroken and c1 > majH and math.max(o1, c1) > majH
+bosDn = not na(majL) and not majLBroken and c1 < majL and math.min(o1, c1) < majL
+if bosUp
+    majHBroken := true
+if bosDn
+    majLBroken := true
+bool chochUp = false
+bool chochDn = false
+if bosUp and structDir <= 0
+    chochUp   := structDir < 0
+    structDir := 1
+else if bosDn and structDir >= 0
+    chochDn   := structDir > 0
+    structDir := -1
+
+// significance 0-5, all measured or observed - no age-based guesswork
+f_sigOf(bool eq, int touches, bool round, bool isExt, int inter, float ivol) =>
+    int s = 0
+    s += eq ? 1 : 0
+    s += touches >= 2 ? 1 : 0
+    s += round ? 1 : 0
+    s += isExt ? 1 : 0
+    s += (interMode == "Volume" ? (ivol > 0 and inter >= 2) : inter >= 2) ? 1 : 0
+    s
+
+// register / merge. The old version merged even with clustering switched off -
+// the toggle only set a cosmetic flag. It now actually gates the merge.
+f_add(array<Lvl> arr, float px, float zTop, float zBtm, int bar, bool isHigh, bool isExt) =>
+    bool merged = false
+    if useEqual and array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            Lv = array.get(arr, i)
+            if not merged and not Lv.dead and Lv.isHigh == isHigh and math.abs(Lv.px - px) <= eqTolAtr * atr1
+                Lv.px      := isHigh ? math.max(Lv.px, px) : math.min(Lv.px, px)
+                Lv.zTop    := math.max(Lv.zTop, zTop)
+                Lv.zBtm    := math.min(Lv.zBtm, zBtm)
+                Lv.touches := Lv.touches + 1
+                Lv.eq      := true
+                Lv.isExt   := Lv.isExt or isExt
+                Lv.round   := Lv.round or f_isRound(px)
+                merged     := true
+                if not na(Lv.ln)
+                    line.set_y1(Lv.ln, Lv.px)
+                    line.set_y2(Lv.ln, Lv.px)
+    if not merged
+        array.push(arr, Lvl.new(px = px, zTop = zTop, zBtm = zBtm, bar = bar,
+             isHigh = isHigh, isExt = isExt, round = f_isRound(px)))
+        // evict the least useful level, not blindly the oldest: dropping a
+        // major level while a junk one survives is the wrong trade-off
+        while array.size(arr) > maxLvls
+            int  worst = 0
+            int  wSig  = 999
+            int  wBar  = 2147483647
+            bool wDead = false
+            for i = 0 to array.size(arr) - 1
+                Lc = array.get(arr, i)
+                bool better = false
+                if Lc.dead and not wDead
+                    better := true
+                else if Lc.dead == wDead and (Lc.sig < wSig or (Lc.sig == wSig and Lc.bar < wBar))
+                    better := true
+                if better
+                    worst := i
+                    wSig  := Lc.sig
+                    wBar  := Lc.bar
+                    wDead := Lc.dead
+            Lo = array.remove(arr, worst)
+            if not na(Lo.ln)
+                line.delete(Lo.ln)
+            if not na(Lo.bx)
+                box.delete(Lo.bx)
+            if not na(Lo.sw)
+                box.delete(Lo.sw)
+            if not na(Lo.lb)
+                label.delete(Lo.lb)
+    merged
+
+// the pivot bar's own body edge is the far side of the zone, floored at a
+// minimum thickness so a pivot that closed on its extreme is still visible
+pvBody = pivLen + 1
+if not na(ph)
+    f_add(L, ph, ph, math.min(math.max(open[pvBody], close[pvBody]), ph - minZone), pBarX, true, false)
+if not na(pl)
+    f_add(L, pl, math.max(math.min(open[pvBody], close[pvBody]), pl + minZone), pl, pBarX, false, false)
+
+var float pdhSeen = na
+var float pdlSeen = na
+if usePrevD and not na(pdh) and (na(pdhSeen) or pdh != pdhSeen)
+    pdhSeen := pdh
+    f_add(L, pdh, pdh, pdh - zoneAtr * atr1, i1, true, true)
+if usePrevD and not na(pdl) and (na(pdlSeen) or pdl != pdlSeen)
+    pdlSeen := pdl
+    f_add(L, pdl, pdl + zoneAtr * atr1, pdl, i1, false, true)
+
+// ==================== 5. THE SWEEP / CASCADE ENGINE =========================
+// Three outcomes per level, not one:
+//   CASCADE  - price CLOSED decisively beyond -> stops won. Kill the level,
+//              never fade it, re-register it as flipped support/resistance.
+//   ABSORBED - pierced, failed to close beyond, closed back inside in time
+//              -> limit orders won. The only tradeable case.
+//   PENDING  - still inside the window. Wait. This is the "armed" state, and
+//              it is the heads-up before the signal.
+var int   swDir  = 0
+var float swLvl  = na
+var float swExt  = na
+var int   swSig  = 0
+var bool  swFast = false
+var bool  swTight= false
+var float swEntry= na
+var float swZTop = na
+var float swZBtm = na
+var int   swInter= 0
+var bool  swPlus = false
+swDir  := 0
+swEntry:= na
+swPlus := false
+
+// counters - moved OUT of the "a signal fired" branch. The old placement meant
+// the two biggest rejection classes (low significance, cascade veto) were
+// never counted, which is precisely the blindness the counters are for.
+var int cCand   = 0
+var int rSig    = 0
+var int rCasc   = 0
+var int rConf   = 0
+var int rScoreN = 0
+var int rWide   = 0
+var int rCost   = 0
+var int rRR     = 0
+var int rBusy   = 0
+var int rDupe   = 0
+var int nArmed  = 0
+
+// a cascaded level becomes flipped support/resistance, but registering it
+// inside the loop would shift the array under the iterator - deferred.
+float flipPx   = na
+bool  flipHigh = false
+bool  flipExt  = false
+
+if array.size(L) > 0
+    for i = 0 to array.size(L) - 1
+        Lv = array.get(L, i)
+        if not Lv.dead
+            int age = i1 - Lv.bar
+            Lv.sig := f_sigOf(Lv.eq, Lv.touches, Lv.round, Lv.isExt, Lv.inter, Lv.ivol)
+
+            // MEASURED interaction: did this bar actually trade back inside the
+            // zone? Direct evidence of resting orders.
+            if not Lv.pierced and age > 0 and l1 <= Lv.zTop and h1 >= Lv.zBtm
+                Lv.inter := Lv.inter + 1
+                Lv.ivol  := Lv.ivol + nz(volume[1], 0.0)
+
+            // ---- pierce detection. priorAge now actually bites: a level's age
+            // is already pivLen the moment it is registered, so the old
+            // max(pivLen, priorAge) made any priorAge <= pivLen free.
+            if not Lv.pierced and age >= pivLen + priorAge
+                bool newExt = not reqExtreme or (Lv.isHigh ? h1 >= hiN : l1 <= loN)
+                bool worked = Lv.inter >= minInter
+                if (Lv.isHigh ? h1 > Lv.px : l1 < Lv.px) and newExt and worked
+                    Lv.pierced  := true
+                    Lv.pBar     := i1
+                    Lv.beyond   := Lv.isHigh ? h1 : l1
+                    Lv.maxClose := c1
+                    nArmed      += 1
+            else if Lv.pierced
+                if Lv.isHigh and h1 > Lv.beyond
+                    Lv.beyond := h1
+                if not Lv.isHigh and l1 < Lv.beyond
+                    Lv.beyond := l1
+                Lv.maxClose := Lv.isHigh ? math.max(Lv.maxClose, c1) : math.min(Lv.maxClose, c1)
+
+            // ---- resolve
+            if Lv.pierced and not Lv.dead
+                float closeBeyond = Lv.isHigh ? Lv.maxClose - Lv.px : Lv.px - Lv.maxClose
+                int   barsIn      = i1 - Lv.pBar
+                bool  bigBreak    = closeBeyond > expandAtr * atr1 * 2.0
+                bool  heldBeyond  = closeBeyond > expandAtr * atr1 and barsIn >= 2
+                bool  expired     = barsIn > reclaimBar
+                bool  closedIn    = Lv.isHigh ? c1 < Lv.px : c1 > Lv.px
+                int   dir         = Lv.isHigh ? -1 : 1
+                // monotone live read: once touched it can never untouch, so a
+                // printed signal can never be withdrawn
+                bool  touchHi     = l1 <= Lv.px or (liveTouch and low <= Lv.px)
+                bool  touchLo     = h1 >= Lv.px or (liveTouch and high >= Lv.px)
+                bool  backThru    = Lv.isHigh ? touchHi : touchLo
+                // conviction on the reclaim: a rejection wick out of the level,
+                // or a decisive body back inside. A limp reclaim is the fakeout.
+                float rejWick = Lv.isHigh ? (h1 - math.max(o1, c1)) : (math.min(o1, c1) - l1)
+                bool  conv    = not needWick or rejWick >= 0.33 * rng1 or body1 >= 0.5 * rng1
+                // route (b) is exempt: it fills DURING the retest bar, so no
+                // rejection wick exists yet. The confirmation gate covers it.
+                bool  cascadeVeto = noCascade and strongTrend and ((dir < 0 and trendUp) or (dir > 0 and not trendUp))
+                bool  fire = false
+                bool  plus = false
+
+                if bigBreak or heldBeyond or expired
+                    Lv.dead    := true
+                    Lv.deadBar := bar_index
+                    if na(flipPx) and not expired
+                        flipPx   := Lv.px
+                        flipHigh := not Lv.isHigh
+                        flipExt  := Lv.isExt
+                else if not Lv.armed and closedIn
+                    fire := true                       // route (a) wick sweep
+                else if not Lv.armed and not closedIn
+                    Lv.armed := true                   // route (b) armed
+                else if Lv.armed and stopEntry and backThru
+                    fire := true
+                    plus := true                       // route (b) filled
+                else if Lv.armed and not stopEntry and closedIn
+                    fire := true
+
+                if fire
+                    cCand += 1
+                    if Lv.sig < minSig
+                        rSig += 1
+                    else if cascadeVeto
+                        rCasc += 1
+                    else if not conv and not plus
+                        rConf += 1
+                    else if swDir != 0
+                        // a second sweep resolved on the same bar. One setup at
+                        // a time, so it is dropped - but counted, never silent.
+                        rDupe += 1
+                    else
+                        swDir   := dir
+                        swLvl   := Lv.px
+                        swExt   := Lv.beyond
+                        swSig   := Lv.sig
+                        swFast  := barsIn <= 2
+                        swTight := closeBeyond < expandAtr * atr1 * 0.5
+                        swPlus  := plus
+                        swZTop  := Lv.zTop
+                        swZBtm  := Lv.zBtm
+                        swInter := Lv.inter
+                        // route (b) fills AT the level - a resting order placed
+                        // on an earlier bar is an honest fill. Route (a) only
+                        // crossed intrabar, so it pays the next open.
+                        swEntry := plus ? Lv.px : na
+                    Lv.dead    := true
+                    Lv.deadBar := bar_index
+
+if not na(flipPx)
+    f_add(L, flipPx, flipPx + (flipHigh ? 0.0 : zoneAtr * atr1),
+         flipPx - (flipHigh ? zoneAtr * atr1 : 0.0), i1, flipHigh, flipExt)
+
+// ==================== 6. STATE (declared before first use) ==================
+// Pine resolves names top to bottom: a var declared further down the file is an
+// "undeclared identifier" even though the file reads fine to a human.
+var int    sDir   = 0
+var int    sStage = 0
+var float  sEntry = na
+var float  sSl    = na
+var float  sTp1   = na
+var float  sTp2   = na
+var float  sRisk  = na
+var int    sBar   = 0
+var int    sScore = 0
+var bool   sHalf  = false
+var bool   sIsRe  = false
+var string sWhy   = "-"
+var line   lE  = na
+var line   lS  = na
+var line   lT  = na
+var line   lT2 = na
+var int    dKill = na            // bar at which trade drawings get removed
+
+// stats, net of cost, in R
+var int   nTr = 0
+var int   nW  = 0
+var int   nLong = 0
+var float sumR    = 0.0
+var float sumWin  = 0.0
+var float sumLoss = 0.0
+var float eqR   = 0.0
+var float peakR = 0.0
+var float ddR   = 0.0
+var int   streak = 0
+var int   worstStreak = 0
+var int   nRe   = 0
+var float sumRe = 0.0
+
+// give-up tracker (section 7) aggregates
+var int   guDir   = 0
+var float guEntry = na
+var float guRisk  = na
+var int   guBar   = 0
+var float guExt   = na
+var float guMfe   = 0.0
+var bool  guUsed  = false
+var int   guN     = 0
+var float guSum   = 0.0
+var float guMax   = 0.0
+var int   guBeat  = 0
+
+// ==================== 7. GIVE-UP MEASUREMENT & RE-ENTRY =====================
+// This is the answer to "I got stopped and then it ran without me".
+// It is a MEASUREMENT first. Every stop-out is followed for guWinBars bars and
+// the furthest price travelled in the ORIGINAL direction is recorded. That
+// average, in points, is the number that says whether re-entry is worth having.
+// The tracker is armed by the close block in section 9 on an EARLIER bar, so
+// there is no circular dependency with the signal it can produce.
+bool  reFire  = false
+float reExt   = na
+
+if guDir != 0
+    int gAge = bar_index - guBar
+    guExt := guDir > 0 ? math.min(nz(guExt, l1), l1) : math.max(nz(guExt, h1), h1)
+    guMfe := math.max(guMfe, guDir > 0 ? h1 - guEntry : guEntry - l1)
+
+    float sweepDepth = math.abs(guEntry - nz(guExt, guEntry))
+    bool  reclaimed  = guDir > 0 ? c1 > guEntry : c1 < guEntry
+    bool reOk = reOn and not guUsed and gAge >= 1 and gAge <= reBars
+    // guUsed is set when the trade is actually OPENED, not here. A bar where
+    // the gates rejected the re-entry must not burn the one chance at it.
+    if reOk and reclaimed and sweepDepth <= reMaxSweep * atr1
+        reFire := true
+        reExt  := guExt
+
+    if gAge > guWinBars
+        guN   += 1
+        guSum += guMfe / pt
+        guMax := math.max(guMax, guMfe / pt)
+        if not na(guRisk) and guRisk > 0 and guMfe > guRisk
+            guBeat += 1
+        guDir := 0
+        guMfe := 0.0
+        guExt := na
+
+// merge the two signal sources. A sweep signal always wins the bar.
+int   sigDir  = swDir
+float sigLvl  = swLvl
+float sigExt  = swExt
+int   sigSig  = swSig
+bool  sigFast = swFast
+bool  sigTight= swTight
+float sigEntry= swEntry
+float sigZTop = swZTop
+float sigZBtm = swZBtm
+int   sigInter= swInter
+bool  sigPlus = swPlus
+bool  sigIsRe = false
+
+if sigDir == 0 and reFire
+    sigDir   := guDir
+    sigLvl   := guEntry
+    sigExt   := reExt
+    sigSig   := 3                      // a level the market has now reacted at twice
+    sigFast  := (bar_index - guBar) <= 2
+    sigTight := math.abs(guEntry - reExt) < expandAtr * atr1
+    sigEntry := na                     // pay the open, honestly
+    sigZTop  := guEntry
+    sigZBtm  := guEntry
+    sigInter := 0
+    sigPlus  := false
+    sigIsRe  := true
+
+// ==================== 8. SCORE / RISK / TARGETS =============================
+// Equal-weight binary tests, and the MAX is computed from the components that
+// are actually enabled. The old version scored out of a fixed 7 while two of
+// those seven were unreachable or free, so "3 of 7" was really "2 of 6".
+maxScore = 4 + (useHtf ? 1 : 0) + (volOk ? 1 : 0) + (useSessSc ? 1 : 0) + (useFvgSc ? 1 : 0)
+
+f_nextOpp(array<Lvl> arr, float from, bool above) =>
+    float best = na
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            Lv = array.get(arr, i)
+            if not Lv.dead and Lv.sig >= minSig
+                if above and Lv.px > from
+                    best := na(best) ? Lv.px : math.min(best, Lv.px)
+                if not above and Lv.px < from
+                    best := na(best) ? Lv.px : math.max(best, Lv.px)
+    best
+
+int   score  = 0
+float pEntry = na
+float pSl    = na
+float pTp1   = na
+float pTp2   = na
+float pRisk  = na
+bool  valid  = false
+bool  okConf = true
+
+if sigDir != 0
+    okConf := confMode == "None" or (sigDir > 0 ? confUp : confDn)
+    score += sigSig >= 3 ? 1 : 0                                        // location
+    score += sigTight ? 1 : 0                                          // failed to expand
+    score += (sigFast or sigPlus) ? 1 : 0                              // fast absorption
+    score += okConf ? 1 : 0                                            // confirmation
+    if useHtf
+        score += ((sigDir > 0 and htfBias > 0) or (sigDir < 0 and htfBias < 0)) ? 1 : 0
+    if volOk
+        score += rvol >= rvolHi ? 1 : 0
+    if useSessSc
+        score += inSess ? 1 : 0
+    if useFvgSc
+        score += (sigDir > 0 ? fvgUp : fvgDn) ? 1 : 0
+
+    pEntry := na(sigEntry) ? open : sigEntry
+    // the stop sits beyond the sweep wick AND beyond the far side of the zone.
+    // Still inside the zone is "at the level", not invalidation.
+    float slLong  = math.min(sigExt, sigZBtm) - slBufAtr * atr1
+    float slShort = math.max(sigExt, sigZTop) + slBufAtr * atr1
+    pSl    := sigDir > 0 ? slLong : slShort
+    pRisk  := math.abs(pEntry - pSl)
+
+    float lvlTp = f_nextOpp(L, pEntry, sigDir > 0)
+    pTp1 := (tp1Mode == "Fixed R" or na(lvlTp)) ? pEntry + sigDir * tp1R * pRisk : lvlTp
+    if math.abs(pTp1 - pEntry) < minRR * pRisk
+        pTp1 := pEntry + sigDir * math.max(tp1R, minRR) * pRisk
+    float lvlTp2 = f_nextOpp(L, pTp1, sigDir > 0)
+    pTp2 := useTp2 ? (na(lvlTp2) ? pEntry + sigDir * tp2R * pRisk : lvlTp2) : pTp1
+
+    bool okRisk = pRisk > 0 and pRisk <= effRiskCap
+    bool okCost = pRisk > 0 and (costPts / pRisk) * 100.0 <= maxCostR and pRisk >= minRiskPx
+    bool okRR   = math.abs(pTp1 - pEntry) / pRisk >= minRR
+
+    if sigIsRe
+        cCand += 1
+    if confGate and not okConf
+        rConf += 1
+    else if score < minScore
+        rScoreN += 1
+    else if not okRisk
+        rWide += 1
+    else if not okCost
+        rCost += 1
+    else if not okRR
+        rRR += 1
+    else if sDir != 0
+        rBusy += 1
+
+    // one setup at a time, and what PRINTS is what is TRACKED. A signal that
+    // prints while a setup is live is a signal nothing measures - and the
+    // standing rule here is that every printed signal gets taken.
+    bool okGates = okRisk and okCost and okRR and (not confGate or okConf)
+    valid := showSignals and sDir == 0 and score >= minScore and okGates
+
+// ==================== 9. SETUP STATE MACHINE ================================
+f_kill() =>
+    if not na(lE)
+        line.delete(lE)
+    if not na(lS)
+        line.delete(lS)
+    if not na(lT)
+        line.delete(lT)
+    if not na(lT2)
+        line.delete(lT2)
+    0
+
+// ---- open
+if valid and sDir == 0
+    f_kill()
+    lE  := na
+    lS  := na
+    lT  := na
+    lT2 := na
+    dKill  := na
+    sDir   := sigDir
+    sScore := score
+    sBar   := bar_index
+    sHalf  := false
+    sIsRe  := sigIsRe
+    if sigIsRe
+        guUsed := true
+    sRisk  := pRisk
+    sSl    := pSl
+    sTp1   := pTp1
+    sTp2   := pTp2
+    sStage := 2
+    sEntry := pEntry
+    sWhy   := sigIsRe ? "re-entry" : "entered"
+
+// ---- live management, judged on CLOSED bars. Stop is assumed first on an
+// ---- ambiguous bar - never flatter the result.
+if sDir != 0 and sStage == 2 and bar_index > sBar
+    bool hitSl  = sDir > 0 ? l1 <= sSl  : h1 >= sSl
+    bool hitTp1 = sDir > 0 ? h1 >= sTp1 : l1 <= sTp1
+    bool hitTp2 = sDir > 0 ? h1 >= sTp2 : l1 <= sTp2
+    float rr = 0.0
+    bool closed  = false
+    bool wasStop = false
+
+    if hitSl
+        rr      := sHalf ? 0.5 * math.abs(sTp1 - sEntry) / sRisk : -1.0
+        closed  := true
+        wasStop := not sHalf
+        sWhy    := sHalf ? "TP1 then stop at entry" : "stopped"
+    else if hitTp2 and useTp2
+        rr     := 0.5 * math.abs(sTp1 - sEntry) / sRisk + 0.5 * math.abs(sTp2 - sEntry) / sRisk
+        closed := true
+        sWhy   := "TP2"
+    else if hitTp1 and not sHalf
+        if useTp2
+            sHalf := true
+            sSl   := sEntry
+            sWhy  := "TP1 banked, runner"
+        else
+            rr     := math.abs(sTp1 - sEntry) / sRisk
+            closed := true
+            sWhy   := "TP1"
+
+    if closed
+        float net = rr - costPts / sRisk
+        nTr     += 1
+        sumR    += net
+        nLong   += sDir > 0 ? 1 : 0
+        if sIsRe
+            nRe   += 1
+            sumRe += net
+        if net > 0
+            nW += 1
+            sumWin += net
+            streak := 0
+        else
+            sumLoss += -net
+            streak  += 1
+            worstStreak := math.max(worstStreak, streak)
+        eqR   += net
+        peakR := math.max(peakR, eqR)
+        ddR   := math.max(ddR, peakR - eqR)
+
+        // arm the give-up tracker. Only a real stop-out is interesting: a TP is
+        // not a trade the market took off me.
+        if wasStop
+            guDir   := sDir
+            guEntry := sEntry
+            guRisk  := sRisk
+            guBar   := bar_index
+            guExt   := na
+            guMfe   := 0.0
+            guUsed  := false
+
+        // free the state slot immediately. The old code held it for clearBars
+        // bars, which silently blocked every new signal in that window - and a
+        // re-entry always lands inside that window.
+        dKill  := bar_index + clearBars
+        sDir   := 0
+        sStage := 0
+
+// ---- trade lines, thin. Filled boxes buried the candles.
+if sDir != 0 and sStage == 2 and showTrade
+    if na(lE)
+        lE := line.new(bar_index, sEntry, bar_index + 8, sEntry,
+             color = color.new(chart.fg_color, 25), style = line.style_dashed, width = 1)
+        lS := line.new(bar_index, sSl, bar_index + 8, sSl,
+             color = color.new(cDn, 15), width = 1)
+        lT := line.new(bar_index, sTp1, bar_index + 8, sTp1,
+             color = color.new(cUp, 15), width = 1)
+        if useTp2 and sTp2 != sTp1
+            lT2 := line.new(bar_index, sTp2, bar_index + 8, sTp2,
+                 color = color.new(cUp, 55), style = line.style_dotted, width = 1)
+    else
+        line.set_x2(lE, bar_index + 8)
+        line.set_y1(lS, sSl)
+        line.set_y2(lS, sSl)
+        line.set_x2(lS, bar_index + 8)
+        line.set_x2(lT, bar_index + 8)
+        if not na(lT2)
+            line.set_x2(lT2, bar_index + 8)
+
+if not na(dKill) and bar_index >= dKill
+    f_kill()
+    lE    := na
+    lS    := na
+    lT    := na
+    lT2   := na
+    dKill := na
+
+// ==================== 10. LEVEL MAINTENANCE / AUTO-CLEAN ====================
+f_maintain(array<Lvl> arr) =>
+    int i = array.size(arr) - 1
+    while i >= 0
+        Lv = array.get(arr, i)
+        bool drop = (Lv.dead and (bar_index - Lv.deadBar) >= fadeBars) or (bar_index - Lv.bar) > lvlMaxAge
+        if drop
+            if not na(Lv.ln)
+                line.delete(Lv.ln)
+            if not na(Lv.bx)
+                box.delete(Lv.bx)
+            if not na(Lv.sw)
+                box.delete(Lv.sw)
+            if not na(Lv.lb)
+                label.delete(Lv.lb)
+            array.remove(arr, i)
+        else
+            bool major = Lv.sig >= 3
+            bool vis   = showLvls and (major or showMinor)
+            color cN   = Lv.isHigh ? (major ? cMaj : cMin) : (major ? cLoMaj : cLoMin)
+
+            if vis and na(Lv.ln)
+                Lv.ln := line.new(Lv.bar, Lv.px, bar_index + 2, Lv.px, color = cN, width = 1)
+
+            // zone
+            if showZones and vis and (major or zoneAll) and na(Lv.bx) and not Lv.dead
+                Lv.bx := box.new(Lv.bar, Lv.zTop, bar_index + 2, Lv.zBtm,
+                     border_color = na, bgcolor = color.new(Lv.isHigh ? cMaj : cLoMaj, 88))
+            if not na(Lv.bx)
+                if Lv.dead
+                    box.delete(Lv.bx)
+                    Lv.bx := na
+                else
+                    box.set_right(Lv.bx, bar_index + 2)
+
+            // sweep area on an armed level: the heads-up BEFORE the signal
+            if showSweep and vis and Lv.armed and not Lv.dead and na(Lv.sw)
+                Lv.sw := box.new(Lv.pBar, math.max(Lv.px, Lv.beyond), bar_index + 2,
+                     math.min(Lv.px, Lv.beyond), border_color = na,
+                     bgcolor = color.new(Lv.isHigh ? cDn : cUp, 82))
+            if not na(Lv.sw)
+                if Lv.dead
+                    box.delete(Lv.sw)
+                    Lv.sw := na
+                else
+                    box.set_right(Lv.sw, bar_index + 2)
+                    box.set_top(Lv.sw, math.max(Lv.px, Lv.beyond))
+                    box.set_bottom(Lv.sw, math.min(Lv.px, Lv.beyond))
+
+            // LuxAlgo-style visit count, majors only, tiny
+            if showCount and vis and major and not Lv.dead
+                string txt = str.tostring(Lv.inter) + "x"
+                if na(Lv.lb)
+                    Lv.lb := label.new(bar_index + 2, Lv.px, txt, style = label.style_none,
+                         textcolor = color.new(chart.fg_color, 45), size = size.tiny)
+                else
+                    label.set_x(Lv.lb, bar_index + 2)
+                    label.set_y(Lv.lb, Lv.px)
+                    label.set_text(Lv.lb, txt)
+            if not na(Lv.lb) and (Lv.dead or not major or not showCount)
+                label.delete(Lv.lb)
+                Lv.lb := na
+
+            if not na(Lv.ln)
+                if Lv.dead
+                    line.set_color(Lv.ln, cGhost)
+                    line.set_style(Lv.ln, line.style_dotted)
+                else
+                    line.set_color(Lv.ln, cN)
+                    line.set_width(Lv.ln, major ? 2 : 1)
+                    // LuxAlgo convention: dotted = wick pierce, dashed = closed
+                    // through and now on retest
+                    string stl = Lv.armed ? line.style_dashed : Lv.pierced ? line.style_dotted : line.style_solid
+                    line.set_style(Lv.ln, stl)
+                    line.set_x2(Lv.ln, bar_index + 2)
+        i -= 1
+    array.size(arr)
+
+f_maintain(L)
+
+// ============================= 11. PLOTS ====================================
+newLong   = valid and sigDir > 0 and not sigIsRe
+newShort  = valid and sigDir < 0 and not sigIsRe
+newReLong = valid and sigDir > 0 and sigIsRe
+newReShort= valid and sigDir < 0 and sigIsRe
+
+plotshape(newLong,   "BUY",  shape.labelup,   location.belowbar, cUp, text = "BUY",
+     textcolor = color.white, size = size.small)
+plotshape(newShort,  "SELL", shape.labeldown, location.abovebar, cDn, text = "SELL",
+     textcolor = color.white, size = size.small)
+plotshape(newReLong, "RE BUY",  shape.labelup,   location.belowbar, color.new(cUp, 25),
+     text = "RE", textcolor = color.white, size = size.tiny)
+plotshape(newReShort,"RE SELL", shape.labeldown, location.abovebar, color.new(cDn, 25),
+     text = "RE", textcolor = color.white, size = size.tiny)
+plotshape(showStruct and chochUp, "CHoCH up", shape.diamond, location.belowbar,
+     color.new(cUp, 45), size = size.tiny)
+plotshape(showStruct and chochDn, "CHoCH dn", shape.diamond, location.abovebar,
+     color.new(cDn, 45), size = size.tiny)
+
+// ============================= 12. TABLES ===================================
+var table pnl = table.new(position.top_right, 2, 12, frame_width = 1,
+     frame_color = color.new(color.gray, 55), border_width = 1, border_color = color.new(color.gray, 82))
+var table stt = table.new(position.bottom_right, 2, 9, frame_width = 1,
+     frame_color = color.new(color.gray, 55), border_width = 1, border_color = color.new(color.gray, 82))
+
+f_cell(table t, int c, int r, string s, color col, bool head) =>
+    table.cell(t, c, r, s, text_size = size.small,
+         text_halign = c == 0 ? text.align_left : text.align_right,
+         text_color = head ? color.new(chart.fg_color, 35) : col,
+         bgcolor = color.new(chart.bg_color, 8))
+    0
+
+f_kv(table t, int r, string k, string v, color col) =>
+    f_cell(t, 0, r, k, col, true)
+    f_cell(t, 1, r, v, col, false)
+    0
+
+if showPanel and barstate.islast
+    string reg = strongTrend ? (trendUp ? "trend up" : "trend down") : (volExp ? "expanding range" : "range / quiet")
+    string ctx = htfBias > 0 ? "up" : htfBias < 0 ? "down" : "mixed"
+    f_kv(pnl, 0, "Regime", reg, chart.fg_color)
+    f_kv(pnl, 1, "Context " + htf1 + "/" + htf2, ctx, htfBias > 0 ? cUp : htfBias < 0 ? cDn : chart.fg_color)
+    f_kv(pnl, 2, "Levels live", str.tostring(array.size(L)) + "   swept " + str.tostring(nArmed), chart.fg_color)
+    string act = sDir == 0 ? "no" : (sDir > 0 ? "LONG " : "SHORT ") + sWhy + "  score " + str.tostring(sScore)
+    f_kv(pnl, 3, "Trade open", act, sDir > 0 ? cUp : sDir < 0 ? cDn : chart.fg_color)
+    f_kv(pnl, 4, "Score needed", str.tostring(minScore) + " of " + str.tostring(maxScore), chart.fg_color)
+    float cshr = atr1 > 0 ? costPts / atr1 * 100.0 : 0.0
+    f_kv(pnl, 5, "Cost on a 1 ATR stop", str.tostring(cshr, "#.#") + "%  (cap " + str.tostring(maxCostR, "#.#") + "%)",
+         cshr <= maxCostR ? cUp : cDn)
+    f_kv(pnl, 6, "Smallest usable stop", str.tostring(minRiskPx / pt, "#.##") + " pts", chart.fg_color)
+    if gateConflict
+        f_kv(pnl, 7, "GATE CONFLICT", "cap widened to " + str.tostring(effRiskCap / pt, "#.#") + " pts", color.new(#FFB300, 0))
+    else
+        f_kv(pnl, 7, "Gates", "consistent", cUp)
+    f_kv(pnl, 8,  "Sweeps resolved",     str.tostring(cCand), chart.fg_color)
+    f_kv(pnl, 9,  "Killed: sig/cascade", str.tostring(rSig) + " / " + str.tostring(rCasc), chart.fg_color)
+    f_kv(pnl, 10, "Killed: confirm/score", str.tostring(rConf) + " / " + str.tostring(rScoreN), chart.fg_color)
+    string kw = str.tostring(rWide) + "/" + str.tostring(rCost) + "/" + str.tostring(rRR) + "/" + str.tostring(rBusy) + "/" + str.tostring(rDupe)
+    f_kv(pnl, 11, "Killed: wide/cost/RR/busy/dupe", kw, chart.fg_color)
+
+if showStats and barstate.islast
+    float expc = nTr > 0 ? sumR / nTr : 0.0
+    float pf   = sumLoss > 0 ? sumWin / sumLoss : na
+    float wr   = nTr > 0 ? nW * 100.0 / nTr : 0.0
+    f_kv(stt, 0, "Total (net of cost)", str.tostring(sumR, "#.#") + " R", sumR >= 0 ? cUp : cDn)
+    f_kv(stt, 1, "Per trade",  str.tostring(expc, "#.###") + " R over " + str.tostring(nTr), expc >= 0 ? cUp : cDn)
+    f_kv(stt, 2, "Profit factor", na(pf) ? "-" : str.tostring(pf, "#.##"), na(pf) ? chart.fg_color : pf >= 1 ? cUp : cDn)
+    f_kv(stt, 3, "Max drawdown", str.tostring(ddR, "#.#") + " R   worst run " + str.tostring(worstStreak), cDn)
+    f_kv(stt, 4, "Re-entries",   nRe == 0 ? "0" : str.tostring(nRe) + " for " + str.tostring(sumRe, "#.#") + " R",
+         nRe == 0 ? chart.fg_color : sumRe >= 0 ? cUp : cDn)
+    // THE GIVE-UP NUMBER: after being stopped, how far did price then travel in
+    // the direction I originally wanted? Measured, not assumed.
+    float guAvg = guN > 0 ? guSum / guN : 0.0
+    f_kv(stt, 5, "After a stop, price then ran",
+         guN == 0 ? "no samples yet" : str.tostring(guAvg, "#.##") + " pts avg  (n " + str.tostring(guN) + ")",
+         guN == 0 ? chart.fg_color : color.new(#FFB300, 0))
+    f_kv(stt, 6, "   best / beat original risk",
+         guN == 0 ? "-" : str.tostring(guMax, "#.#") + " pts / " + str.tostring(guBeat) + " of " + str.tostring(guN),
+         chart.fg_color)
+    f_kv(stt, 7, "Hit rate (secondary)", str.tostring(wr, "#.#") + "%", color.new(chart.fg_color, 35))
+    f_kv(stt, 8, "Sample health", nTr < 100 ? str.tostring(100 - nTr) + " more trades to read this" : "readable",
+         nTr >= 100 ? cUp : color.new(chart.fg_color, 35))
+
+// ============================ 13. ALERTS ====================================
+alertcondition(newLong or newReLong,   "LiqEng Long",  "Liquidity Engine LONG")
+alertcondition(newShort or newReShort, "LiqEng Short", "Liquidity Engine SHORT")
+if valid
+    alert((sigDir > 0 ? "LONG " : "SHORT ") + (sigIsRe ? "(re-entry) " : "") +
+         syminfo.ticker + " " + timeframe.period +
+         "  score " + str.tostring(score) + "/" + str.tostring(maxScore) +
+         "  level " + str.tostring(sigLvl, format.mintick) +
+         " (" + str.tostring(sigInter) + " visits)" +
+         "  entry " + str.tostring(pEntry, format.mintick) +
+         "  SL " + str.tostring(pSl, format.mintick) +
+         "  TP1 " + str.tostring(pTp1, format.mintick) +
+         "  TP2 " + str.tostring(pTp2, format.mintick), alert.freq_once_per_bar)

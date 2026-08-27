@@ -63,3 +63,31 @@ Engine must pass `python3 JARVIS/research/test_engine.py` first.
 - **Result:** 102 trades, -0.142R expectancy, PF 0.80, 0/6 folds positive.
 - **Conclusion:** REJECTED. Fixing the R:R alone does not rescue the old
   entry logic — the entries themselves carry no edge.
+
+## E-006 — Is XAUUSD_QUAD v19.18 viable? (REJECTED)
+- **Files:** received 2026-08-27, stored in `JARVIS/ea/inbox/`.
+- **Measured:** 20,695 lines, 9,596 code lines, **748 input parameters**,
+  274 functions, ~20 versions of patching (v12 -> v19.18).
+- **Evidence from the EA's own header (its own live results):**
+  spread bill GBP76.53 = **48% of the loss**; 153 of 188 losers never went
+  GBP0.30 green; a -GBP159.79 day; efficiency ratio 0.038 (26:1 churn);
+  hold time 4 min against a median 42-min move; 21 of 32 live exit routes
+  fired ZERO times across 279 trades.
+- **Cost arithmetic:** M1 gold, 1.40 x ATR stop = 1.40 price, against a
+  0.30 round trip = **21.4% of risk lost to cost** before any edge.
+- **Conclusion:** REJECTED as a live candidate. Root causes are structural:
+  (a) 748 parameters cannot be validated on 279 trades, (b) M1 cost/risk is
+  fatal, (c) exits fire before the move happens. Full audit in
+  `JARVIS/ea/AUDIT_v19_18.md`.
+- **Do not:** patch it to v19.19. Twenty rounds of patching is the failure
+  mode, not the fix.
+
+## E-007 — Timeframe effect on the same strategy (INCONCLUSIVE)
+- **Test:** donchian_trend on GOLD 15m resampled to 30m/1h/2h, same costs.
+- **Result:** 15m +0.130R (74 trades), 30m -0.022R (32), 1h -0.072R (17),
+  2h +0.982R (4 trades).
+- **Conclusion:** INCONCLUSIVE — only 70 days of 15m data exists, so the
+  higher timeframes have far too few trades to read. Recorded so no future
+  session mistakes this for evidence. The cost/risk arithmetic in E-006
+  stands on its own and does not depend on this test.
+- **To settle it:** need 15m history going back 2+ years.

@@ -15,10 +15,19 @@ E-003 tested ONE implementation. Still untested: prior-day/week levels,
 session highs/lows, equal highs/lows, sweep-then-reclaim on 15m,
 displacement confirmation. Each is a separate hypothesis with its own entry.
 
-## A-003 — Get the real EA and Pine scripts   [BLOCKED ON VEER]
-Upload `.mq5` source + both Pine scripts into `JARVIS/ea/inbox/`. Until
-then no audit of "the current EA" is possible — it has never been in this
-repo.
+## A-003 — Audit the EA and Pine scripts   [DONE 2026-08-27]
+Received and audited. EA REJECTED (E-006), see `JARVIS/ea/AUDIT_v19_18.md`.
+Pine scripts read: `XAUUSD_CLEAN_3.5` (Supertrend flips + SNAP/SWEEP/BREAK
+grading) and `LiquidityEngine_v2` (sweep/cascade/CISD — the better of the
+two, and the source of the cost-to-risk insight).
+
+## A-007 — Port the LiquidityEngine concepts into the research engine   [NEXT]
+`LiquidityEngine_v2.pine` contains the best ideas in all three files, and
+they have never been measured: the cascade veto (do not fade a sweep that
+agrees with a strong trend), CISD confirmation, the cost-to-risk gate, and
+give-up measurement after a stop. Implement each as a SEPARATE testable
+hypothesis in `strategies.py`, so each earns or loses its place on its own
+numbers rather than arriving as a bundle.
 
 ## A-004 — Re-plan the funded-account scaling around R-002  [BLOCKED ON VEER]
 FTMO caps allocation at $400k per trader OR STRATEGY; identical fills across
