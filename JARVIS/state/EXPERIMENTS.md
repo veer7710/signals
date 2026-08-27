@@ -45,7 +45,7 @@ Engine must pass `python3 JARVIS/research/test_engine.py` first.
   implementation and timeframe. Next: test on 15m, test session-scoped
   levels (prior day/week high-low), require displacement confirmation.
 
-## E-004 — Donchian breakout trend-following (PROMISING)
+## E-004 — Donchian breakout trend-following (DOWNGRADED -> UNPROVEN, see E-008)
 - **Hypothesis:** classic 55-bar breakout + EMA20/100 filter + fixed 3R.
 - **Test:** `donchian_trend`, GOLD 1h, 224 trades, 2 years.
 - **Result:** 31.7% win rate, **+0.198R expectancy**, PF 1.28, +44.2R,
@@ -91,3 +91,28 @@ Engine must pass `python3 JARVIS/research/test_engine.py` first.
   session mistakes this for evidence. The cost/risk arithmetic in E-006
   stands on its own and does not depend on this test.
 - **To settle it:** need 15m history going back 2+ years.
+
+## E-008 — Exit rules: can you capture the peak? (CONFIRMED finding)
+- **Hypothesis:** Veer's "never closes at the peak" is an exit problem that
+  better exit logic can fix.
+- **Test:** `exit_study.py`, identical entries (overlap allowed so the exit
+  cannot change which trades are taken), 11 exit policies, 4 markets.
+- **Result 1 — CONFIRMED:** "break-even at 0.5R then trail" is the WORST exit
+  on all four markets (GOLD -0.161R, US500 -0.188R, EURUSD -0.308R,
+  GBPUSD -0.293R). Early profit protection scratches trades at break-even and
+  removes the tail that pays for everything. Win rate falls to 15-20%.
+- **Result 2 — the peak is not capturable:** an oracle exiting at each trade's
+  exact best price returns +3.019R/trade on gold; the best real exit returns
+  +0.201R. The ~2.8R gap is the cost of not knowing the future, not a defect.
+- **Result 3:** 23% of trades never reach 0.3R. Entry quality, not exits.
+  Veer's own EA: 81%. His entries are the bigger problem.
+- **Conclusion:** his instinct ("focus on indubitable profits") is the cause,
+  not the cure. Full write-up: `JARVIS/research/findings/06_exit_experiment.md`
+
+## E-009 — Does donchian_trend survive other markets? (NO — E-004 downgraded)
+- **Test:** same entry, all exit policies, on US500/EURUSD/GBPUSD.
+- **Result:** negative expectancy on essentially every exit rule on all three
+  non-gold markets, while positive on gold.
+- **Conclusion:** the gold result is most likely an artifact of the 2024-2026
+  gold bull run, not a structural edge. E-004 downgraded PROMISING -> UNPROVEN.
+  Do not build an EA on it without a much stronger case.
