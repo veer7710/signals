@@ -231,3 +231,23 @@ there. Requires daily history the repo does not yet hold.
   together about 1 day in 50. Five accounts is one income stream with five sets
   of fees, all dying the same afternoon.
 - Full write-up: `JARVIS/research/findings/07_correlation.md`
+
+## E-016 — Prop-firm simulator + leaderboard built; verdict unchanged
+- **Built:** `prop_sim.py` (daily loss limit, static/trailing drawdown, profit
+  target, min trading days, Monte Carlo pass-rate estimation) and
+  `leaderboard.py` (runs every strategy through backtest + walk-forward +
+  multiple-testing correction + prop Monte Carlo, ranked on 4 gates, not on
+  profit alone). Both deterministic, zero AI cost per run — the "Claude picks
+  the experiment, a local program runs the tests" architecture.
+- **Result:** `python3 JARVIS/research/leaderboard.py` — **0 of 8 strategies
+  clear all 4 gates.** Best (`ma_cross`) clears 1/4. Simulated prop pass rate
+  under generic 2-step rules: 2-4% for every strategy tested.
+- **On the near-100% win-rate target:** explicitly not fabricated, per the
+  standing rule. The honest finding is the opposite direction — nothing tested
+  beats even a 50/50 coin flip once sized and costed realistically. A near-100%
+  win rate would need an enormous reward:risk asymmetry or a real, currently
+  undiscovered edge; neither exists in this library yet. Recorded here rather
+  than asserted anywhere as a target being approached.
+- **Caveat:** rule presets are generic, not any specific firm's real terms
+  (A-004 blocked on Veer naming the firm). Prop pass rate will change once
+  real rules are entered.

@@ -124,6 +124,27 @@ check("ADX bounded 0..100", all(0 <= v <= 100 for v in ctx["adx"]))
 check("EMA9 tracks price more closely than EMA200",
       abs(ctx["ema9"][-1] - s.c[-1]) < abs(ctx["ema200"][-1] - s.c[-1]))
 
+
+
+# ------------------------------------------------ prop simulator sanity ----
+print("\nPROP SIM  sanity checks")
+import prop_sim
+
+_winning = [type("T", (), {"r": 2.0, "ts_out": 1700000000 + i * 86400})()
+            for i in range(200)]
+_res = prop_sim.simulate_prop_account(_winning, prop_sim.PRESETS["generic_2step_phase1"])
+check("a strategy that only wins passes the eval", _res.passed,
+      f"reason={_res.fail_reason}")
+
+_losing = [type("T", (), {"r": -1.0, "ts_out": 1700000000 + i * 86400})()
+           for i in range(200)]
+_res2 = prop_sim.simulate_prop_account(_losing, prop_sim.PRESETS["generic_2step_phase1"])
+check("a strategy that only loses fails the eval", not _res2.passed and _res2.failed)
+
+_mc = prop_sim.monte_carlo_prop(_winning, prop_sim.PRESETS["generic_2step_phase1"], trials=200)
+check("monte carlo pass rate is high for an always-winning strategy",
+      _mc["pass_rate"] > 0.9, f"pass_rate={_mc['pass_rate']}")
+
 print("\n" + "=" * 66)
 print(f"  {'ALL TESTS PASSED' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")
 print("=" * 66)
