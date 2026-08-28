@@ -345,3 +345,51 @@ REGISTRY.update({
     "mean_revert": mean_revert,
     "orb": orb,
 })
+
+
+def minimal_trend(s: Series, don=55, ema_f="ema50", ema_s="ema200",
+                  stop_atr=2.5, rr=4.0):
+    """
+    MINIMAL TREND — 5 parameters, against the old EA's 748.
+
+    PRE-REGISTERED. Every choice below was fixed BEFORE running it, from
+    lessons already recorded, so this is a single honest test rather than
+    another search. Searching would raise the multiple-testing bar again
+    (E-012/E-013); one pre-specified test does not.
+
+    Design, and the evidence behind each choice:
+      * trend filter EMA50/EMA200   - trend following is the most replicated
+                                      systematic edge (E-011)
+      * Donchian-55 breakout entry  - simplest objective trend entry
+      * stop 2.5 x ATR (wide)       - E-013: wider stops beat tight ones on
+                                      every setting swept
+      * target 4R (large)           - E-013: larger targets beat small ones
+      * NO break-even, NO trailing  - E-008: early break-even was the WORST
+                                      exit rule on all four markets
+      * no session filter, no ADX, no confidence score, no volatility band
+                                    - each would be a parameter that has not
+                                      earned its place
+
+    This is the shape a rebuild should take. It is NOT a recommendation to
+    trade: it must still clear the multiple-testing bar and work on more than
+    one market.
+    """
+    def sig(ctx, i):
+        a = ctx["atr"][i]
+        if a is None or a <= 0:
+            return None
+        hi = max(s.h[i - don:i]) if i >= don else None
+        lo = min(s.l[i - don:i]) if i >= don else None
+        if hi is None or lo is None:
+            return None
+        up = ctx[ema_f][i] > ctx[ema_s][i]
+        st = 1 if (up and s.c[i] > hi) else (-1 if (not up and s.c[i] < lo) else 0)
+        if st == 0:
+            return None
+        px, d = s.c[i], stop_atr * a
+        return {"side": st, "stop": px - st * d, "target": px + st * rr * d,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+REGISTRY["minimal_trend"] = minimal_trend

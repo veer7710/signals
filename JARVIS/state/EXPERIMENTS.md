@@ -189,3 +189,32 @@ there. Requires daily history the repo does not yet hold.
 - **Conclusion:** plateau structure is a point in favour of the trend family
   being real, but significance is still not established, and donchian remains
   negative on 3 of 4 markets (E-009). Verdict stays UNPROVEN.
+
+## E-014 — Minimal 5-parameter trend, pre-registered (FAILS — important)
+- **Design fixed BEFORE running**, from prior lessons: EMA50/200 trend filter,
+  Donchian-55 entry, 2.5xATR stop, 4R target, NO break-even, NO trailing.
+  5 parameters against the old EA's 748. Tested once, no searching.
+- **Result:**
+
+  | market | trades | win% | expectancy | t | maxDD |
+  |---|---|---|---|---|---|
+  | GOLD | 136 | 29% | +0.207R | +1.18 | 7.1% |
+  | US500 | 145 | 19% | -0.161R | -1.07 | 23.1% |
+  | EURUSD | 199 | 17% | -0.259R | -2.03 | 29.6% |
+  | GBPUSD | 180 | 21% | -0.133R | -0.97 | 15.4% |
+
+  Positive on 1/4 markets. Gold walk-forward 4/6 folds. Best t +1.18 against a
+  luck threshold of 2.84 at N=56.
+- **Conclusion: INDISTINGUISHABLE FROM LUCK.**
+- **Why this matters more than the other failures.** This was the clean
+  rebuild — every lesson applied, complexity stripped to 5 parameters, no
+  curve-fitting, pre-registered. It still finds nothing. So the 748-parameter
+  problem was real but was NOT the only problem.
+- **The implication:** the search space itself is probably barren. 1-hour bars,
+  four correlated instruments, retail spreads — that combination may simply not
+  contain a reachable edge, however cleanly it is attacked. This is strong
+  support for E-011: the published evidence lives on DAILY bars across MANY
+  uncorrelated markets, and that test has not been possible offline.
+- **Do not conclude "trend following does not work."** Conclude "trend
+  following was not measurable in the only data this repo holds." The
+  difference matters, and A-008 (real daily data via MT5 export) settles it.
