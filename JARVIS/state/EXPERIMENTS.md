@@ -218,3 +218,16 @@ there. Requires daily history the repo does not yet hold.
 - **Do not conclude "trend following does not work."** Conclude "trend
   following was not measurable in the only data this repo holds." The
   difference matters, and A-008 (real daily data via MT5 export) settles it.
+
+## E-015 — Correlation structure (CONFIRMED, two consequences)
+- **Measured** on 570 days of daily returns from repo data.
+- **EURUSD/GBPUSD correlate at 0.81** — nearly the same bet twice, since both
+  are largely a dollar bet. Gold/US500/FX are otherwise independent (0.00-0.11).
+  So the "4 market" test set is really ~3 independent bets, which is a further
+  reason nothing reached significance: trend following needs diversification.
+- **The 5-account consequence:** one strategy on 5 accounts = correlation 1.00.
+  At an illustrative 2% daily-breach probability, 5 independent strategies
+  breach together about 1 day in 312,000,000; 5 copies of one strategy breach
+  together about 1 day in 50. Five accounts is one income stream with five sets
+  of fees, all dying the same afternoon.
+- Full write-up: `JARVIS/research/findings/07_correlation.md`
