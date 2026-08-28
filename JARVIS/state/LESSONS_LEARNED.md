@@ -31,3 +31,16 @@ without the largest contributor.
 ## L-005 — Extreme numbers are a bug signal, not a discovery
 0% win rates, 99% win rates, and enormous profit factors almost always mean
 a broken backtest, not a found edge. Investigate before celebrating.
+
+## L-006 — One web search is not research (and it nearly cost us)
+On 2026-08-27 I recommended installing OmniRoute after a single search that
+returned enthusiastic write-ups. Deeper verification the next day found it
+ships TLS/JA3-JA4 fingerprint stealth — a feature whose purpose is defeating
+provider anti-abuse detection — plus a disclosed default-secret auth bypass.
+I had recommended, in the same session where I refused to evade usage limits,
+a tool built to evade usage limits.
+The URL I quoted was also not the canonical repository.
+**Rule:** before recommending any software be installed, verify the canonical
+source (GitHub API, not search-engine ranking), check what the tool actually
+does rather than what its marketing says, and check for known vulnerabilities.
+Popularity in search results is not evidence of safety or legitimacy.

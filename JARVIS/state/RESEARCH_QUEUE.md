@@ -1,16 +1,25 @@
 # Research queue
 
 ## R-001 — Legitimate ways to increase AI throughput  [RESEARCHED 2026-08-27]
-- **OmniRoute** (github.com/pitbaden/omniroute) — open-source local AI
-  gateway, OpenAI-compatible on localhost:20128, routes across 300+
-  providers with automatic fallback when one hits its quota, plus built-in
-  token compression. Works with Claude Code. Aggregating providers' own
-  free tiers is legitimate; it is not evasion of any single provider's
-  limits. STATUS: recommended to install, not yet installed.
-- **Graphify** (graphifyai.net, MIT) — builds a knowledge graph of the repo
-  and serves it over MCP so Claude queries structure instead of reading raw
-  files. Reported ~70x fewer tokens per query on large codebases. Only pays
-  off once JARVIS is large; note this repo is currently small.
+- **OmniRoute — RECOMMENDATION RETRACTED 2026-08-28. DO NOT INSTALL.**
+  My first pass recommended it after a shallow search. Deeper verification
+  found two disqualifying problems:
+  (a) it ships **TLS/JA3-JA4 fingerprint stealth and a MITM proxy** as
+      features. Fingerprint stealth exists to defeat provider anti-abuse
+      detection. That is evasion, and it violates D-005 directly — the very
+      thing this project refused to do.
+  (b) a disclosed auth-bypass class issue (default `JWT_SECRET` of
+      `omniroute-default-secret-change-me`).
+  Also: the URL originally cited (`pitbaden/omniroute`) is NOT the canonical
+  repo and is best treated as a mirror of unknown provenance. Do not
+  `docker run` or `npm i -g` from it.
+  **Lesson:** a single web search is not research. Recorded in
+  LESSONS_LEARNED as L-006.
+- **Graphify** — still plausible, but **the domain I originally cited
+  (`graphifyai.net`) could not be verified as the project's real domain.**
+  Treat install instructions from it as untrusted until confirmed from the
+  project's own GitHub README. In any case it only pays off on large
+  codebases and this repo is small, so it is not needed yet.
 - **Local models via Ollama** on Veer's PC for bulk/background work.
 - Not viable: evading limits, multiple accounts, ToS circumvention (D-005).
 
