@@ -155,3 +155,37 @@ diversification.
 **Next test to run:** daily data across 20-40 uncorrelated futures/FX/indices,
 simple trend rules. If an edge exists anywhere reachable, it is most likely
 there. Requires daily history the repo does not yet hold.
+
+## E-012 — Multiple-testing correction (THE DECISIVE TEST)
+- **Method:** if you test N strategies with NO real edge, the best of them has
+  an expected t-statistic of about sqrt(2 ln N) — the expected maximum of N
+  normals. This is the bar any result must clear. (Bailey & Lopez de Prado,
+  deflated Sharpe / probability of backtest overfitting.)
+- **Luck thresholds:** N=10 -> 2.15 · N=32 -> 2.63 · N=52 -> 2.80 · N=100 -> 3.03
+- **This project has run ~32 strategy/market combinations**, plus 20 parameter
+  variants in E-013 below, so N is at least ~52 and the bar is **2.80**.
+- **Best t-statistics observed:** donchian_trend on GOLD +1.63,
+  ma_cross on GOLD +1.22, best swept variant +2.52.
+- **CONCLUSION: nothing this project has tested beats chance.** Every result is
+  below the level that luck alone produces given how many things were tried.
+  This is the single cleanest statement of where the research stands.
+- **Rule going forward:** count every variant tested, and hold results to
+  sqrt(2 ln N). Reporting a t-stat above 2 after 50 experiments is meaningless.
+
+## E-013 — Parameter sensitivity: plateau or lucky spike? (MIXED)
+- **Test:** `sensitivity.py` sweeps one parameter at a time and prints the
+  whole surface. A real edge degrades smoothly; a curve-fit one is a lone spike.
+- **Result — the surfaces are PLATEAUS, which is mildly encouraging:**
+  - donchian `rr` 1.5..5.0 : 7/7 settings positive (+0.065R to +0.327R)
+  - donchian `stop_atr` 1.0..3.5 : 6/6 positive (+0.015R to +0.352R)
+  - ma_cross `rr` 1.5..5.0 : 7/7 positive (+0.022R to +0.366R)
+  Wider stops and larger targets are consistently better, which is the same
+  direction as E-008: give trades room, do not protect profit early.
+- **THE TRAP I WALKED INTO:** running these 20 sweeps RAISED the trial count
+  from 32 to ~52, which lifts the luck threshold from 2.63 to 2.80. The best
+  swept variant reached t=2.52 — still below the bar it just helped raise.
+  **Searching for a better parameter makes the evidence bar higher, not lower.**
+  Recorded because it is the exact mechanism that produced a 748-parameter EA.
+- **Conclusion:** plateau structure is a point in favour of the trend family
+  being real, but significance is still not established, and donchian remains
+  negative on 3 of 4 markets (E-009). Verdict stays UNPROVEN.
