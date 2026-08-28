@@ -474,3 +474,123 @@ not re-open. Revisit only for an app with no API.
 **Rule for all of them:** pin versions, read the source before first run, and
 run each with the narrowest possible scope. See §11.3.
 
+---
+
+## 6. VOICE
+
+### 6.1 Architecture: cascaded, not speech-to-speech
+
+**Cascaded** = STT → text → LLM (with tools) → TTS.
+**Speech-to-speech (S2S)** = audio in, audio out, no text layer.
+
+S2S is the exciting one and it is the wrong choice here. The 2026 consensus
+across vendor and independent write-ups: **cascaded dominates production**; S2S
+is research-to-early-production. The reasons that decide it for JARVIS:
+
+- **Tool calling.** Multiple sources say the same thing: choose S2S if you do
+  *not* need reliable function calling and do *not* need to inspect the
+  reasoning layer. JARVIS is nothing but tool calls and an inspectable
+  reasoning layer.
+- **Debuggability.** With a text layer you can log exactly what was heard, what
+  was decided, and what was said. Without it you have an opaque box wired to
+  your broker.
+- **Provider flexibility.** Cascaded: 5+ STT, 7+ TTS, dozens of LLMs. S2S:
+  effectively two vendors.
+- **Cost predictability.** Cascaded is quoted at ~$0.0095–$0.17/min; S2S spans
+  ~$0.00165/min to ~$0.30/min depending on vendor — a 182x spread.
+- The one real S2S advantage is latency (one source claims ~85% reduction vs a
+  *non-streaming* cascade — note the qualifier; a *streaming* cascade closes
+  most of that gap).
+
+**Verdict: cascaded. And the LLM in the middle is the same main agent** — not a
+separate "voice model" with its own personality and its own memory. Two brains
+is how you get an assistant that contradicts itself.
+
+### 6.2 Speech-to-text
+
+Veer is on Windows, presumably with an NVIDIA GPU. That makes this easy.
+
+| Option | Notes | Verdict |
+|---|---|---|
+| **faster-whisper** (CTranslate2) | Reported ~12x real-time for large-v3 on an RTX 4070 at ~2.5 GB VRAM with int8; built-in VAD pipeline. Reported as the better CUDA path than whisper.cpp on Windows/NVIDIA. | **Use this.** `large-v3-turbo` is reported ~4x faster than large-v3 for ~0.3% WER cost. |
+| whisper.cpp | Better on Apple Silicon; weaker on Windows/NVIDIA. | Skip on this hardware. |
+| NVIDIA Parakeet-TDT-0.6B-v3 | Reported 6.34% avg WER on the HF Open ASR Leaderboard — the strongest open self-host option; strong CPU story. | Worth benchmarking against faster-whisper on **your** microphone. |
+| Deepgram Nova-3 | Sub-300 ms, best-in-class endpointing; but one independent benchmark reports ~25.3% WER on mixed real-world data vs vendor figures. | Only if local latency proves unusable. |
+| AssemblyAI Universal-3 Pro | Reported 5.6% mean WER; streaming P50 ~150 ms, P90 ~240 ms post-VAD. | The accuracy-first cloud option. |
+
+**Note the structural trade-off** one benchmark makes explicit: the two fastest
+streaming models also post the highest WER, and the most accurate sits further
+down the latency distribution. **No provider leads on both.** For a personal
+assistant in a quiet room, accuracy matters more than 100 ms — a misheard
+symbol name is worse than a pause. Start local with faster-whisper; you keep
+your data, pay nothing, and can measure before buying anything.
+
+### 6.3 Text-to-speech
+
+| Option | Notes | Verdict |
+|---|---|---|
+| **Kokoro-82M** | 82M params, runs on CPU, repeatedly named the best lightweight open TTS of 2026. | **Start here.** Free, local, good enough, no account. |
+| **Piper** | The Home Assistant default; extremely light; ONNX; trivially embeddable. Robotic next to Kokoro. | Fallback / low-power. |
+| ElevenLabs Flash v2.5 | ~120–150 ms TTFB, best-in-class naturalness. | Buy only if you decide the voice quality genuinely changes how much you use it. |
+| Cartesia Sonic / Qwen3-TTS | Sub-100 ms TTFB claims (97 ms streaming). | Only if latency becomes the binding constraint. |
+
+All latency figures above are vendor or third-party benchmark claims. **Measure
+TTFB on your own machine before choosing** — for barge-in what matters is time
+to *first audio chunk*, not total synthesis time.
+
+### 6.4 Wake word and barge-in
+
+**Wake word.** `openWakeWord` (used by Home Assistant, built on a Google audio
+embedding model, fine-tuned with Piper-generated speech) is the open option and
+you can train "Jarvis" yourself. Home Assistant's own documentation is candid
+that it has more false positives/negatives than Amazon's and Google's
+cloud-trained models and **struggles with background noise**. Picovoice
+**Porcupine** claims 97%+ detection with <1 false alarm per 10 hours in noise,
+trains a custom phrase from typed text in seconds, and supports Windows x86_64
+— but the free tier is evaluation-only and commercial use is a paid,
+sales-gated tier. **For personal use on one PC, start with openWakeWord; if
+false triggers annoy you, Porcupine's free personal tier is the fix.**
+Cheapest option of all: **a hotkey**. Push-to-talk has a 0% false-positive rate
+and costs nothing, and for a desk-bound trading assistant it is not obviously
+worse.
+
+**Barge-in.** The rule that matters: **keep turn detection running while the
+agent is speaking.** When user speech is detected during playback, cancel the
+TTS stream immediately and hand control back to STT. Naive VAD-based barge-in
+over-triggers on backchannels ("mm-hm", "yeah") and background noise; the 2026
+production answer is a **dedicated turn-detection model** — Pipecat's
+`SmartTurnAnalyzer`, LiveKit's `TurnDetector`. LiveKit reports its adaptive
+interruption handling **rejects 51% of VAD-based barge-ins** as false, and has
+it on by default in Python Agents v1.5.0+.
+
+**Framework:** if you want this solved rather than built, **Pipecat** (self-host
+a pipeline of processors, choose your own transport) is the better fit for a
+local desktop assistant than **LiveKit** (which bundles transport/telephony you
+do not need). Both are real and shipping. Home Assistant's **Wyoming protocol**
+is the other genuinely mature option and worth reading even if you don't adopt
+it: it is a small, boring protocol that makes STT/TTS/wake-word swappable, and
+Whisper/Piper/Wyoming each report ~8.9% installation share across all active
+Home Assistant installs — a substantial installed base for a fully local stack.
+
+
+---
+
+## INCOMPLETE — sections 7-10 were never written
+
+This document stops mid-way through the voice section. The research agent
+producing it was cut off before writing:
+
+- **7. Model routing / cost** (partially covered: OmniRoute is a hard SKIP,
+  see §2)
+- **8. Orchestration, scheduling, background work, budgets**
+- **9. Dashboard — what an agent control centre should actually show**
+- **10. Security — indirect prompt injection, secrets, least privilege**
+  (the BOTTOM LINE flags this as the dominant risk, but the detail is missing)
+- **11. Existing open-source JARVIS projects worth borrowing from**
+- **12. The exact install list**
+
+Do not treat the absence of these sections as "nothing to do there". They are
+queued in NEXT_ACTIONS as A-000. What IS usable and verified here: the
+single-main-loop architecture (§1, §3), the markdown-memory conclusion (§4),
+the MCP guidance (§5), the voice-conciseness design (§1.7-1.8, §6), and the
+OmniRoute retraction (§2).
