@@ -16,27 +16,50 @@ Then tell me "pushed" and I'll upload everything.
 **Until this is done, all work lives only in this temporary container.**
 I've sent you backup files in the chat as insurance.
 
-## 3. Install these on your PC (30 minutes, all free)
+## 3. THE BIG ONE — export your MT5 data (15 minutes)
+
+This is the highest-value thing you can do, and only you can do it. Every
+market-data website is blocked from my container, so I cannot get daily
+history or your real costs myself.
+
+On your Windows PC, with MT5 open and logged in:
+
+```
+pip install MetaTrader5
+python JARVIS/tools/export_mt5_data.py
+```
+
+It creates a folder `mt5_export/`. Send me that folder.
+
+**Why this matters more than it sounds.** Two reasons:
+
+1. Every backtest so far assumes a gold spread of 0.30 and $7/lot commission.
+   Those are my guesses, not your broker's numbers. A strategy that wins at
+   0.30 can lose at 0.60. The script reads your REAL spreads, swaps, contract
+   sizes and minimum stop distances straight from the terminal.
+2. It pulls DAILY bars going back as far as your broker holds. All my testing
+   has been 1-hour bars on 4 correlated markets — close to the hardest
+   possible version of this game. The published evidence for trend following
+   is on daily bars across many markets, and I currently have no daily data
+   at all.
+
+## 4. Install these too (20 minutes, free)
 
 | What | Why | Where |
 |---|---|---|
 | **Ollama** | free local AI models for background work | https://ollama.com |
-| **Python 3.11+** | needed for the MT5 bridge | https://python.org |
-| `pip install MetaTrader5` | lets me pull YOUR broker's real tick data | run in terminal |
+| **Python 3.11+** | needed for the MT5 export above | https://python.org |
 
-Skip Graphify for now — it only pays off on big codebases, and ours is small.
+Skip Graphify for now — it only pays off on big codebases, ours is small.
 Skip Obsidian — `JARVIS/state/` already does that job.
 
-## 4. Send me three things
+## 5. Tell me two things
 
-1. **A screenshot of your gold symbol spec in MT5**
-   (right-click XAUUSD → Specification). I need contract size, spread,
-   commission, swap. Every result changes with these numbers.
-2. **Which prop firm** you're using, and the account size.
-3. **Your MT5 account history export** if you have one — real fills beat
-   any backtest.
+1. **Which prop firm**, and the account size.
+2. **Your MT5 account history export** if you have one — real fills beat any
+   backtest.
 
-## 5. Then say this to me
+## 6. Then say this to me
 
 > "Resume JARVIS. Run the 5 research jobs that got cut off, then start on
 > daily-timeframe multi-market testing."
