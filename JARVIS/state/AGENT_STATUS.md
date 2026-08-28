@@ -2,12 +2,21 @@
 
 Agents live in `.claude/agents/*.md` and are invoked with the Task tool.
 
-**How the "office" actually works.** The main session is the orchestrator;
-it spawns specialists, each with its own fresh context window. That is the
-real mechanism behind "agents controlling agents" — genuine parallelism and
-context isolation, not roleplay. Each spawned agent starts cold, so
-orchestration cost is real: use one when the work is genuinely separable,
-not to look busy.
+**How the "office" is structured** (see `research/findings/02_jarvis_architecture.md`):
+one main loop carries all state, and sub-agents are stateless workers with
+narrow scope and their own context window. That is the shape the published
+engineering evidence converges on — Cognition's "Don't Build Multi-Agents" and
+the MAST failure taxonomy both find that dispersed decision-making is the main
+cause of multi-agent failure, and that failures are design failures rather than
+model failures.
+
+The sharpest rule from that research: **READ actions parallelise, WRITE actions
+do not.** Fan out research, backtest sweeps and log analysis; never run two
+agents editing strategy code. Anthropic's own multi-agent research system is
+reported to use roughly 15x the tokens of a chat interaction, so an agent is
+worth spawning when work is genuinely separable and read-heavy — not to look
+busy. This session is a live example: 5 research agents were killed mid-run by
+a usage limit (see FAILURE_LOG F-003).
 
 | Agent | Purpose | Status |
 |---|---|---|

@@ -30,6 +30,14 @@ else
   grep FAIL /tmp/jarvis_tests.txt | head
 fi
 echo
+echo "--- MEMORY INTEGRITY ---"
+if python3 JARVIS/tools/check_memory.py >/tmp/jarvis_mem.txt 2>&1; then
+  echo "  memory: CLEAN (every assertive claim traceable)"
+else
+  echo "  memory: UNSUPPORTED CLAIMS FOUND"
+  grep -A1 "assertion\|BANNED" /tmp/jarvis_mem.txt | head -8
+fi
+echo
 echo "--- BLOCKED ON VEER ---"
 grep -E 'BLOCKED ON VEER' "$S/NEXT_ACTIONS.md" 2>/dev/null | sed 's/^## /  /'
 echo

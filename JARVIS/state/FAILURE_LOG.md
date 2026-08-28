@@ -34,3 +34,32 @@ and the regression test that now guards it.
 - **Fix:** Used explicit `git rm <named files>` instead — tracked, reviewable,
   recoverable from git history.
 - **Lesson:** Delete by explicit filename, never by recursive wildcard.
+
+---
+## F-003 — five research agents killed by the account usage limit
+- **Class:** ENVIRONMENT / EXECUTION
+- **Symptom:** all five background research agents terminated with HTTP 429
+  ("session limit") within minutes of each other. Four had reached the point of
+  writing their findings; only one file survived.
+- **Root cause:** five Opus agents launched simultaneously, each doing
+  web-heavy research, against a shared session budget. Anthropic's own
+  reporting puts multi-agent token use at roughly 15x a chat interaction, so
+  five in parallel exhausted the budget quickly.
+- **Fix:** launch research agents in batches of 2-3, not 5. Checkpoint the main
+  session's own findings to disk BEFORE spawning, so a limit hit never costs
+  verified work.
+- **Lesson:** parallelism is not free. Budget it like any other resource.
+  Generalised in LESSONS_LEARNED L-007.
+
+---
+## F-004 — recommended installing a tool that evades provider limits
+- **Class:** REASONING / RESEARCH
+- **Symptom:** recommended OmniRoute to Veer after one web search, in the same
+  session that refused to evade usage limits on principle (D-005).
+- **Root cause:** treated search-result enthusiasm as evidence. The tool ships
+  TLS/JA3-JA4 fingerprint stealth, whose purpose is defeating provider
+  anti-abuse detection, plus a disclosed default-secret auth bypass. The URL
+  cited was also not the canonical repository.
+- **Fix:** recommendation retracted in RESEARCH_QUEUE R-001.
+- **Lesson:** L-006 — verify the canonical source and what a tool actually does
+  before recommending an install.

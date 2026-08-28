@@ -44,3 +44,11 @@ The URL I quoted was also not the canonical repository.
 source (GitHub API, not search-engine ranking), check what the tool actually
 does rather than what its marketing says, and check for known vulnerabilities.
 Popularity in search results is not evidence of safety or legitimacy.
+
+## L-007 — Parallelism is a budget, not a free lunch
+Five research agents launched at once were all killed by the usage limit
+before writing their findings (F-003). Multi-agent work reportedly costs on the
+order of 15x a chat interaction in tokens. Launch in batches of 2-3, and always
+checkpoint verified work to disk before spawning anything.
+Corollary from the architecture research: parallelise READS (research, sweeps,
+log analysis), never WRITES (two agents editing the same code).
