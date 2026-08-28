@@ -594,3 +594,527 @@ queued in NEXT_ACTIONS as A-000. What IS usable and verified here: the
 single-main-loop architecture (§1, §3), the markdown-memory conclusion (§4),
 the MCP guidance (§5), the voice-conciseness design (§1.7-1.8, §6), and the
 OmniRoute retraction (§2).
+### 6.5 THE VOICE-CONCISENESS SOLUTION
+
+This is the part Veer explicitly cares about, so here is the whole thing.
+
+#### 6.5.1 Why "be concise" fails
+
+It is not a prompting skill issue. It is structural:
+
+- **RLHF trained the length bias in.** Reward models treat verbosity as
+  quality because human annotators preferred longer answers in a reported ~63%
+  of benchmark comparisons. You are fighting the objective the model was
+  optimised against.
+- **Instructions decay across turns.** A system-prompt rule competes with 40
+  turns of the model's own verbose output, which is a much stronger stylistic
+  prior than one line of instruction.
+- **"Be concise" is not copyable.** One source puts it well: *models
+  pattern-match before they follow rules — "be concise" gives them nothing to
+  copy; a real dialogue showing exactly how concise gives them a blueprint.*
+- **`max_tokens` alone truncates mid-word.** It is a safety net, not a
+  mechanism. (Documented as one of the most common and hardest-to-debug LLM
+  failure modes.)
+
+The literature's answer is that **no single control works and five stacked
+controls do**: explicit length instruction, structured output format, few-shot
+examples of correctly-sized answers, a stop sequence at a natural boundary, and
+a task-appropriate `max_tokens`. One source reports that combination cutting
+output 40–74% without quality loss. Notably, **large models reduce length ~60%
+in response to brevity instructions vs ~15% for small models** — so use the
+big model for the shaping and don't expect a 3B model to obey.
+
+#### 6.5.2 The design: two channels, one model, a hard cap in code
+
+**Core idea: the model does not decide how long to speak. The schema and the
+code decide. The model only decides what to say.**
+
+Every JARVIS turn returns a structured object. Only one field is ever spoken.
+
+```json
+{
+  "class":  "ack | status | answer | alert | question | refusal",
+  "speech": "Donchian holds up on gold. Fails on EURUSD.",
+  "detail": "Full markdown: walk-forward table, Monte Carlo bands, the cost
+             sensitivity grid, and the exact study.py command that produced it.",
+  "needs_confirmation": false
+}
+```
+
+- `speech` → TTS. **Nothing else is ever spoken.**
+- `detail` → the dashboard, the log, `EXPERIMENTS.md`. Read with the eyes.
+- `class` → selects the word budget, enforced in code.
+
+This is the whole trick. Every failed attempt at a concise voice assistant
+tries to make one output stream serve both a listener and a reader. **Those are
+different media with different bandwidth. Give them different fields.**
+
+#### 6.5.3 The response classes and their budgets
+
+| class | budget | when | example |
+|---|---|---|---|
+| `ack` | **≤ 4 words** | command accepted, work starting | "On it." / "Running the study." |
+| `status` | **≤ 12 words** | progress, completion | "Done. Walk-forward passed, Monte Carlo didn't." |
+| `answer` | **≤ 25 words** | a question was asked | "Longs earn 0.29R, shorts basically zero. The edge is direction-dependent." |
+| `alert` | **≤ 15 words**, leads with the problem | something is wrong | "Stop. The engine tests are failing. Numbers are meaningless." |
+| `question` | **≤ 15 words**, ends with the question | needs a decision from Veer | "US500 or EURUSD first?" |
+| `refusal` | **≤ 15 words** | blocked by a rule | "No. That's live trading. Confirm it explicitly and I'll do it." |
+
+Two more rules that do most of the perceived-terseness work:
+
+- **Never speak a number you can show.** "Three of five tests passed" is
+  speech. The table is `detail`. Spoken digits are where verbosity re-enters.
+- **Lead with the verdict.** "Failed. Shorts have no edge." not "So I ran the
+  walk-forward analysis and after looking at the results it turns out…".
+
+#### 6.5.4 The system prompt fragment (few-shot, because rules alone fail)
+
+```text
+You speak through a speaker. Your speech field is HEARD, not read.
+
+Return JSON: {class, speech, detail, needs_confirmation}.
+Only `speech` is spoken aloud. Everything else goes in `detail`.
+
+Word budgets, hard: ack 4, status 12, answer 25, alert 15, question 15,
+refusal 15. If you exceed the budget, cut words until you fit. Cutting the
+caveat is correct; cutting the verdict is not.
+
+Never speak: preambles ("Sure!", "Great question"), restatements of what
+was asked, lists, numbers with more than two significant figures, file
+paths, code, or apologies. Put all of it in `detail`.
+
+Lead with the outcome. The first three words carry the meaning.
+
+Examples:
+
+USER: run the study on gold
+{"class":"ack","speech":"Running it.","detail":"Executing `python3 JARVIS/research/study.py GOLD 1h`. Will report walk-forward, Monte Carlo, cost sensitivity, long/short split.","needs_confirmation":false}
+
+USER: how did it go
+{"class":"status","speech":"Mixed. Longs work, shorts don't.","detail":"| test | result |\n|---|---|\n| in-sample | +0.15R |\n| walk-forward | +0.09R |\n| Monte Carlo 5th pct | -0.02R |\n| longs | +0.292R |\n| shorts | +0.007R |\nThe headline edge is carried entirely by the long side, consistent with gold's trend over the sample.","needs_confirmation":false}
+
+USER: is it profitable
+{"class":"refusal","speech":"Can't say that. It's PROMISING, not confirmed.","detail":"Per CLAUDE.md standing rules, a backtest is evidence, never proof. Current status in EXPERIMENTS.md: PROMISING. It has not faced out-of-sample symbols or adversarial review.","needs_confirmation":false}
+
+USER: put on a live trade
+{"class":"question","speech":"That's live. Confirm the exact order?","detail":"D-006 requires per-session confirmation for any action touching a funded account. Proposed ticket printed to the dashboard for review.","needs_confirmation":true}
+```
+
+Four examples beat four paragraphs of instruction. That is the point.
+
+#### 6.5.5 Enforcement in code — the part that actually guarantees it
+
+Prompts drift. Code does not. This runs between the model and the TTS:
+
+```python
+BUDGET = {"ack": 4, "status": 12, "answer": 25,
+          "alert": 15, "question": 15, "refusal": 15}
+
+BANNED_OPENERS = ("sure", "great", "certainly", "of course",
+                  "i'd be happy", "let me", "so,", "well,", "absolutely")
+
+def shape_for_speech(reply: dict) -> str:
+    cls = reply.get("class", "answer")
+    text = " ".join(reply.get("speech", "").split())
+
+    # 1. strip preamble openers the model slipped in
+    low = text.lower()
+    for opener in BANNED_OPENERS:
+        if low.startswith(opener):
+            text = text[len(opener):].lstrip(" ,.!")
+            break
+
+    # 2. hard word cap, but cut at a SENTENCE boundary, never mid-clause
+    words = text.split()
+    cap = BUDGET.get(cls, 25)
+    if len(words) > cap:
+        clipped = " ".join(words[:cap])
+        cut = max(clipped.rfind("."), clipped.rfind("?"), clipped.rfind("!"))
+        text = clipped[:cut + 1] if cut > 0 else clipped.rstrip(",;:") + "."
+
+    # 3. never speak a path, a command, or a code fence
+    if any(t in text for t in ("/", "\\", "```", "()")):
+        text = "Details are on the dashboard."
+
+    return text
+```
+
+Plus, at the API layer: **`max_tokens` sized to the class** (≈ 2x the word
+budget in tokens, as the safety net) and **`stop` sequences** at `"\n\n"` so a
+second paragraph can never be generated in the first place.
+
+#### 6.5.6 Escape hatches, so terseness never becomes uselessness
+
+Terse is only good if the detail is one word away:
+
+- **"Explain."** / **"Details."** → speak the first 40 words of `detail`.
+- **"Show me."** → open the dashboard at that turn's `detail`.
+- Every spoken turn writes `speech`, `detail` and the tool trace to the log,
+  so nothing said aloud is the only record of anything.
+
+#### 6.5.7 The one measurement to run
+
+Log the word count of every spoken turn. Plot the distribution weekly. **If the
+median drifts up, the prompt has decayed and the code cap is the only thing
+holding.** This is a two-line addition to the logger and it is the difference
+between a design and a hope.
+
+---
+
+## 7. MODEL ROUTING, COST, LOCAL MODELS
+
+### 7.1 OmniRoute — honest evaluation: **SKIP, on policy grounds**
+
+The project is real and large. Verified via the GitHub API on 2026-08-28:
+**`diegosouzapw/OmniRoute`**, 57,114 stars, 7,855 forks, created 2026-02-13,
+TypeScript, MIT, actively released (`release/v3.8.51`). It is an
+OpenAI-compatible gateway in front of ~300+ providers and ~1,200 models with
+auto-fallback, caching, rate limits and observability, keys encrypted AES-256-GCM
+on local disk. That last part is a genuine architectural advantage over a hosted
+gateway. **The URL Veer supplied (`pitbaden/omniroute`) is not the canonical
+repo — do not install from it.**
+
+**Why it is still a SKIP for JARVIS, in order of seriousness:**
+
+1. **It collides with D-005.** The headline pitch is free/quota-pooled access
+   across ~90 free providers, and the feature list includes **JA3/JA4 TLS
+   fingerprint stealth and a MITM proxy**. Fingerprint stealth exists for one
+   reason: to stop provider anti-abuse from recognising automated traffic. That
+   is evasion. Reviewers also note that many providers' free tiers forbid
+   production use and that using one model across multiple accounts violates
+   terms almost everywhere, with real suspension risk. **D-005 already settled
+   this: losing the account is strictly worse than working within the limits.**
+2. **A disclosed auth-bypass class.** Secondary reporting cites
+   **CVE-2026-49352**: the default `JWT_SECRET` ships as
+   `omniroute-default-secret-change-me`, and if left unchanged an
+   unauthenticated remote attacker can forge an `auth_token` cookie and take
+   full admin control of the dashboard and API. Reviewers also flag optional
+   encryption and fail-open guardrails. A gateway holding every API key you own
+   is the worst possible place for a default secret.
+3. **It solves a problem you do not have.** You use Claude Code on a
+   subscription. A multi-provider router adds a hop, a process, a config
+   surface and an attack surface to a system whose actual bottleneck is
+   research throughput, not per-token price.
+
+**If you ever genuinely need a gateway** (e.g. to run local models and Claude
+behind one endpoint, with per-project spend caps): use **LiteLLM**. It is the
+boring, widely-deployed, audit-friendly choice and it is what the same reviewers
+recommend over OmniRoute for anything you care about.
+
+### 7.2 Local models via Ollama — where they earn their place
+
+Local models are worth installing for **volume, privacy and always-on**, not for
+quality. Do not route reasoning about strategies to them.
+
+**Third-party 2026 rankings for a 24 GB card** (claims, not measurements):
+`qwen3-coder:30b` — 30B MoE with ~3.3B active, ~19 GB at Q4_K_M, 256k context,
+described as the best quality-per-GB for agentic coding; `qwen2.5-coder:32b` —
+strongest dense coder at ~20 GB; `devstral:24b` — ~46.8% SWE-Bench Verified at
+14 GB, the only local coder with a hard agentic number; `gpt-oss:20b` at ~14 GB.
+Budget 2–6 GB on top for KV cache.
+
+**Jobs local models should actually take in JARVIS:**
+
+| Job | Why local wins |
+|---|---|
+| The **voice shaper** fallback | Runs every turn; latency and cost dominate; the task is mechanical rewriting. |
+| **Log/trace triage** overnight | Thousands of lines, zero reasoning depth needed, no reason to pay for it. |
+| **News/calendar classification** | High volume, low stakes, and it keeps untrusted text out of the privileged context — see §11. |
+| **Draft commit messages / file summaries** | Cheap, reversible, human-reviewed. |
+
+**Jobs local models must never take:** anything that decides a strategy is
+valid, anything that writes to `EXPERIMENTS.md` or `DECISIONS.md`, anything that
+touches MT5. The whole value of this project is not fooling yourself, and a 30B
+model is materially worse at not fooling itself.
+
+---
+
+## 8. ORCHESTRATION AND SCHEDULING
+
+### 8.1 The pattern, in one line
+
+**Windows Task Scheduler → `run_job.py` (supervisor with budget guards) →
+`claude -p` with a scoped prompt → artifacts + commit → notify.**
+
+Do not reach for Temporal, Prefect, Airflow or Celery. They are real and good;
+Temporal in particular gives genuinely durable execution — full workflow
+histories, durable timers, mid-function resume, retry policies with exponential
+backoff (default 2.0 coefficient, 1 s initial, 100 s cap) — and it now ships
+integrations with agent SDKs. But its own positioning is explicit that it is
+**not** for "scheduled tasks or simple cron jobs", and its value appears at
+"complex state + long execution time" across services. You have one machine and
+one user. **A supervisor script plus git is your durable state**, and git is a
+better audit log than any workflow engine's UI.
+
+### 8.2 The overnight-safety guards — non-negotiable
+
+The documented failure mode is specific and it has already happened to people:
+*an agent entered a retry loop around 11 p.m. and had made thousands of
+identical failing tool calls by 7 a.m., all billing*. Your version of this is
+worse, because your last session was killed by a usage limit mid-research and
+wrote nothing.
+
+Implement all six. They are perhaps 150 lines total:
+
+1. **Wall-clock cap per job.** Hard kill at N minutes. No exceptions.
+2. **Token/cost cap per job and per night**, checked before each model call —
+   the recommended layering is per-request ceiling, per-session rolling budget,
+   per-key daily cap, model-tier routing, circuit breaker.
+3. **Cost-velocity breaker.** Trip on spend *rate*, not just total; a fast loop
+   burns the session cap before a total-only check notices.
+4. **Loop breaker.** **Two or three consecutive identical tool calls with no
+   progress marker trips the breaker.** This is the single highest-value guard
+   and it is ten lines: hash `(tool_name, args)`, count repeats, abort.
+5. **Explicit termination condition in every job prompt.** "Stop when
+   `findings/0X.md` exists and is non-empty." Missing termination conditions
+   are a named MAST failure mode.
+6. **A read-only night.** Overnight jobs get: filesystem read, filesystem write
+   **only under `JARVIS/research/findings/`**, web search, and nothing else. No
+   MT5. No git push to a shared branch. No email. Nothing irreversible happens
+   while you are asleep.
+
+Plus one habit: **checkpoint on a timer, not at the end.** Every job writes
+partial findings every ~10 minutes. Last session proves why: five agents died
+at a usage limit and produced zero files because everything was written at the
+end. A job that dies at 80% should leave 80% of a document behind.
+
+### 8.3 Job shapes worth scheduling
+
+- **Nightly (~02:00):** run `test_engine.py`; run `study.py` across the symbol
+  list; diff against yesterday's numbers; write a delta report. Cheap,
+  deterministic, mostly not even an LLM job.
+- **Nightly research (one job, not five):** the A-000 queue, one topic per
+  night, with a hard budget. Serialising them is how you avoid last session's
+  failure.
+- **Weekly:** dependency and MCP-server integrity check (§11.3); prune
+  `SESSION_STATE.md`.
+- **On demand:** everything else. Resist scheduling things you have not run
+  manually at least twice.
+
+---
+
+## 9. DASHBOARD AND OBSERVABILITY
+
+### 9.1 What agent observability tools show that actually matters
+
+The useful finding from the 2026 comparisons is a diagnosis, not a product
+pick: **most agent incidents are tool-call failures, context truncation and
+runaway loops — not model errors** — and standard APM cannot see any of them
+without agent-aware instrumentation. Agent failures appear in **multi-step
+causal chains**, so you need full-session traces, not per-call logs.
+
+Product situation, briefly and bluntly:
+- **Langfuse** — the self-hosting choice; genuinely free, no per-seat pricing,
+  production-ready, acquired by ClickHouse in Jan 2026 with capabilities
+  unchanged. **This is the one to use if you use one.**
+- **LangSmith** — best if you live in LangChain/LangGraph; self-host is
+  Enterprise-only. You are not in LangChain.
+- **Braintrust** — most generous free tier (1M spans/month), but proprietary
+  SaaS, no self-hosting. Your traces would include broker context. No.
+- **AgentOps** — strongest multi-framework debugging.
+- **OpenTelemetry GenAI semantic conventions** are the portable layer, and
+  **Claude Code emits OTel natively** — so instrument to OTel and you can swap
+  or stack backends later.
+
+**Honest recommendation: do not install any of them in phase 1.** With one
+user and one agent loop, a JSONL trace file per session plus `git log` gives you
+95% of the value. Add Langfuse when you have overnight jobs you are not
+watching — that is the moment traces stop being a luxury.
+
+### 9.2 What actually belongs on the JARVIS control centre
+
+Ordered by how often it would change a decision. A dashboard that shows
+everything shows nothing.
+
+**Top strip — "is anything on fire":**
+1. `test_engine.py` status + timestamp. **Red here invalidates every number
+   below it.** This is the most important pixel on the screen.
+2. Spend today / spend this month vs cap. Rate, not just total.
+3. Jobs: running / queued / failed last night.
+4. MT5 link status, account equity, open positions **read-only**.
+
+**Main panel — the work:**
+5. **Experiment ledger**: every hypothesis with its status word (CONFIRMED /
+   SUPPORTED / PROMISING / UNPROVEN / REJECTED / DISPROVEN), sorted by last
+   touched. This is the actual product of the project.
+6. **Delta since yesterday**: which numbers moved, on which symbols. Numbers
+   that move without a code change mean something is wrong.
+7. **Pending approvals**: anything with `needs_confirmation: true`, with the
+   exact action and a one-click approve/deny. Empty most of the time.
+
+**Lower — the audit:**
+8. Session trace list: prompt, tools called, tokens, cost, artifacts written,
+   commit SHA. One line per session, expandable.
+9. **Spoken-word-count distribution** (§6.5.7) — your early warning that voice
+   shaping has decayed.
+10. `FAILURE_LOG.md` rendered, newest first. Read weekly.
+
+**What to leave off, deliberately:** live price charts (MT5 does that better),
+a chat window (you have a terminal and a microphone), token-usage sparklines
+per model, anything described as an "agent thought stream". Watching an agent
+think is entertainment, not observability.
+
+**Build it as a single static HTML page** regenerated by the nightly job from
+files in the repo. No server, no framework, no auth surface, no login to a
+dashboard that reads your broker account. If it needs a server later, bind it
+to `127.0.0.1` and nothing else.
+
+---
+
+## 10. EXISTING OPEN-SOURCE "JARVIS" PROJECTS — evaluated bluntly
+
+Most GitHub "JARVIS" repos are a wake word, a Gemini call and `pyttsx3`. Those
+are demos. These are the ones with architecture worth reading:
+
+| Project | Verified signal | Worth stealing |
+|---|---|---|
+| **`open-jarvis/OpenJarvis`** | 9,093 stars, 2,096 forks, Python, created 2026-02-15, actively updated (GitHub API, 2026-08-28). Associated with Stanford Hazy Research / Scaling Intelligence Lab and an "Intelligence Per Watt" research programme. | **The most credible of the JARVIS-named projects.** Structured around tools, context, memory and agent-style execution; skills-as-tools discovered from a catalog; explicitly privacy-first/local. Read its skill-catalog and memory layout. Do not adopt it wholesale — it is a research artifact and you already have a harness. |
+| **`leon-ai/leon`** | ~17k stars, running since 2017, MIT, Node+Python, mid-rebuild for 2.0. | Longest-lived open personal assistant. Worth reading for its **skill/module boundary and deterministic-workflow-vs-agent split** — the oldest and most battle-tested answer to "when does the assistant call code instead of thinking". |
+| **`OpenHands`** (ex-OpenDevin) | ICLR 2025 paper; reported ~53% SWE-bench Verified, and ~72% with Claude Sonnet 4.5 + extended thinking in later reporting. | Read for **sandboxing, RBAC and audit trails** — it takes "the agent runs code on my machine" seriously in a way most projects don't. |
+| **Open Interpreter** | ~60k stars. | The local-code-execution pattern, and a cautionary tale about how much power a natural-language shell hands out. |
+| **`kortix-ai/suna`** | Open generalist agent; Next.js + FastAPI + Docker + Supabase/Redis, Playwright for browsing. | A reference for **service decomposition** if JARVIS ever outgrows one process. Note the operational weight — that stack is the thing you are trying not to need. |
+| **`HKUDS/Vibe-Trading`** | 31,917 stars, 5,209 forks, Python, created 2026-04-01, topics include MCP + multi-agent + backtesting (GitHub API, 2026-08-28). | The most-starred trading-agent project. **Read it for how it wires MCP to a backtester — and read it adversarially.** A 30k-star agentic-trading repo is a strong prior for survivorship-biased backtests. Treat any performance claim in it as DISPROVEN until your own engine reproduces it. |
+| **Home Assistant voice stack** (Whisper + Wyoming + Piper + openWakeWord) | ~8.9% of active HA installs per component (2026.7). | Not a JARVIS, but the **most-deployed local voice architecture in existence**. Steal the Wyoming component boundary even if you don't use the protocol. |
+
+**Blunt summary:** none of these should be JARVIS. The Claude Code harness you
+already run is better than all of them for this use case, because it is the one
+with real context management, real permissions and real hooks. Read them for
+**specific patterns** — OpenJarvis's skill catalog, Leon's workflow/agent split,
+OpenHands's sandboxing, Home Assistant's voice component boundary — and write
+your own 300 lines.
+
+---
+
+## 11. SECURITY — ranked by expected loss
+
+### 11.1 Rank 1 — Indirect prompt injection / the lethal trifecta
+**Severity: catastrophic. Likelihood: high the day JARVIS reads the web.**
+
+Simon Willison's framing (June 2025) is the one to internalise. The **lethal
+trifecta** is:
+
+1. access to **private data**,
+2. exposure to **untrusted content**,
+3. the ability to **communicate externally**.
+
+Any system with all three can be made to exfiltrate the private data by
+whoever authors the untrusted content. There is no code vulnerability
+involved — a language model has **no reliable separation between data and
+instructions**. The GitHub MCP exploit is the canonical demonstration: one
+server that could read attacker-filed public issues, read private repos, and
+open PRs — all three circles in one tool.
+
+**JARVIS assembles this trifecta by default.** Private data: `.env`, broker
+credentials, `DECISIONS.md`, your strategy research. Untrusted content: every
+web page a research agent fetches, every economic-calendar entry, every email
+if you add one. External communication: the browser, the web fetch, any
+notification channel, and — worst — MT5.
+
+**Mitigations that actually work (architectural, not filters):**
+
+- **Guarantee at least one circle is missing on every execution path.** Audit
+  every tool against the three capabilities and make it structurally
+  impossible for one session to hold all three. This is the whole defence.
+- **Two-context split, enforced by process boundary:**
+  - **DIRTY context** — reads the web, news, email. Has *no* filesystem write,
+    *no* secrets, *no* MT5, and cannot make network calls other than fetching.
+    Its **only** output is a file written to a quarantine directory.
+  - **CLEAN context** — reads that file **as data**, holds the secrets and the
+    MT5 connection, never fetches a URL.
+  - The handoff is a file on disk, not a conversation. Untrusted text can then
+    only lie to you; it cannot instruct the privileged agent's tools.
+- **Plan-then-execute**: fix the plan *before* untrusted content enters, so
+  content cannot rewrite the plan. This is one of the named patterns in
+  *Design Patterns for Securing LLM Agents against Prompt Injections*
+  (arXiv 2506.08837), alongside **Action-Selector** and **Dual LLM**. The
+  paper's honest framing is worth repeating: these patterns **constrain the
+  agent so it cannot solve arbitrary tasks** — security is bought with utility.
+- **CaMeL** (DeepMind) is the strongest published version: the privileged LLM
+  emits code in a sandboxed DSL specifying which tools run and how outputs
+  flow, and untrusted output is never allowed to become control flow.
+- **What does NOT work:** telling the model to ignore instructions in fetched
+  content; regex filters; "prompt injection detection" classifiers. Assume
+  every one of them fails.
+
+### 11.2 Rank 2 — The MT5 connection
+**Severity: direct financial loss. Likelihood: medium.**
+
+- **No `order_send` in any MCP server, ever.** Not disabled — absent (§5.2).
+- **Demo account credentials only** in anything an agent can read.
+- Live credentials live in a separate file the agent has no path to, used only
+  by a script Veer runs by hand.
+- **Maker-checker**: the agent proposes an order ticket; a human approves it.
+  This is the standard pattern for irreversible actions and it costs you one
+  keystroke.
+- **Risk-tier every action** by reversibility and blast radius. The widely used
+  four-tier version: read/analysis runs freely; reversible writes run with
+  logging sufficient to undo; **money movement, deletion and external
+  communication require human approval, non-negotiable.**
+- D-006 already says all of this. The gap is that it is enforced by prose.
+  **Make it a permissions rule and a hook.**
+
+### 11.3 Rank 3 — MCP supply chain
+**Severity: high (full machine compromise). Likelihood: medium.**
+
+The ecosystem numbers are bad and they are not hype:
+- An AgentSeal scan of **1,808 servers: 66% had a security finding**; Enkrypt
+  AI (Oct 2025) reported **33% of 1,000 scanned servers had critical
+  vulnerabilities**. **40+ MCP CVEs disclosed in 2026 alone.**
+- **CVE-2025-54136** (CVSS 8.8) confirmed the **rug-pull** pattern: tool
+  definitions approved at install do **not** survive later server-side changes.
+  A server can be benign when you audit it and malicious next week.
+- **Tool poisoning**: adversarial instructions hidden in tool *descriptions*,
+  parameter schemas or response content — which the model reads as
+  instructions. The MCP spec provides no native defence against this, or
+  against cross-server tool shadowing. It is an architectural trust-model
+  problem, not a patchable bug class.
+- OX Security (April 2026) reported a command-execution issue in the **official
+  MCP SDKs** (Python, TypeScript, Java, Rust): the **stdio transport executed
+  OS commands without sanitisation**, enabling RCE on a vulnerable host.
+
+**Rules:**
+1. **Pin exact versions.** Never `@latest` in a config file that runs unattended.
+2. **Read the source before first run.** For a 500-line server this is 20 minutes.
+3. **Prefer official/vendor-maintained servers** (Microsoft's Playwright,
+   Google's chrome-devtools) over community ones.
+4. **Write your own for anything touching money.** Non-negotiable.
+5. **Re-audit on every upgrade** — the rug-pull CVE means install-time approval
+   is not durable. Diff the tool descriptions, not just the code.
+6. **Keep the total count small.** Each server is a trust decision you must
+   maintain forever.
+
+### 11.4 Rank 4 — Secrets
+**Severity: high. Likelihood: medium.**
+
+- `.env`, gitignored — CLAUDE.md already requires this. Verify with
+  `git check-ignore -v .env` and add a pre-commit hook that greps staged diffs
+  for key-shaped strings.
+- **Deny the agent read access to `.env` explicitly** in Claude Code
+  permissions. The agent needs the *effect* of a credential, not its value:
+  give it a script that uses the key, not the key.
+- Separate credentials by blast radius: demo MT5 / live MT5 / broker portal /
+  API keys — four different secrets, four different scopes.
+- Rotate anything that has ever appeared in a terminal you screenshotted.
+
+### 11.5 Rank 5 — Unsandboxed local execution
+**Severity: high. Likelihood: low if careful, certain if not.**
+
+The agent runs shell commands on the machine that holds your trading account.
+Overnight jobs get a strict allowlist (§8.2, guard 6). Interactive sessions get
+the permission prompt. **Never enable a blanket bypass-permissions mode on this
+machine.** If you want a fast lane, use it in a container or a scratch clone,
+not in the repo that holds `state/`.
+
+### 11.6 Rank 6 — Runaway spend
+**Severity: moderate (money + a dead session). Likelihood: medium — it already
+happened to this project once.**
+Covered in §8.2. The loop breaker and the cost-velocity breaker are the two
+that matter.
+
+### 11.7 Rank 7 — Exposed local endpoints
+**Severity: moderate. Likelihood: low.**
+Ollama, the Obsidian REST API, any dashboard: **bind to `127.0.0.1` only**,
+never `0.0.0.0`. Check with `netstat -ano | findstr LISTENING` after adding
+anything. A gateway or dashboard holding every key you own must not be
+reachable from your LAN.
+
