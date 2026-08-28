@@ -1,6 +1,6 @@
 # Session state — checkpoint
 
-**Session:** 2026-08-27 (first JARVIS session)
+**Session:** 2026-08-27/28 (sessions 1-2 merged)
 **Branch:** `claude/jarvis-ai-operating-system-2xaclm`
 **Model:** claude-opus-5
 
@@ -33,3 +33,36 @@ review or out-of-sample testing on other symbols.
 - Do not re-audit the deleted signal system. It is DISPROVEN (E-001).
 - Do not rebuild the capped-target design. Root cause CONFIRMED (E-002).
 - Do not re-ask whether to evade usage limits. Settled (D-005).
+
+---
+# UPDATE — overnight research session (2026-08-28)
+
+## What happened
+Received the real EA (`XAUUSD_QUAD_v19_18.mq5`, 20,695 lines, 748 inputs) and
+both Pine scripts. Audited them. Built an exit laboratory and a cross-market
+robustness scan. Launched five deep-research agents.
+
+## USAGE LIMIT HIT
+All five research agents were killed by the account session limit (resets
+01:40 UTC) before writing their findings. Their five topics are UNFINISHED and
+are the first actions for the next session. Do NOT assume any of their results
+exist — no findings files were written except `06_exit_experiment.md`, which
+was produced by the main session.
+
+## Verified findings this session
+- **E-008 CONFIRMED:** early break-even is the worst exit rule on all four
+  markets (-0.161 to -0.308R). Veer's "protect indubitable profits" instinct
+  is the mechanism destroying his EA.
+- **E-008:** an oracle peak-exit returns +3.019R vs +0.201R for the best real
+  exit. "Never closing at the peak" is universal and permanent.
+- **E-009/E-010:** 8 strategies x 4 markets — NOTHING reaches PROMISING.
+  `donchian_trend` DOWNGRADED from PROMISING to UNPROVEN (fails on 3 of 4
+  markets). `liquidity_sweep` positive on 1 of 4 = likely artifact.
+- **E-006:** EA REJECTED — 748 parameters on a 279-trade sample.
+- **E-011:** every test so far is 1h on 4 correlated instruments; the published
+  trend evidence is daily+ across 50+ diversified markets. Wrong search space.
+
+## Where the work stopped
+`JARVIS/MASTER_REPORT.md` and `JARVIS/TOMORROW.md` written. 4 commits ready.
+**Push still blocked (403)** — the Claude GitHub App is not installed for
+`veer7710/signals`. This is the top blocker; the container is ephemeral.

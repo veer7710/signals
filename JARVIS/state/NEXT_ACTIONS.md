@@ -1,5 +1,30 @@
 # Next actions (highest value first)
 
+## A-000 — RERUN THE FIVE CUT-OFF RESEARCH JOBS   [DO FIRST]
+All five were killed mid-run by the usage limit and wrote NOTHING. Relaunch as
+subagents, one at a time or in small batches to avoid re-hitting the limit.
+Each writes to `JARVIS/research/findings/`:
+ 1. `01_liquidity_evidence.md` — Osler stop-cascade research, systematic tests
+    of ICT/SMC, Turtle Soup lineage, objective codeable definitions, the
+    strongest case AGAINST the whole approach.
+ 2. `02_jarvis_architecture.md` — agent architectures, memory, MCP, voice
+    (including how to make it speak in short sentences), dashboard, security,
+    and an exact install list.
+ 3. `03_quant_strategies.md` — what has real published evidence, anti-overfit
+    rules with numbers (deflated Sharpe, Lopez de Prado), realistic expectations.
+ 4. `04_funded_accounts.md` — real pass/payout statistics, the correlation
+    maths across accounts, rules that kill accounts, honest expected value.
+ 5. `05_ea_deep_audit.md` — line-by-line: every exit path, sizing, martingale
+    check, bug hunt, minimum viable 20-parameter set.
+
+## A-008 — Get daily, multi-market data   [HIGHEST-VALUE EXPERIMENT]
+Every test so far is 1h on 4 correlated instruments — the hardest possible
+setting. The published trend-following evidence is daily+ across 50+
+diversified instruments. Get 10+ years of daily data for 20-40 uncorrelated
+markets and run the existing engine on it. If a reachable edge exists, it is
+most likely there. This is a bigger prize than any further intraday tuning.
+
+
 ## A-001 — Attack `donchian_trend` before believing it   [JARVIS can do now]
 It is the only promising candidate. Run the adversarial-reviewer agent:
 - Test on US500, EURUSD, GBPUSD (`study.py US500 1h`). An edge that exists
