@@ -251,3 +251,28 @@ there. Requires daily history the repo does not yet hold.
 - **Caveat:** rule presets are generic, not any specific firm's real terms
   (A-004 blocked on Veer naming the firm). Prop pass rate will change once
   real rules are entered.
+
+## E-017 — Sweep taxonomy built and falsified in the FADE direction (MAJOR)
+- **Built:** `sweeps.py` — liquidity levels with confirmation lag, 7 sweep
+  classes A-G, depth/wick/reclaim/displacement/structure-shift features,
+  strength score, and a structural split between decision-time features and
+  after-the-fact outcomes so a future value cannot leak into a decision.
+- **Method fix mid-test:** first pass measured MFE and MAE independently, which
+  reported "75% reached 1R" while 85% were stopped out. Replaced with
+  FIRST-TOUCH resolution (ties lose). The honest number was 44.5%, not 75%.
+- **Result — FADE (the specified strategy) is worse than random:**
+  GOLD 15m 701 sweeps, 44.5% at 1R vs 49.2% for a coin flip at the same bars
+  and 49.4% for random bars. 100% of random-side trials beat it.
+- **Result — FOLLOW (the opposite) beats FADE on 5/5 markets:**
+  GOLD 15m 54.1%, GOLD 1h 53.1%, US500 1h 52.0%, GBPUSD 1h 51.7%,
+  EURUSD 1h 49.7%. ~10,000 events, same direction everywhere.
+- **Mechanism:** consistent with Osler's stop-cascade research — triggered
+  stops ACCELERATE price rather than reversing it. The retail narrative has the
+  mechanism inverted. Type F ("continuation", labelled the failure case) beat
+  types A and B, the supposed successes.
+- **Conclusion:** do NOT build a sweep-fade EA. The continuation direction is a
+  CANDIDATE, not an edge — it has not faced costs, walk-forward, or the
+  multiple-testing bar. Full write-up:
+  `JARVIS/research/findings/08_sweep_direction.md`
+- **Next test (highest value):** does the sweep add anything over a plain
+  "buy an N-bar high" momentum rule? If not, delete the sweep apparatus.

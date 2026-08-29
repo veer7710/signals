@@ -24,14 +24,28 @@ try:
 except ImportError:
     sys.exit("Run:  pip install MetaTrader5   (Windows only, MT5 must be installed)")
 
-# Timeframes to pull. Daily is the priority: the published trend-following
-# evidence is measured on daily-and-slower data, and this repo has none.
+# Timeframes to pull, in priority order.
+#
+# M1 and M5 are FIRST because the liquidity-sweep system is specified as
+# M15 -> M5 -> M1, and this repo currently holds NEITHER. Without them the
+# M1 sniper entry model, the micro-sweep classifier and the sweep-quality
+# score cannot be tested at all — only argued about.
+#
+# Daily is still pulled because the published trend-following evidence lives
+# there and the repo has none of that either.
 TIMEFRAMES = {
-    "1d":  (mt5.TIMEFRAME_D1,  10000),   # ~40 years if the broker has it
+    "1m":  (mt5.TIMEFRAME_M1,  600000),  # ~2 years of M1 if the broker holds it
+    "5m":  (mt5.TIMEFRAME_M5,  300000),
+    "15m": (mt5.TIMEFRAME_M15, 150000),
+    "1h":  (mt5.TIMEFRAME_H1,  80000),
     "4h":  (mt5.TIMEFRAME_H4,  30000),
-    "1h":  (mt5.TIMEFRAME_H1,  50000),
-    "15m": (mt5.TIMEFRAME_M15, 60000),
+    "1d":  (mt5.TIMEFRAME_D1,  10000),
 }
+
+# On the first run, prioritise gold: it is the instrument the strategy targets
+# and the one every existing result in this repo is measured on. Set to None
+# to export the full selected symbol list.
+PRIORITY_ONLY = ["XAU"]      # substring match; None = all selected symbols
 
 OUT = "mt5_export"
 
@@ -67,7 +81,15 @@ def main():
         key = "".join(ch for ch in s.upper() if ch.isalnum())[:6]
         if key not in seen:
             seen.add(key); syms.append(s)
-    print(f"Selected {len(syms)} symbols for export.\n")
+    if PRIORITY_ONLY:
+        pri = [s for s in syms if any(b in s.upper() for b in PRIORITY_ONLY)]
+        if pri:
+            syms = pri
+            print(f"PRIORITY_ONLY is set -> exporting {len(syms)} symbol(s): "
+                  f"{', '.join(syms)}")
+            print("Set PRIORITY_ONLY = None in this file to export everything.\n")
+    else:
+        print(f"Selected {len(syms)} symbols for export.\n")
 
     specs = {}
     for sym in syms:
