@@ -393,3 +393,53 @@ def minimal_trend(s: Series, don=55, ema_f="ema50", ema_s="ema200",
 
 
 REGISTRY["minimal_trend"] = minimal_trend
+
+
+def sweep_continuation(s: Series, pivot_n=3, stop_atr=1.0, rr=2.0,
+                       min_strength=0.0, window=6):
+    """
+    SWEEP CONTINUATION — trade WITH the liquidity break, not against it.
+
+    From E-017/E-018: fading sweeps loses to a coin flip on every market
+    tested (44.5% vs 49.2% on GOLD 15m), while following the break wins on
+    5 of 5 markets and beats a plain 20-bar breakout by ~3 points.
+
+    The mechanism is Osler's stop cascade, not the retail reversal narrative:
+    a stop-loss to sell IS a market sell, so a cluster of stops beyond a level
+    is fuel in the direction of the break.
+
+    Signal fires at the DECISION BAR — the first bar at which the sweep was
+    classifiable — and the engine fills at the next bar's open. Levels carry an
+    explicit confirmation lag (a pivot with N bars either side is unknowable
+    until N bars later), so nothing is credited to a bar that could not have
+    known it.
+
+    Four parameters. The EA this replaces had 748.
+    """
+    import sweeps as _sw
+    levels = _sw.find_levels(s, pivot_n=pivot_n)
+    events = _sw.detect_sweeps(s, levels, pivot_n=pivot_n, window=window,
+                               min_strength=min_strength)
+    # decision_bar -> (side, level price). side is FLIPPED to follow the break.
+    book = {}
+    for e in events:
+        if e.side == 0:
+            continue
+        book.setdefault(e.decision_bar, (-e.side, e.level.price, e.stype))
+
+    def sig(ctx, i):
+        hit = book.get(i)
+        if not hit:
+            return None
+        side, lvl, stype = hit
+        a = ctx["atr"][i]
+        if a is None or a <= 0:
+            return None
+        px = s.c[i]
+        d = stop_atr * a
+        return {"side": side, "stop": px - side * d, "target": px + side * rr * d,
+                "meta": {"atr": a, "rr": rr, "sweep_type": stype, "level": lvl}}
+    return sig
+
+
+REGISTRY["sweep_continuation"] = sweep_continuation

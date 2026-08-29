@@ -1143,3 +1143,1169 @@ easy to commit in pandas (`df['x'].rank(pct=True)` is full-sample).
 ### (g) Measurable? Tier 2 — objective, but every design choice in it is
 arbitrary, so it must earn its existence component by component.
 
+---
+
+# PART 3 — SWEEP CLASSES A–G
+
+## SW0. The structural finding: these are three axes, not seven categories
+
+The seven types as circulated cannot be a partition, because they answer
+different questions:
+
+| type | question it answers | knowable when? |
+|---|---|---|
+| A wick sweep + rejection | **morphology** — what did the bar look like? | at the sweep bar |
+| B close beyond + rapid reclaim | morphology | at the reclaim bar |
+| C deep sweep + rejection | morphology (depth-dominant) | at the reclaim bar |
+| D sweep + displacement | **confirmation** — what followed? | reclaim + ≤ `R_D` bars |
+| E sweep + structure shift | confirmation | reclaim + ≤ `W` bars |
+| F sweep + continuation | **outcome** — did it work? | only at the end of `W` |
+| G failed sweep / genuine breakout | outcome | only at the end of `W` |
+
+A and D are not alternatives: a single event is routinely a wick sweep *and*
+followed by displacement. F and G are not detectable at entry — **they are
+labels for what happened to the trade.** Any claim of the form "trade types
+A–E, avoid F and G" is not implementable, because at the decision bar F is
+indistinguishable from D and E. This is the crux: the value of D and E is
+precisely that they are *conditioning variables available before* the outcome,
+and the whole empirical question is whether conditioning on them lowers the
+rate of F.
+
+**Canonical representation: a 3-tuple per sweep event.**
+
+```
+SweepEvent = {
+    level_ref,
+    morphology   ∈ {A, B, C, NONE_G},    # exactly one, decided by priority
+    confirm      ⊆ {D, E},               # a SET, possibly empty
+    outcome      ∈ {REVERSAL, F, G}      # terminal label, research only
+}
+```
+
+A forced single label (for compatibility with the seven-type vocabulary) is
+given in §SW3, but the 3-tuple is what the code should carry.
+
+## SW1. Common measurement frame
+
+All definitions below are written for a sweep of an **ABOVE** level `P`
+(a high; expected reversal is short). The BELOW/long case is the exact mirror
+with `H↔L`, `>↔<`, `max↔min`.
+
+```
+PARAMS: W          # decision window, bars after penetration
+        DEEP_ATR   # depth threshold separating C from A/B
+        FAST_N     # max bars for a "rapid" reclaim (B)
+        WICK_MIN   # min beyond-level wick fraction (A)
+        CLR_MAX    # max close-location-in-range (A)
+        R_D        # max bars after reclaim for a displacement to count (D)
+        NB_BREAK   # closes beyond P required to call it a breakout (G)
+
+Penetration bar:
+    i0 = first bar with H[i0] > P, for a level that is not yet consumed.
+         (wick basis. If the level was already closed through, it is consumed
+          per §S6 and no sweep can occur.)
+
+Measured features, all computed from closed bars only:
+    atr0        = ATR[i0 - 1]                       # NOT ATR[i0]
+    depth(k)    = (H[k] - P) / atr0                 # in ATR units
+    depth_max   = max over k in [i0, min(i0+W, i)] of depth(k)
+    penetration_bars = count of k in [i0..] with H[k] > P, consecutive from i0
+    closes_beyond    = count of k in [i0..min(i0+W,i)] with C[k] > P
+    beyond_wick(k)   = (H[k] - max(O[k], C[k])) / (H[k] - L[k])   # 0 if range 0
+    body_ratio(k)    = abs(C[k] - O[k]) / (H[k] - L[k])
+    clr(k)           = (C[k] - L[k]) / (H[k] - L[k])   # 0 = close at low
+    reclaim_bar r    = first k in [i0 .. i0+W] with C[k] < P
+    reclaim_speed    = r - i0                        # 0 = same bar
+    disp_bar         = first k in [r .. r+R_D] that is a bearish displacement
+                       bar per §D1
+    shift_bar        = first k in [i0 .. i0+W] with a CHOCH_BEAR (§S3)
+                       whose broken_level is a swing low sealed before i0
+```
+
+**Zero-range guard:** on M1 gold, `H==L` bars occur (illiquid rollover
+minutes). Every ratio above must return 0 and the bar must be excluded from
+morphology tests, or both platforms will produce NaN/inf and diverge.
+
+## SW2. The seven classes
+
+### Type A — wick sweep + rejection
+
+```
+A(i0) := (H[i0] > P)
+     AND (C[i0] < P)                       # closed back below on the SAME bar
+     AND (depth(i0) <= DEEP_ATR)
+     AND (beyond_wick(i0) >= WICK_MIN)
+     AND (clr(i0) <= CLR_MAX)
+```
+- **Knowable at bar `i0`.** Zero lag beyond the level's own lag. This is the
+  only sweep morphology with same-bar confirmation, and therefore the only one
+  that can be traded at the close of the sweeping bar.
+- **vs B:** A requires `closes_beyond == 0` at `i0`; B requires ≥ 1.
+- **vs C:** A requires `depth <= DEEP_ATR`; C exceeds it.
+- **vs G:** A has already reclaimed; G never does.
+- Sensitivity note: `WICK_MIN` and `CLR_MAX` are largely redundant — both
+  measure "closed far from the extreme". Prefer keeping `CLR_MAX` and setting
+  `WICK_MIN = 0` unless a test shows the wick fraction adds information.
+  That saves a parameter.
+
+### Type B — close beyond + rapid reclaim
+
+```
+B := (closes_beyond >= 1)
+ AND (reclaim_bar exists) AND (reclaim_speed <= FAST_N)
+ AND (depth_max <= DEEP_ATR)
+```
+- **Knowable at `reclaim_bar`**, i.e. `i0 + 1 .. i0 + FAST_N`.
+- **vs A:** price *closed* above the level, so under the §S3 close-break rule
+  this event also produced a bullish BOS. B is therefore a **failed BOS**, not
+  merely a wick. That is a materially different market event and mixing A and B
+  into one "sweep" bucket is a modelling error many implementations make.
+- **vs F:** B reclaimed within `FAST_N`; F reclaimed and then re-broke.
+- Because B implies a consumed level under §S6, the level bookkeeping must
+  decide whether a reclaimed level is revived. **Canonical: it is not revived.**
+  The B event itself becomes the tradable object; the old level is gone.
+
+### Type C — deep sweep + rejection
+
+```
+C := (depth_max > DEEP_ATR)
+ AND (reclaim_bar exists within W)
+```
+- **Knowable at `reclaim_bar`**, ≤ `i0 + W`.
+- **vs A/B:** depth only. C is evaluated **first** in the priority order, so a
+  deep event never counts as A or B.
+- The depth threshold is the load-bearing parameter of the whole taxonomy and
+  has no principled value anywhere in the source material. Sweep it.
+
+### Type D — sweep + displacement
+
+```
+D := (reclaim_bar exists within W) AND (disp_bar exists)
+```
+- **Knowable at `disp_bar`**, ≤ `reclaim_bar + R_D`.
+- D is a **flag**, orthogonal to A/B/C. Any of A, B, C can carry it.
+- Cost of D: entering after a displacement bar means entering after the move
+  has already gone `>= DISP_ATR × ATR`. The confirmation is bought with
+  adverse entry. Any test of D must charge that entry price honestly — it is
+  the mechanism by which "higher win rate" becomes "worse expectancy", which
+  is exactly what killed the capped-target design in E-002.
+
+### Type E — sweep + structure shift
+
+```
+E := (reclaim_bar exists within W) AND (shift_bar exists within W)
+```
+- **Knowable at `shift_bar`**, ≤ `i0 + W`. In practice E is the slowest
+  confirmation: it needs the swept-side structure to break, which needs a
+  sealed opposite pivot, which costs `K` bars.
+- **vs D:** D is about the *bar*; E is about the *level structure*. They
+  overlap heavily but not completely; carry both flags, do not merge.
+
+### Type F — sweep + continuation (the reversal trader's failure case)
+
+```
+F := (reclaim_bar exists within W)                # it looked like a sweep
+ AND (exists k in (reclaim_bar .. i0+W] with C[k] > P)   # then re-broke
+```
+- **Knowable only at the re-break bar, and NOT knowable at entry.**
+- F is the complement that makes the taxonomy honest. A/B/C/D/E all describe
+  events that *can* become F afterwards. The research question is:
+  `P(F | morphology, confirm)` — and if that probability does not vary with
+  the conditioning variables, the entire taxonomy is decoration.
+- **This is the single most important statistic to compute from these
+  definitions.** It is cheap, it needs no trading rule, no stop, no target, and
+  no cost model. Compute it first. If `P(F | A) ≈ P(F | C+D+E)`, stop.
+
+### Type G — failed sweep / genuine breakout
+
+```
+G := (no reclaim_bar within W) AND (closes_beyond >= NB_BREAK)
+```
+- **Knowable at `i0 + W`** at the earliest — a pure hindsight label.
+- G is not a sweep at all. Its rate matters because `P(G)` is the base rate of
+  "levels just break", and any sweep-fading strategy is short that event.
+- Note the asymmetry with Osler's stop-loss result (positive feedback through
+  levels) — if that mechanism dominates on gold, `P(G)` will be high, and it
+  is directly measurable here without any strategy.
+
+## SW3. Forced single label (priority order) — for reporting only
+
+```
+if no penetration:                       -> no event
+elif G condition:                        -> "G"
+elif F condition:                        -> "F"
+elif depth_max > DEEP_ATR:               -> "C"   (+D/+E flags)
+elif closes_beyond >= 1:                 -> "B"   (+D/+E flags)
+elif A condition at i0:                  -> "A"   (+D/+E flags)
+else:                                    -> "unclassified"   # must be logged
+```
+
+The `unclassified` bucket is mandatory. Any taxonomy that classifies 100% of
+events has a catch-all masquerading as a category. Report its size; if it is
+large, the thresholds are wrong.
+
+## SW4. Parameters introduced by the sweep taxonomy
+
+| name | range | default | note |
+|---|---|---|---|
+| `W` | 3–30 | 10 | decision window |
+| `DEEP_ATR` | 0.3–2.0 | 0.75 | A/B vs C boundary |
+| `FAST_N` | 1–5 | 2 | B |
+| `CLR_MAX` | 0.15–0.50 | 0.33 | A |
+| `WICK_MIN` | 0 or 0.3–0.7 | 0 (off) | A, redundant with CLR |
+| `R_D` | 1–5 | 3 | D |
+| `NB_BREAK` | 1–3 | 2 | G |
+
+**7 parameters, 6 if `WICK_MIN` stays off.**
+
+## SW5. Repaint traps specific to sweeps
+
+1. **Choosing `i0` in hindsight.** The penetration bar must be the *first*
+   breach of a level that was already known. Scanning for "the bar that made
+   the low of the day and then reversed" is the classic visual-backtest lie.
+2. **Using a level created after `i0`.** The level's `known_at` must be
+   strictly `< i0`. With pivot levels this is easy to violate: the pivot at
+   bar `p` is confirmed at `p+K`, and if `i0 < p+K` the sweep is of a level
+   that did not exist yet.
+3. **Same-bar `i0` and reclaim on intrabar data.** On M1, `C[i0] < P` with
+   `H[i0] > P` is knowable at the M1 close. On M15, the same statement is
+   knowable only at the M15 close — 15 minutes of price action later. A
+   backtest that evaluates M15 sweeps at M1 resolution and enters at the M15
+   sweep bar's close is fine; one that enters at the M15 sweep bar's *open* is
+   not.
+4. **Letting `W` extend past the current bar.** `depth_max` and
+   `closes_beyond` must be computed over `[i0, min(i0+W, i)]`, never
+   `[i0, i0+W]` when `i < i0+W`. In a vectorised pandas implementation this is
+   the default failure mode.
+5. **Re-arming a consumed level.** See §S6.
+
+## SW6. Objectively measurable?
+
+**A, B, C, F, G: Tier 1.** Fully determined by the parameter vector.
+**D, E: Tier 1**, conditional on §D1 and §S3.
+**The boundary between C and A/B: Tier 2** — `DEEP_ATR` is arbitrary.
+**The claim that any of them is a signal: untested.** Nothing here is
+evidence.
+
+---
+
+# PART 4 — DISPLACEMENT
+
+## D1. What distinguishes displacement from a big candle?
+
+### (a) Competing definitions
+
+1. **ATR multiple on the body.** "Candle body must exceed ATR(14) ×
+   multiplier (default 1.5)" [2nd-hand, TradingView displacement scripts].
+2. **Body/range ratio.** "Candle body must be at least a configurable
+   percentage (default 65%) of the total candle range"; elsewhere "60 to 80
+   percent or more" [2nd-hand].
+3. **Imbalance creation.** Displacement is a move that leaves an FVG behind —
+   i.e. defined by its 3-bar footprint rather than by one candle.
+4. **Sequence-based.** "a rapid sequence of 2–3 candles that moves price
+   aggressively away from a prior range" [2nd-hand].
+5. **Narrative only.** "an unusually large body relative to recent volatility,
+   often leaving minimal wicks in the move direction" — no threshold.
+
+### (b) Disagreement and why it matters
+
+- (1) and (2) measure different things: (1) is magnitude, (2) is purity. A
+  large bar with a big wick passes (1) and fails (2). On gold news bars this is
+  the majority case, so the two definitions select nearly disjoint samples in
+  the highest-volatility periods.
+- (3) costs an extra bar of lag (the FVG needs bar `i+1`) and cannot be
+  same-bar. (4) costs 2–3 bars. (1)+(2) are same-bar. This is the whole
+  practical difference between displacement as a *trigger* and displacement as
+  a *filter*.
+- **The ATR reference bar is unstated in every source.** Using `ATR[i]` means a
+  big bar raises its own threshold by roughly `1/ATR_LEN` of its own range —
+  a systematic bias that shrinks detection counts and, worse, makes detection
+  depend on `ATR_LEN` in a non-obvious way. Use `ATR[i-1]`.
+- **Percentile vs multiple.** An ATR multiple is a fixed ratio; a percentile
+  threshold ("top 10% of the last 500 bar ranges") adapts to the *shape* of the
+  range distribution, which for gold is strongly non-normal and regime
+  dependent. A 1.5×ATR bar is a 1-in-30 event in one regime and 1-in-300 in
+  another. The percentile version holds the event *rate* constant, which is far
+  more useful for research because it decouples "how often does this fire" from
+  "how strong is the signal".
+
+### (c) Canonical definition
+
+```
+PARAMS: DISP_ATR      # magnitude, in ATR[i-1] units
+        DISP_BODY     # body/range purity
+        DISP_PCT      # optional percentile guard, 0 disables
+        DISP_PCT_WIN  # trailing window for the percentile
+
+range_i     = H[i] - L[i]
+body_i      = abs(C[i] - O[i])
+if range_i == 0: return NONE
+
+bull_disp(i) := (C[i] > O[i])
+            AND (range_i >= DISP_ATR * ATR[i-1])
+            AND (body_i / range_i >= DISP_BODY)
+            AND (DISP_PCT == 0 OR
+                 range_i >= percentile(range over bars [i-DISP_PCT_WIN .. i-1],
+                                       DISP_PCT))
+bear_disp(i) := mirror with C[i] < O[i]
+```
+
+Notes: the percentile window **excludes bar `i`**. The FVG condition is
+deliberately *not* part of the definition — it is carried as a separate
+attribute `disp_left_fvg(i)` knowable at `i+1`, so that the same displacement
+object can be used both as a same-bar trigger and, one bar later, as a
+gap-qualified filter, without two definitions.
+
+### (d) Confirmation lag
+
+**Zero** — knowable at the close of bar `i`. This is the fastest primitive in
+the document and the reason displacement is attractive as a confirmation for
+sweeps (§SW Type D). The FVG-qualified variant is `+1`.
+
+### (e) Repaint trap
+
+- `ATR[i]` instead of `ATR[i-1]` (above).
+- Full-sample percentile instead of trailing (`.rank(pct=True)` / `np.
+  percentile` over the whole array).
+- Defining displacement by "it broke structure and kept going" — outcome
+  leakage. Displacement must be a property of the bar, not of what followed.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `DISP_ATR` | 1.0–3.0 | 1.5 |
+| `DISP_BODY` | 0.45–0.85 | 0.60 |
+| `DISP_PCT` | 0 or 0.85–0.99 | 0 (off) |
+| `DISP_PCT_WIN` | 200–2000 | 500 |
+
+Recommendation: run the taxonomy **once with `DISP_ATR` fixed and `DISP_PCT`
+off**, and once with the reverse (percentile only, `DISP_ATR = 0`). If the
+conclusions differ, the result is a threshold artefact.
+
+## D2. Is there published evidence that displacement predicts continuation?
+
+**No evidence was found that tests displacement as SMC defines it.** Every
+source located is a TradingView script description or a course page. None
+reports a hit rate, a sample size, an out-of-sample split, or a cost model.
+
+The nearest genuine literature is the **large one-day price change** family in
+equities, and it points the *wrong way* for the displacement-continuation
+story [all 2nd-hand]:
+
+- Atkins & Dyl (1990) and Bremer & Sweeney (1991): evidence of **reversal**
+  after large one-day declines.
+- Cox & Peterson (1994): **no** overreaction/reversal after large one-day
+  declines; they report a **momentum effect over the following 4–20 days**
+  instead — i.e. continuation, but on a multi-week horizon, not an intraday
+  one.
+- Across the family, the reported effect **"disappears after accounting for the
+  bid-ask bounce"**. That is the same failure mode as E-003: a real but tiny
+  effect that does not survive the spread.
+- The whole area is subject to the Sullivan, Timmermann & White (1999)
+  data-snooping critique — their best rule over 100 years of DJIA data
+  survived the Reality Check bootstrap in-sample but **did not deliver superior
+  performance in the subsequent 10-year post-sample period**.
+- Lo, Mamaysky & Wang (2000) is the closest methodological ancestor of what
+  this document is doing: they built automatic, non-subjective pattern
+  definitions via kernel regression precisely because "the presence of
+  geometric shapes in historical price charts is often in the eyes of the
+  beholder", and found several patterns carry **incremental information** —
+  a statement about conditional return *distributions*, explicitly not a
+  statement about tradable profit.
+
+**Status: UNPROVEN, no test found.** The honest position is that displacement
+is a well-defined, zero-lag, cheap-to-compute feature with no published
+evidence either way, and it should be tested as a conditioning variable
+(does `P(F)` fall given D?) before being built into a strategy.
+
+---
+
+# PART 5 — FVG / ORDER BLOCKS / BREAKERS
+
+## F1. Fair value gap
+
+### (a) Competing definitions
+
+1. **Pure 3-bar gap.** Bullish FVG at bar `i` iff `L[i] > H[i-2]`. No condition
+   on the middle bar. The minimal definition.
+2. **Gap + middle-bar direction.** `smc.py` [VERIFIED, L72–83]:
+   `(high.shift(1) < low.shift(-1)) & (close > open)` — i.e. it centres on the
+   middle bar and additionally requires that **middle** bar to be bullish. So
+   an up-gap created by a bearish middle candle is not an FVG in this library
+   but is under (1).
+3. **Gap + displacement.** The middle bar must additionally satisfy §D1.
+   Common in ICT-derived material ("displacement leaves an imbalance").
+4. **Gap size filter.** Gap must exceed some minimum in ATR/points to matter.
+5. **Volume imbalance / opening gap** variants — different objects, often
+   conflated in the same article.
+
+### (b) Disagreement
+
+(1) vs (2) differ on a non-trivial share of gaps and (2) is the version most
+Python backtests use without knowing it. (3) is strictly rarer and correlates
+with §D1, so using both "displacement" and "displacement-FVG" as separate
+confluence factors is double-counting. (4) is unavoidable on M1 gold: without a
+minimum size, tick-level gaps of $0.02 qualify and the concept becomes noise.
+
+### (c) Canonical definition
+
+```
+PARAMS: FVG_MIN_ATR    # minimum gap height in ATR units
+
+# Evaluated at the close of bar i, referencing i-1 and i-2 only.
+bull_fvg(i) := L[i] > H[i-2]  AND  (L[i] - H[i-2]) >= FVG_MIN_ATR * ATR[i-1]
+    zone = [ H[i-2] , L[i] ]         # bottom, top
+bear_fvg(i) := H[i] < L[i-2]  AND  (L[i-2] - H[i]) >= FVG_MIN_ATR * ATR[i-1]
+    zone = [ H[i] , L[i-2] ]
+midpoint (consequent encroachment) CE = (zone.bottom + zone.top) / 2
+
+# Middle-bar direction is recorded as an ATTRIBUTE, not a filter:
+    fvg.middle_bullish = (C[i-1] > O[i-1])
+    fvg.middle_disp    = bull_disp(i-1) / bear_disp(i-1) per §D1
+# so that variants (1),(2),(3) can all be tested from one detection pass
+# without three separate definitions in the code.
+
+# Mitigation state machine, forward-only:
+    state = OPEN
+    at each later bar k:
+        bull FVG:
+            if L[k] <= zone.top    : state = TOUCHED   (first entry)
+            if L[k] <= CE          : state = HALF
+            if C[k] <  zone.bottom : state = INVERTED  (terminal)
+            if L[k] <= zone.bottom : state = FILLED    (if not INVERTED)
+        # bear FVG mirrors
+    Once INVERTED the zone becomes an INVERSION_FVG with side flipped and a
+    new object id. The original is retired and never re-opens.
+```
+
+Three mitigation levels (`TOUCHED`, `HALF`, `FILLED`) are carried rather than
+one, because sources disagree about which counts and it costs nothing to
+record all three and pick in the test.
+
+### (d) Lag
+
+**Knowable at bar `i`** — the third bar. Zero extra lag. Note the FVG is
+conventionally *drawn* spanning bars `i-2..i` and is often *stamped* at `i-1`;
+see below.
+
+### (e) Repaint trap
+
+**`smc.py` L72–100 stamps the FVG at the middle bar** (it uses
+`shift(-1)`, so the row that carries `FVG=1` is bar `i-1`, one bar before the
+gap can be known). Reading `fvg[t]` at bar `t` therefore looks one bar into the
+future. It further computes `MitigatedIndex` by scanning `ohlc[i+2:]` — the
+mitigation index for every FVG is a future value, correct as an offline label
+but fatal if joined onto the bar and read as a feature.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `FVG_MIN_ATR` | 0.05–0.60 | 0.15 |
+| mitigation level used | {TOUCHED, HALF, FILLED} | HALF |
+
+### (g) Measurable? **Tier 1.** FVG is the most cleanly defined object in the
+entire SMC vocabulary — a pure 3-bar arithmetic test with zero lag.
+
+## F2. Order blocks
+
+### (a) Competing definitions
+
+1. **"Last opposing candle before an impulsive move."** "A bullish order block
+   is the last down candle before a sharp rally" [2nd-hand, multiple]. Needs
+   "impulsive" defined — usually left undefined, or defined as displacement.
+2. **Last opposing candle before a move that BREAKS STRUCTURE.** Adds the §S3
+   requirement. "Without a strong impulsive move and structure break, it's not
+   a valid OB" [2nd-hand, dailypriceaction].
+3. **`smc.py`'s implementation** [VERIFIED, L423–470] — and this is **not**
+   definition (1). When `C[i] > H[last_swing_high]` and that swing high has not
+   already been crossed, the library searches the bars between the swing high
+   and `i` for the bar with the **lowest low** (ties → last occurrence), and
+   uses that bar's `[low, high]` as the bullish OB. The lowest-low bar is
+   frequently *not* the last down candle. So the most-used implementation and
+   the most-quoted definition disagree on which candle the zone is.
+4. **The whole consolidation range** before the move (Wyckoff-flavoured
+   readings).
+5. **Zone bounds** disagree independently of candle selection: full high-low
+   (`smc.py`), body only, open-to-wick, or the "mean threshold" (50%).
+
+### (b) Disagreement and why it matters
+
+Four candle-selection rules × four zone-bound rules = sixteen defensible
+"order blocks", producing different zones on the same chart. Because the OB is
+an *entry zone*, this directly sets entry price, and therefore R-multiple, on
+every trade. An expectancy computed under one convention says nothing about
+another. This is the clearest Tier-2 concept in the document: there is no fact
+of the matter about where the order block is.
+
+### (c) Canonical definition — one convention, declared
+
+```
+PARAMS: OB_ZONE      ∈ {FULL, BODY}      # structural switch
+        OB_MAX_ATR   # reject zones wider than this (news bars)
+        OB_MIT       ∈ {TOUCH, HALF, CLOSE_THROUGH}
+
+On a BOS_BULL or CHOCH_BULL at bar i breaking a high from pivot bar p_h:
+    candidates = bars j in [p_h .. i-1] with C[j] < O[j]      # down candles
+    if candidates is empty: no OB
+    ob_bar = max(candidates)                # the LAST down candle  (def. 1)
+    zone   = OB_ZONE == FULL ? [L[ob_bar], H[ob_bar]]
+                             : [min(O,C)[ob_bar], max(O,C)[ob_bar]]
+    reject if (zone.top - zone.bottom) > OB_MAX_ATR * ATR[i]
+    CE = midpoint(zone)
+
+Mitigation (forward-only, mirrors §F1):
+    TOUCH          : L[k] <= zone.top
+    HALF           : L[k] <= CE
+    CLOSE_THROUGH  : C[k] <  zone.bottom   -> INVALIDATED, becomes a BREAKER
+```
+
+Definition (1) is adopted over `smc.py`'s lowest-low rule because it is what
+the literature says, is cheaper, and does not require a scan. **Both should be
+run in sensitivity testing** — if the edge exists under one and not the other,
+there is no edge.
+
+### (d) Lag
+
+Knowable at the BOS bar `i`, which is `≥ p_h + K + 1` (§S3). The OB *candle*
+sits in the past; the OB *object* does not exist until the structure break
+confirms it. Drawing it back on the chart at `ob_bar` is correct for display
+and wrong for backtesting.
+
+### (e) Repaint trap
+
+The dominant one in this whole family: **plotting the OB at `ob_bar` and
+reading it at `ob_bar`.** The zone is only knowable `i - ob_bar` bars later,
+which on M5 gold is routinely 5–30 bars. A backtest that enters "at the order
+block" on the first touch after `ob_bar` may be entering before the object
+existed.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `OB_ZONE` | {FULL, BODY} | FULL |
+| `OB_MAX_ATR` | 0.5–4.0 | 2.0 |
+| `OB_MIT` | {TOUCH, HALF, CLOSE_THROUGH} | TOUCH |
+| candle rule | {LAST_OPPOSING, LOWEST_LOW} | LAST_OPPOSING |
+
+### (g) Measurable? **Tier 2.** Objective per convention, but the convention is
+a free choice and there are ≥16 of them.
+
+## F3. Breaker blocks
+
+### (a) Competing definitions
+
+1. An OB whose zone is closed through; role flips (bullish OB → bearish
+   breaker). [2nd-hand, multiple]
+2. "Forms when an order block is partially mitigated (tested once) but doesn't
+   fully fill" [2nd-hand, quantum-algo] — a **completely different and
+   incompatible** definition: (1) requires full violation, (2) requires
+   partial mitigation and no violation.
+3. `smc.py` [VERIFIED, L424–440] implements (1): sets `breaker[idx] = True`
+   when price violates the OB's far edge, then *deletes* the OB entirely if
+   price later exceeds the OB's top.
+
+### (b) Disagreement
+
+(1) and (2) are not variants — they select disjoint sets. An analyst reading
+two articles will implement contradictory logic. This is the sharpest example
+of vocabulary drift in the source material.
+
+### (c) Canonical definition
+
+```
+Adopt (1), and name it explicitly:
+    A bullish OB whose zone is CLOSE_THROUGH-invalidated at bar k becomes a
+    BEARISH_BREAKER with the same zone bounds, origin_bar = k, and a fresh
+    object id. The parent OB is retired.
+    A breaker is retired in turn when price closes through it in the
+    opposite direction.
+Definition (2) is renamed PARTIALLY_MITIGATED_OB and kept as an attribute of
+the OB, not as a separate object.
+```
+
+### (d) Lag: knowable at bar `k`, the invalidating close. Zero extra.
+
+### (e) Repaint trap: reviving a retired breaker.
+
+### (f) Parameters: none new — inherits `OB_MIT`.
+
+### (g) Measurable? Tier 2, inherits every convention from §F2.
+
+## F4. Evidence for FVG / OB / breakers — honest statement
+
+**No systematic test with reported statistics was found for any of the three.**
+
+Everything located is vendor or educational content. The one page that
+advertises numbers ("60%+ win rates using real market data") gives no sample
+size, no instrument list, no cost assumption, no out-of-sample split, and no
+definition of the win — it is marketing, and is cited here only to be
+dismissed.
+
+What can be said:
+
+- These are the **cheapest concepts to test in the entire framework**: FVG has
+  zero lag, two parameters, and an unambiguous definition. An FVG study needs
+  no strategy at all — measure the conditional distribution of the next `N`
+  bars' returns given an FVG formed, versus the unconditional distribution,
+  in the Lo-Mamaysky-Wang style.
+- The prior from `findings/01_liquidity_evidence.md` is not encouraging: the
+  measured microstructure effects in this family are smaller than a retail
+  gold spread.
+- The specific risk with OBs is that their **Tier-2 status makes false positives
+  cheap**: with 16 defensible conventions, someone testing all of them will find
+  one that works at the 5% level by construction. Any OB result must be
+  reported with the number of conventions tried, and must survive the
+  Sullivan-Timmermann-White style adjustment for that count.
+
+Status for all three: **UNPROVEN. No test found, ours or anyone's.**
+
+---
+
+# PART 6 — CONSOLIDATION
+
+## CN1. Mathematical detection
+
+### (a) Competing definitions
+
+1. **Range/ATR.** `(maxH(N) - minL(N)) / ATR <= threshold`. Simplest.
+2. **Choppiness Index.** `CHOP = 100*log10( sum(TR,N) / (maxH(N)-minL(N)) ) /
+   log10(N)`, N=14, thresholds 61.8 (chop) / 38.2 (trend) [2nd-hand,
+   TradingView/LuxAlgo]. This is exactly a **path-to-range ratio** in log
+   form — the reciprocal of the "range-to-path" idea.
+3. **Volatility contraction.** `ATR(N) / ATR(4N) <= threshold`; the NR7 /
+   inside-bar family is a discrete cousin.
+4. **Bar overlap ratio.** Mean pairwise overlap of consecutive bars'
+   `[L,H]` intervals as a fraction of their union.
+5. **Swing compression.** Successive pivot amplitudes shrinking (a triangle).
+6. **Bollinger squeeze / band width percentile.**
+
+### (b) Disagreement and why it matters
+
+(1) and (2) are near-duplicates: CHOP's numerator is summed true range (path)
+and its denominator is the N-bar range, so CHOP and `range/ATR` are monotone
+transforms of nearly the same quantity. **Including both is collinear
+parameter bloat with no added information.** Likewise the Kaufman efficiency
+ratio (§R1) is `|net move| / path` — the same family again. Three names, one
+measurement. Recognising this removes several parameters for free.
+
+(3) and (4) genuinely measure something different (contraction over time,
+and bar-to-bar containment) and are worth carrying separately. (5) requires
+pivots and inherits `K` and its lag.
+
+### (c) Canonical definition
+
+```
+PARAMS: CN_N          # window length
+        CN_RANGE_ATR  # range/ATR ceiling
+        CN_MIN_BARS   # minimum duration to call it a consolidation
+
+At close of bar i (all windows END at i, never extend past it):
+    hi   = max(H[i-CN_N+1 .. i])
+    lo   = min(L[i-CN_N+1 .. i])
+    width_atr = (hi - lo) / ATR[i]
+    in_box(i) := width_atr <= CN_RANGE_ATR
+
+    consolidation is ACTIVE at i iff in_box has been true for the last
+    CN_MIN_BARS consecutive bars.
+    box = [lo, hi] frozen at the bar where ACTIVE first became true;
+          it is NOT extended as new bars arrive.
+
+Carried as continuous diagnostics, not as extra gates:
+    chop(i)    = 100*log10( sum(TR, CN_N) / (hi - lo) ) / log10(CN_N)
+    contract(i)= ATR(CN_N)[i] / ATR(4*CN_N)[i]
+    overlap(i) = mean over k in window of
+                 max(0, min(H[k],H[k-1]) - max(L[k],L[k-1])) /
+                 (max(H[k],H[k-1]) - min(L[k],L[k-1]))
+```
+
+Freezing the box is essential: a box that grows to contain new bars can never
+be broken, so "breakout from consolidation" becomes undefined.
+
+### (d) Lag
+
+`in_box` is knowable at `i`. `ACTIVE` requires `CN_MIN_BARS` of persistence, so
+a consolidation is first declared `CN_MIN_BARS - 1` bars after it actually
+began. The **box boundaries** are known at that moment, which is what matters
+for a breakout rule.
+
+### (e) Repaint trap
+
+- Extending the box forward (above).
+- Declaring the consolidation at its *start* bar in the plot, then reading it
+  there. Same class as the pivot trap.
+- Using `ATR[i]` computed over a window that overlaps the box — mild, but note
+  that a consolidation deflates ATR, so `width/ATR` is partly self-referential.
+  Using `ATR[i - CN_N]` (pre-box volatility) is the cleaner choice and should
+  be tested as a variant.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `CN_N` | 8–60 | 20 |
+| `CN_RANGE_ATR` | 1.0–4.0 | 2.0 |
+| `CN_MIN_BARS` | 3–20 | 5 |
+
+## CN2. Objectively measurable?
+
+**Tier 1.** Consolidation detection is arithmetic.
+
+## CN3. Continuation vs reversal consolidation, decided BEFORE the break
+
+**No source found offers a pre-break rule that is not a restatement of the
+prior trend.** "A continuation pattern is one that resolves in the direction of
+the prior trend" is a definition by outcome — Tier 3, unfalsifiable.
+
+The candidate pre-break features that *are* measurable:
+
+| feature | measurable at | rationale offered in the wild |
+|---|---|---|
+| prior trend direction (§R1 ER sign) | box confirmation | trend persistence |
+| where the box sits vs the prior leg (retracement %) | box confirmation | shallow = continuation |
+| box slope (regression on closes) | box confirmation | drift inside the box |
+| volume/tick-volume trend inside box | box confirmation | "absorption" |
+| which side of the box has more touches | continuously | "pressure" |
+| position of the box relative to PDH/PDL/session levels | box confirmation | liquidity context |
+| whether the box formed after a displacement | box confirmation | flag vs reversal |
+
+**Status: OPEN QUESTION with a cheap test.** Fit no model. Instead:
+for every confirmed box, record the features above and the realised break
+direction, then report `P(break in prior-trend direction | feature quintile)`
+with Wilson intervals. If no feature's Q1–Q5 spread excludes zero, the answer
+is "no, they cannot be distinguished before the break" — which is a publishable
+finding for this project and would kill a large amount of downstream
+complexity. This test costs one script and no strategy.
+
+---
+
+# PART 7 — REGIME
+
+## R1. Trend / range / compression / expansion, measurably
+
+### (a) Candidate measures compared
+
+| measure | formula | range | what it actually measures | causal? |
+|---|---|---|---|---|
+| **Kaufman Efficiency Ratio** | `abs(C[i]-C[i-N]) / sum(abs(C[k]-C[k-1]), N)` | 0–1 | net displacement ÷ path length | yes |
+| **ADX** | Wilder DI smoothing | 0–100 | persistence of directional movement, smoothed | yes, but heavily lagged (2 nested Wilder smoothings ≈ 2N effective) |
+| **CHOP** | `100*log10(sum(TR,N)/(maxH-minL))/log10(N)` | 0–100 | path ÷ range, log-scaled | yes |
+| **ATR percentile** | rank of `ATR[i]` in trailing window | 0–1 | volatility level vs own history | yes if trailing |
+| **Realized vol** | stdev of log returns × sqrt(bars/yr) | ≥0 | dispersion, direction-blind | yes |
+| **Range-to-path** | `(maxH-minL) / sum(TR)` | 0–1 | reciprocal-ish of CHOP | yes |
+
+### (b) Disagreement and redundancy — the important part
+
+- **ER, CHOP and range-to-path are the same family.** All three are
+  net-or-range over path. Using two of them as "confluence" is
+  self-confirmation. **Pick one. ER is preferred**: it is bounded 0–1, uses
+  closes (so it is directionally meaningful), needs one parameter, and has no
+  smoothing lag.
+- **ADX answers a different question but slowly.** "ADX rises with persistent
+  directional movement while choppiness rises with congestion… they answer
+  near-opposite questions" [2nd-hand]. ADX's double Wilder smoothing means a
+  regime change is reflected roughly `2N` bars late, which for intraday
+  regime-switching is often longer than the regime.
+- **Fixed thresholds do not transfer.** "Efficiency baselines differ by market
+  and timeframe, so a fixed cutoff like 0.3 that works on one chart is
+  meaningless on another. The defensible approaches are relative: percentile
+  thresholds computed from the instrument's own history" [2nd-hand, LuxAlgo].
+  Likewise "ADX… its fixed scale means a reading of 25 carries different weight
+  on different instruments." **Adopt percentile thresholds, not levels.** This
+  also removes the need to re-tune per timeframe, which saves parameters.
+- **Trend/range and compression/expansion are orthogonal.** ER answers the
+  first; ATR percentile answers the second. A market can be trending and quiet,
+  or ranging and violent. Collapsing them into one "regime" number destroys the
+  distinction that matters most to a sweep strategy (a sweep in a quiet range is
+  a different animal from a sweep in a volatile trend).
+
+### (c) Canonical definition — a 2×2 grid, two parameters
+
+```
+PARAMS: ER_N, ATRP_N, REG_WIN, REG_LO_Q, REG_HI_Q
+
+er(i)   = abs(C[i] - C[i-ER_N]) / sum(abs(C[k]-C[k-1]) for k in (i-ER_N, i])
+          # 0 if denominator == 0
+atrp(i) = fraction of the last REG_WIN values of ATR (bars i-REG_WIN .. i-1)
+          that are <= ATR[i]                      # TRAILING percentile
+
+er_q(i) = trailing percentile of er(i) over the last REG_WIN values of er
+          (excluding i)
+
+trend_axis = er_q(i) >= REG_HI_Q  ? TRENDING
+           : er_q(i) <= REG_LO_Q  ? RANGING
+           :                        MIXED
+vol_axis   = atrp(i) >= REG_HI_Q  ? EXPANSION
+           : atrp(i) <= REG_LO_Q  ? COMPRESSION
+           :                        NORMAL
+
+regime(i)  = (trend_axis, vol_axis)     # 9 cells; report all, gate on few
+```
+
+Both axes are percentile-based, so both are unit-free, both transfer across
+timeframes and instruments, and both hold the *event rate* fixed — which means
+a regime filter cannot silently change the number of trades when you change
+instrument, which is a common source of illusory improvement.
+
+### (d) Lag
+
+`er` and `atrp` are knowable at bar `i`. The **percentile** needs `REG_WIN`
+bars of warm-up. ADX, if used at all, is effectively `2 × ADX_N` bars late.
+
+### (e) Repaint trap
+
+- **Full-sample percentiles.** Fatal and easy: computing `ATR` percentile over
+  the entire backtest means the 2024 regime label depends on 2026 volatility.
+  A strategy gated on that will look like it avoided the bad periods.
+- Z-scoring with full-sample mean/std — same error in a different costume.
+- Using `ATR[i]` where `ATR[i-1]` belongs (consistency with §D1).
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `ER_N` | 10–50 | 20 |
+| `REG_WIN` | 200–2000 | 500 |
+| `REG_LO_Q` | 0.20–0.40 | 0.33 |
+| `REG_HI_Q` | 0.60–0.80 | 0.67 |
+| `ATRP_N` | fixed = `ATR_LEN` | 14 |
+
+`REG_LO_Q` and `REG_HI_Q` should be tied (`REG_HI_Q = 1 - REG_LO_Q`), saving
+one parameter. **4 parameters, or 3 if tied.** Compare with carrying ER + ADX +
+CHOP + BB-width, which is 8+ parameters measuring 2 things.
+
+### (g) Measurable? **Tier 1.** Regime is the best-defined part of the whole
+framework and the only part with a genuine quantitative literature behind the
+individual measures.
+
+---
+
+# CONFIRMATION LAG TABLE
+
+Lag is in **bars of the concept's own timeframe**, counted from the bar where
+the underlying event *occurred* to the bar at which it is first knowable and
+final. `K` is the pivot half-width (§S1).
+
+| concept | first knowable at | lag | why |
+|---|---|---|---|
+| Displacement bar (§D1) | bar `i` | **0** | pure single-bar arithmetic on closed OHLC |
+| Displacement + FVG qualified | bar `i+1` | **1** | needs the third bar of the gap |
+| FVG (§F1) | bar `i` (3rd bar) | **0** | `L[i] > H[i-2]` needs no future bar |
+| PDH / PDL, PWH / PWL (§L4) | first bar of the new period | **0** | previous period is complete by construction |
+| Session high/low (§L5) | first bar after the session closes | **0** | ditto; the in-session running max is NOT a level |
+| Regime: ER, ATR percentile (§R1) | bar `i` | **0** (+`REG_WIN` warm-up) | trailing windows only |
+| ADX (if used) | bar `i` | **≈2·N effective** | two nested Wilder smoothings |
+| Consolidation box (§CN1) | `CN_MIN_BARS - 1` bars after it began | `CN_MIN_BARS-1` | persistence requirement |
+| Swing pivot, raw (§S1) | `p + K` | **`K`** | needs `K` bars to the right |
+| Swing pivot, *sealed* | confirmation of the next opposite pivot | `K` + variable | only sealed pivots are immutable |
+| HH/HL/LH/LL (§S2) | `p_n + K` | **`K`** | inherits the pivot |
+| EQH / EQL (§L2) | `p_n + K` (newest member) | **`K`** | inherits the pivot |
+| BOS / CHoCH (§S3) | the breaking bar, `≥ p + K + 1` | **`K+1` minimum** | the pivot's own right-side rule forbids a break on bar `p+K` |
+| CHOCH_D | same bar as the CHoCH | **`K+1` min** | displacement is same-bar |
+| Protected high/low (§S4) | the BOS/CHoCH bar | **`K+1` min** | derived from the leg |
+| Order block (§F2) | the BOS/CHoCH bar `i` | **`i - ob_bar`**, unbounded | the zone does not exist until structure breaks |
+| Breaker (§F3) | the invalidating close | 0 past the OB | |
+| First-leg pullback / "inducement" (§L6) | the BOS bar | **`K+1` min** | uses pivots sealed before the break |
+| Sweep **A** (§SW) | the sweep bar `i0` | **0** past the level | same-bar reclaim |
+| Sweep **B** | `reclaim_bar` | **1 … `FAST_N`** | |
+| Sweep **C** | `reclaim_bar` | **1 … `W`** | |
+| Sweep **D** | `disp_bar` | reclaim **+ 0 … `R_D`** | |
+| Sweep **E** | `shift_bar` | reclaim + (`K+1` … `W`) | needs a CHoCH on the other side |
+| Sweep **F** | the re-break bar | **up to `W`** | **outcome label — not tradable** |
+| Sweep **G** | `i0 + W` | **`W`** | **outcome label — not tradable** |
+| M15 signal read on M1 | close of the M15 bar | **up to 14 M1 bars** | HTF bars close on a grid |
+
+**Worst realistic chain**, an M15 Type-E sweep with `K=3`, `W=10`:
+the M15 pivot forms → +3 M15 bars to confirm → +1 M15 bar minimum to break →
+sweep → +1..10 M15 bars to reclaim and shift → and each M15 bar is 15 minutes.
+The entry can legitimately be **over two hours** after the swing low that the
+narrative says caused it. Any backtest that enters closer than that to the
+swing is lying.
+
+---
+
+# REPAINT TRAP LIST
+
+Ordered by how much damage each does to a backtest.
+
+**RT1 — Full-sample statistics used as a per-bar threshold.**
+`smc.py` L595: `pip_range = (high.max() - low.min()) * range_percent`. The
+equal-high tolerance for every bar in the series is derived from the entire
+series' range, future included. Same class: `df.rank(pct=True)`,
+`np.percentile(whole_array)`, z-scores on full-sample mean/std, "top decile of
+ATR" computed once. **Fix:** every normalisation uses a trailing window ending
+at `i-1`.
+
+**RT2 — Signals stamped at a bar earlier than the bar that decided them.**
+`smc.py` L253–330 writes the BOS/CHoCH flag at `last_positions[-2]`; L354–370
+then deletes any BOS/CHoCH that was never subsequently broken. `smc.py`
+L72–100 stamps the FVG at the middle bar via `shift(-1)`. `smc.py` L165–192
+runs the pivot-alternation cleanup as a global while-loop, and L196–205 force
+the first and last elements of the series to be pivots regardless of price.
+**Fix:** every emitted signal carries a `known_at` field and the backtester
+reads signals by `known_at`, never by array position.
+
+**RT3 — Reading the pivot at the pivot bar.** The chart draws it at `p`; it was
+learned at `p+K`. Applies identically to order blocks (drawn at `ob_bar`,
+learned at the BOS bar) and to consolidation boxes.
+**Fix:** shift every plotted object's *usable* timestamp forward to its
+`known_at`, and assert `known_at <= current_bar` at read time.
+
+**RT4 — Future-scanning "mitigation" columns joined onto the bar.**
+`smc.py` computes `MitigatedIndex` / `BrokenIndex` / `Swept` by scanning
+`ohlc[i+2:]`. These are correct *labels* for offline analysis and are pure
+lookahead if used as features. **Fix:** keep labels and features in separate
+frames, and never let the feature frame contain a column derived from `i+1`
+onward.
+
+**RT5 — Higher-timeframe leakage.** Pine
+`request.security(..., lookahead=barmerge.lookahead_on)`, or reading
+`request.security` output without `[1]`. MQL5 `CopyRates(sym, PERIOD_M15, 0,
+...)` — index 0 is the *forming* bar. **Fix:** Pine `lookahead_off` plus `[1]`;
+MQL5 `shift = 1`, and gate on `iTime(sym, tf, 0)` changing before acting.
+
+**RT6 — The forming bar.** Acting on `C[0]` / `close` of the in-progress bar.
+In Pine, guard with `barstate.isconfirmed`; in MQL5, detect a new bar by
+comparing `iTime(_Symbol, _Period, 0)` to a stored value.
+
+**RT7 — Windows that extend past the current bar.** `depth_max` over
+`[i0, i0+W]` when only `i < i0+W` bars exist. In vectorised code this is the
+default behaviour and produces silently perfect entries.
+
+**RT8 — Reviving consumed objects.** A level that was closed through, an OB
+that was invalidated, a breaker that was broken. If an object's state can move
+backwards, its history depends on the future.
+
+**RT9 — Choosing the level/inducement/POI in hindsight.** The visual-backtest
+lie: picking, on the chart, the swing that was in fact swept. Every level must
+have been emitted, with an id, before `i0`.
+
+**RT10 — Recomputing an old label with today's ATR.** The HH/LH label of a
+2023 pivot pair, or the ATR-relative equal-highs tolerance of an old cluster,
+must be frozen at its `known_at` bar.
+
+**RT11 — Broker/exchange time drift between platforms.** Pine uses the
+symbol's exchange session; MQL5 uses broker server time; neither is UTC and
+neither is `America/New_York` unless you force it. A PDH that differs between
+the two is not a bug in the code, it is a missing definition. **Fix:** force
+`DAY_ROLL_TZ` explicitly on both sides and reconcile PDH values bar-for-bar
+before comparing any strategy result.
+
+**RT12 — Tie-break divergence.** Equal highs are common on 0.01-tick XAUUSD.
+If Pine's pivot tie handling and your MQL5 port's differ, the two produce
+different pivot sets and neither is wrong. **Fix:** implement the pivot rule by
+hand in both, with the tie rules of §S1 written out, rather than using
+`ta.pivothigh` on one side and a hand-rolled loop on the other.
+
+**RT13 — Survivorship in the level set.** Deleting levels that were never
+touched, or only keeping "the levels that mattered". `findings/` already
+records this class of error; it applies directly to level bookkeeping.
+
+---
+
+# PARAMETER INVENTORY
+
+The previous EA reached **748 parameters** and that killed it. Total count is
+therefore treated here as a first-class design constraint, not an afterthought.
+
+Column key: **T** = tunable (must be swept, counts fully against the budget);
+**S** = structural switch (a definition choice — test both, never optimise);
+**O** = off by default (costs nothing until enabled);
+**D** = derived/tied (costs nothing).
+
+| # | parameter | § | class | range | default |
+|---|---|---|---|---|---|
+| 1 | `ATR_LEN` | global | T | 10–30 | 14 |
+| 2 | `K` (pivot half-width, shared across TFs) | S1 | T | 1–8 | 2 |
+| 3 | `K_M5`, `K_M1` untied | S5 | D | — | tied to `K` |
+| 4 | `M_SWING_ATR` | S1 | O | 0.25–1.5 | 0 (off) |
+| 5 | break mode (close / wick) | S3 | S | — | close |
+| 6 | `DISP_LOOKBACK` | S3 | T | 1–5 | 3 |
+| 7 | `MAX_SETUP_BARS` | S6 | T | 5–60 | 20 |
+| 8 | `EQ_TOL_ATR` (shared S2+L2) | L2 | T | 0.02–0.30 | 0.10 |
+| 9 | `EQ_MAX_SPAN` | L2 | T | 10–200 | 60 |
+| 10 | `EQ_MIN_COUNT` | L2 | T | 2–4 | 2 |
+| 11 | `DAY_ROLL_TZ` / `DAY_ROLL_HH` | L4 | S | — | 17:00 America/New_York |
+| 12 | session set | L5 | S | — | ASIA, LONDON, NY, OVERLAP |
+| 13 | session boundary mode | L5 | S | fixed-UTC / DST-aware | DST-aware |
+| 14 | `PCT_WIN` (score normalisation) | L7 | T | 100–2000 | 500 |
+| 15 | `SCORE_GATE` | L7 | S | off / top½ / top⅓ | top⅓ |
+| 16 | score weights `w_k` | L7 | D | — | all 1 |
+| 17 | `W` (sweep decision window) | SW | T | 3–30 | 10 |
+| 18 | `DEEP_ATR` | SW | T | 0.3–2.0 | 0.75 |
+| 19 | `FAST_N` | SW | T | 1–5 | 2 |
+| 20 | `CLR_MAX` | SW | T | 0.15–0.50 | 0.33 |
+| 21 | `WICK_MIN` | SW | O | 0.3–0.7 | 0 (off, redundant with `CLR_MAX`) |
+| 22 | `R_D` | SW | T | 1–5 | 3 |
+| 23 | `NB_BREAK` | SW | T | 1–3 | 2 |
+| 24 | `DISP_ATR` | D1 | T | 1.0–3.0 | 1.5 |
+| 25 | `DISP_BODY` | D1 | T | 0.45–0.85 | 0.60 |
+| 26 | `DISP_PCT` | D1 | O | 0.85–0.99 | 0 (off) |
+| 27 | `DISP_PCT_WIN` | D1 | O | 200–2000 | 500 (only if 26 on) |
+| 28 | `FVG_MIN_ATR` | F1 | T | 0.05–0.60 | 0.15 |
+| 29 | FVG mitigation level | F1 | S | TOUCH/HALF/FILLED | HALF |
+| 30 | `OB_ZONE` | F2 | S | FULL/BODY | FULL |
+| 31 | `OB_MAX_ATR` | F2 | T | 0.5–4.0 | 2.0 |
+| 32 | `OB_MIT` | F2 | S | TOUCH/HALF/CLOSE_THROUGH | TOUCH |
+| 33 | OB candle rule | F2 | S | LAST_OPPOSING / LOWEST_LOW | LAST_OPPOSING |
+| 34 | `CN_N` | CN1 | T | 8–60 | 20 |
+| 35 | `CN_RANGE_ATR` | CN1 | T | 1.0–4.0 | 2.0 |
+| 36 | `CN_MIN_BARS` | CN1 | T | 3–20 | 5 |
+| 37 | `ER_N` | R1 | T | 10–50 | 20 |
+| 38 | `REG_WIN` | R1 | T | 200–2000 | 500 |
+| 39 | `REG_LO_Q` | R1 | T | 0.20–0.40 | 0.33 |
+| 40 | `REG_HI_Q` | R1 | D | — | `1 - REG_LO_Q` |
+| 41 | `ATRP_N` | R1 | D | — | `= ATR_LEN` |
+
+## Counts
+
+| class | count |
+|---|---|
+| **T — tunable, counts against the budget** | **26** |
+| S — structural switches (test both, do not optimise) | 9 |
+| O — off by default | 4 |
+| D — derived / tied | 4 |
+| **Total named** | **43** |
+
+**26 tunable parameters is still too many for a single fit.** Two disciplines
+keep it honest:
+
+1. **Staged enabling.** The document is deliberately built so that the cheapest
+   concepts stand alone. A first study needs only:
+   `ATR_LEN`, `DAY_ROLL`, session set, `W`, `DEEP_ATR`, `FAST_N`, `CLR_MAX`,
+   `NB_BREAK` — **6 tunable + 2 switches**. That is enough to measure
+   `P(F | morphology)` on PDH/PDL and session levels, with no pivots, no order
+   blocks, no score, and no strategy. If that shows nothing, none of the
+   remaining 20 parameters can save it, and they should never be written.
+2. **Every added parameter must buy its place.** Before a parameter is
+   introduced, state the univariate test it must pass (§L7 Stage 1). The 748
+   came from adding knobs to fix symptoms; the fix for a symptom is usually
+   deletion, not a knob.
+
+Explicit savings already taken in this document, and what they cost elsewhere:
+banning MSS (−1 concept), tying `K` across timeframes (−2), tying `REG_HI_Q`
+(−1), using `CLR_MAX` instead of `CLR_MAX`+`WICK_MIN` (−1), picking ER over
+ER+CHOP+range-to-path (−2 to −4), refusing an 8-input weighted liquidity score
+in favour of an equal-weight gate (−14), refusing tunable session boundaries
+(−8). **Roughly 30 parameters not created.**
+
+---
+
+# SOURCES
+
+**[VERIFIED] — read in full by me this session**
+
+- `joshyattridge/smart-money-concepts`, `smartmoneyconcepts/smc.py`, 987 lines,
+  master branch, fetched 2026-08-29.
+  https://raw.githubusercontent.com/joshyattridge/smart-money-concepts/master/smartmoneyconcepts/smc.py
+  Repo: https://github.com/joshyattridge/smart-money-concepts
+  Line references used above: L72–100 (fvg), L137–205 (swing_highs_lows,
+  incl. `swing_length *= 2` at L151 and the forced first/last pivots at
+  L196–205), L222–370 (bos_choch, incl. the `last_positions[-2]` stamping and
+  the L354 "remove the ones that aren't broken" pass), L376–470 (ob, incl. the
+  lowest-low candle selection), L573–698 (liquidity, incl. the global
+  `pip_range` at L595 and the mean level at L648), L701–790 (previous_high_low),
+  L793–898 (sessions).
+
+**[2nd-hand] — search-snippet synthesis only, NOT opened**
+
+Structure / SMC vocabulary
+- TradingView, *Williams Fractal* support article —
+  https://www.tradingview.com/support/solutions/43000591663-williams-fractal/
+- TradingView, *Pivot Points High Low* support article —
+  https://www.tradingview.com/support/solutions/43000589195-pivot-points-high-low/
+- TradingView, Pine Script docs, *FAQ / Techniques* (repainting) —
+  https://www.tradingview.com/pine-script-docs/faq/techniques/
+- FXOpen, *What is a Break of Structure* —
+  https://fxopen.com/blog/en/what-is-a-break-of-structure-and-how-can-you-trade-it/
+- Quantum-Algo, *BOS & CHoCH: Complete 2026 Guide to Market Structure Shifts*
+  (the MSS = CHoCH + displacement reading) —
+  https://www.quantum-algo.com/blog/guides/bos-choch-complete-trading-guide/
+- TradingFinder, *All Smart Money Concepts (SMC) Abbreviations* —
+  https://tradingfinder.com/education/forex/smc-abbreviation/
+- LuxAlgo, *Smart Money Concepts (SMC)* indicator library (internal vs swing
+  structure, EQH/EQL threshold, ATR-based OB size filter) —
+  https://www.luxalgo.com/library/indicator/smart-money-concepts-smc/
+- LuxAlgo, *Zigzag Structure* concept —
+  https://www.luxalgo.com/library/concept/zigzag-structure/
+- PatternSmart, *Why Do Some Trading Indicators Repaint?* —
+  https://patternsmart.com/wp/why-do-some-trading-indicators-repaint/
+
+Liquidity / sessions / inducement
+- ICT Killzone Times —  https://ictkillzonetimes.com/
+- TradingRage, *ICT Killzones (2026)* —
+  https://tradingrage.com/learn/ict-killzone-explained
+- FXOpen, *Kill Zone Trading in Forex* —
+  https://fxopen.com/blog/en/kill-zone-trading-in-forex/
+- TradingFinder, *What is Inducement* —
+  https://tradingfinder.com/education/forex/inducement/
+- WritOfFinance, *What is Inducement (IDM) in Trading* —
+  https://www.writofinance.com/inducement-in-forex-trading/
+- Equiti, *Inducement in SMC Explained* —
+  https://www.equiti.com/sc-en/news/trading-ideas/inducement-in-smc-explained-how-smart-money-traps-work/
+
+Displacement / FVG / order blocks
+- ICTKillzone, *ICT Displacement: The Complete Guide* —
+  https://www.ictkillzone.com/ict-displacement
+- Backtrex, *ICT Displacement Candle* —
+  https://backtrex.com/en/blog/ict-displacement-candle-market-concept
+- LuxAlgo, *Fair Value Gap* concept —
+  https://www.luxalgo.com/library/concept/fair-value-gap/
+- DailyPriceAction, *Fair Value Gaps* —
+  https://dailypriceaction.com/blog/fair-value-gap/
+- DailyPriceAction, *Order Blocks Will Fail You Without These 3 Simple Rules* —
+  https://dailypriceaction.com/blog/order-blocks/
+- Quantum-Algo, *Order Blocks Deep Dive: 7 Types* (the incompatible
+  "partially mitigated" breaker definition) —
+  https://www.quantum-algo.com/academy/order-blocks-deep-dive/
+- Edgeful, *FVG best practices* (the "60%+ win rates" marketing claim, cited
+  only to be dismissed) —
+  https://www.edgeful.com/blog/posts/fair-value-gap-best-practices-guide
+
+Regime
+- LuxAlgo, *Kaufman Efficiency Ratio* concept —
+  https://www.luxalgo.com/library/concept/kaufman-efficiency-ratio/
+- LuxAlgo, *Choppiness Index* concept —
+  https://www.luxalgo.com/library/concept/choppiness-index/
+- TradingView, *Choppiness Index (CHOP)* —
+  https://www.tradingview.com/support/solutions/43000501980-choppiness-index-chop/
+- TrendSpider, *Kaufman Efficiency Ratio* —
+  https://trendspider.com/learning-center/kaufman-efficiency-ratio/
+
+Platform mechanics
+- MQL5 docs, *CopyRates* — https://www.mql5.com/en/docs/series/copyrates
+- MQL5 Articles, *Building a Modular Fair Value Gap (FVG) Detection Engine in
+  MQL5* (the `shift = 1` closed-bar convention) —
+  https://www.mql5.com/en/articles/23539
+
+Academic (all second-hand; none of these PDFs was reachable this session)
+- Lo, Mamaysky & Wang (2000), *Foundations of Technical Analysis*,
+  J. Finance 55(4) — https://www.nber.org/papers/w7613
+- Sullivan, Timmermann & White (1999), *Data-Snooping, Technical Trading Rule
+  Performance, and the Bootstrap*, J. Finance 54(5) —
+  https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00163
+- Atkins & Dyl (1990); Bremer & Sweeney (1991); Cox & Peterson (1994) — large
+  one-day price change reversal/continuation; reached only via search snippets.
+  See also https://www.sciencedirect.com/science/article/abs/pii/S014829631830420X
+- Osler (2000, 2003, 2005) and Osler & Savaser (2011) — order clustering; not
+  re-reviewed here, see `JARVIS/research/findings/01_liquidity_evidence.md`.
+
+---
+
+# WHAT TO DO WITH THIS DOCUMENT
+
+1. Implement §S1, §L4, §L5, §D1, §F1 first. They are the zero-lag, low-parameter
+   primitives and they need no pivots except §S1.
+2. Run the **`P(F | morphology, confirm)` study** (§SW Type F). It requires no
+   entries, no stops, no targets and no cost model, so it cannot be killed by
+   cost assumptions and cannot be fitted. It is the cheapest possible fair test
+   of whether the sophisticated sweep taxonomy contains information that the
+   naive rule in E-003 did not.
+3. Only if step 2 shows separation, build a strategy — and register it in
+   `EXPERIMENTS.md` as UNPROVEN until `study.py` says otherwise.
+4. Do not implement order blocks, breakers, or the liquidity score until every
+   component has passed §L7 Stage 1. They are Tier 2, they are expensive in
+   parameters, and there is no evidence for them.
+

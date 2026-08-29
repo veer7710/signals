@@ -295,3 +295,32 @@ there. Requires daily history the repo does not yet hold.
 - **A bug I made and caught:** the first run of this comparison passed the fade
   direction and concluded sweeps were WORSE than momentum. Corrected before
   reporting. Recorded because reporting that would have killed a real finding.
+
+## E-009 — Sweep ANATOMY: do sweeps reverse at all? (MEASURED, adverse)
+- **Method:** not a backtest. Enumerate every pierce of a confirmed swing
+  level and score a SYMMETRIC ±1×ATR14 barrier, 24 bars forward, from the
+  sweep bar's close — then compare to the instrument's OWN unconditional
+  baseline rather than to 0.500. Code: `JARVIS/research/sweep_anatomy.py`,
+  `microstructure_facts.py`, `failure_probes.py`.
+- **Baselines:** GOLD 1h P(down 1 ATR before up 1 ATR) = **0.544**, GOLD 15m
+  0.523, EURUSD 0.500, US500 0.490. Gold is down-skewed at short horizons
+  *during a bull market*. Any statistic compared to 0.500 is wrong.
+- **Result 1 — the long setup is wrong-signed.** "Swing low pierced, close
+  back above" on gold gives P(down first) = 0.633 (n=1694) vs baseline 0.544:
+  **+8.9pp, z=+6.95**. It is a CONTINUATION-DOWN signal. Replicated on 15m
+  (+8.1pp, z=+3.41) and in **3/3 disjoint date blocks** (+9.7 / +7.0 / +9.3pp,
+  all |z|>3) through a parabola to $5,626 and a −29.7% crash.
+- **Result 2 — the short setup has nothing.** +1.1pp (z=+0.75) on 1h, −1.7pp
+  on 15m, and 0/3 date blocks replicate.
+- **Result 3 — no "quality" filter replicates.** Displacement >1.5 ATR:
+  +6.6pp on 1h, **−13.2pp** on 15m. With-trend: +4.8pp vs −8.3pp. NY overlap:
+  +5.7pp vs −10.3pp. Nesting: no effect either way. Every filter that helps on
+  one timeframe hurts on the other, several with |z|>2 on both sides.
+- **Conclusion:** the retail sweep-reversal thesis is not merely edgeless on
+  gold, its long half is significantly *anti*-correlated with its own premise,
+  in the exact direction Osler's stop-loss cascade result predicts. This
+  explains E-003's null (and its longs −0.018R vs shorts +0.054R) without
+  blaming the implementation. The "sophisticated" version differs from the
+  naive one only in how many hypotheses it silently tests.
+- **Status:** MEASURED, not CONFIRMED — one instrument, one 2024–2026 window.
+- **Full write-up:** `JARVIS/research/FAILURE_MODES.md` (81 failure modes).

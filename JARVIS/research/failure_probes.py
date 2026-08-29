@@ -87,3 +87,34 @@ print(f"  daily R: min {dr[0]:.2f}  p5 {dr[int(.05*len(dr))]:.2f}  median {dr[le
 for lim in (2,3,4):
     n=sum(1 for x in dr if x<=-lim)
     print(f"    days worse than -{lim}R: {n} ({100*n/len(dr):.1f}% of trading days)")
+
+print("\n"+"="*78); print("D. REGIME-BLOCK REPLICATION OF THE HEADLINE SWEEP RESULT (GOLD 1h)")
+print("   Each block gets its OWN baseline. GX-04 says nothing counts unless it")
+print("   survives the parabola and the crash separately.")
+print("-"*78)
+from sweep_anatomy import barrier as _bar, atr as _atr
+S = engine.load("GOLD","1h"); A = _atr(S,14)
+_s, _a, EV = analyse("GOLD","1h")
+for name, t0, t1 in (("A 2024-04..2025-03", 0, 1743465600),
+                     ("B 2025-04..2025-12", 1743465600, 1767225600),
+                     ("C 2026-01..2026-08", 1767225600, 9e18)):
+    idx=[i for i,ts in enumerate(S.ts) if t0<=ts<t1]
+    if not idx: continue
+    lo,hi = idx[0], idx[-1]
+    up=dn=0
+    for i in range(max(lo,250),hi):
+        if A[i] is None or A[i]<=0: continue
+        r=_bar(S,i,S.c[i],A[i],A[i],24)
+        if r=='up': up+=1
+        elif r=='dn': dn+=1
+    bp, bn = dn/(up+dn), up+dn
+    print(f"  {name}  own baseline P(down first)={bp:.3f} (n={bn})")
+    for side, lab in (('low','LOW swept + reclaim (long setup) '),
+                      ('high','HIGH swept + reclaim (short setup)')):
+        sub=[e for e in EV if lo<=e['i']<=hi and e['closed_back'] and e['side']==side
+             and e['outcome'] in ('reverse','continue')]
+        n=len(sub)
+        if n<40: print(f"      {lab} n={n} (too few)"); continue
+        d=sum(1 for e in sub if (e['outcome']=='continue' if side=='low' else e['outcome']=='reverse'))
+        p=d/n
+        print(f"      {lab} n={n:4d}  P(down)={p:.3f}  delta={100*(p-bp):+5.1f}pp  z={z2(p,n,bp,bn):+.2f}")
