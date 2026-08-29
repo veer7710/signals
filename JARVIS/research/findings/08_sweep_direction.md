@@ -72,6 +72,46 @@ case — outperformed types A and B, the supposed successes (50% vs 42-43%).
 - **EURUSD is nearly flat** (49.7% vs 48.3%), so the effect is not uniform.
 - **No M1 data exists**, so the M1 sniper entry model is untested entirely.
 
+## Result 3 — the sweep DOES add value, in the follow direction
+
+The obvious challenge: does the whole sweep apparatus beat a three-line
+momentum rule? Tested against "buy any 20-bar high, sell any 20-bar low",
+identical stop, target and resolution — only the entry differs.
+
+| Market | sweep-FOLLOW | plain 20-bar breakout | sweep advantage |
+|---|---|---|---|
+| GOLD 15m | 54.1% | 52.4% | +1.6 |
+| GOLD 1h | 53.1% | 47.9% | **+5.2** |
+| US500 1h | 52.0% | 50.2% | +1.7 |
+| EURUSD 1h | 49.7% | 46.7% | +3.0 |
+| GBPUSD 1h | 51.7% | 47.9% | +3.8 |
+
+**Sweep detection beats plain momentum on 5 of 5 markets, average +3.1
+points.** So the liquidity level is not decoration: breaking a level where
+resting orders sit is measurably different from breaking an arbitrary 20-bar
+high.
+
+This is the first result in this project to beat its baseline consistently
+across markets.
+
+### Cost arithmetic, honestly
+
+At 53-54% with a 1:1 reward:risk, gross expectancy is +0.06R to +0.08R.
+Gold's ~0.35 round-trip against a 1-ATR stop is roughly 1.7% of risk on 1h and
+4% on 15m, so net lands near **+0.04R per trade**. Real, but thin — and thin
+enough that a materially worse broker, or a tighter stop, erases it.
+
+### What it still has to survive
+
+- The multiple-testing bar. This project has now run well over 50 variants; the
+  luck threshold is around t = 2.8 and no t-statistic has been computed for
+  this result yet.
+- Walk-forward across six periods.
+- Full cost sensitivity at 2x and 3x spread.
+- Out-of-sample confirmation on data not used to find it.
+
+Until those pass, this is **PROMISING**, not an edge.
+
 ## What it changes about the plan
 
 1. **Do not build a sweep-fade EA.** The base signal is negative on every
@@ -80,10 +120,12 @@ case — outperformed types A and B, the supposed successes (50% vs 42-43%).
    positive on 4 of 5 markets and beats the coin-flip baseline on gold by ~5
    points. That is a candidate, not an edge, until it survives costs,
    walk-forward and the multiple-testing bar.
-3. **The next test is whether the sweep adds anything at all** over a plain
-   momentum rule ("buy an N-bar high"). If it does not, the entire sweep
-   apparatus is unnecessary complexity and should be deleted rather than
-   tuned.
+3. **The sweep layer earns its place** — but only in the follow direction. It
+   beats a plain breakout by ~3 points on every market tested, so the liquidity
+   level carries information a generic price extreme does not.
+4. **The next tests are the gauntlet**: t-statistic against the luck bar,
+   walk-forward, cost sensitivity, and out-of-sample. Nothing gets built into
+   an EA before those.
 
 ## Note on the screenshots
 

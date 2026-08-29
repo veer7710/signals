@@ -276,3 +276,22 @@ there. Requires daily history the repo does not yet hold.
   `JARVIS/research/findings/08_sweep_direction.md`
 - **Next test (highest value):** does the sweep add anything over a plain
   "buy an N-bar high" momentum rule? If not, delete the sweep apparatus.
+
+## E-018 — Does sweep detection beat plain momentum? (YES, in FOLLOW direction)
+- **Test:** sweep-FOLLOW vs "buy any 20-bar high / sell any 20-bar low",
+  identical stop (1 ATR), target (1R), first-touch resolution. Only entry differs.
+- **Result — sweep beats plain breakout on 5/5 markets:**
+  GOLD 15m 54.1% vs 52.4% · GOLD 1h 53.1% vs 47.9% · US500 1h 52.0% vs 50.2% ·
+  EURUSD 1h 49.7% vs 46.7% · GBPUSD 1h 51.7% vs 47.9%. Average +3.1 points.
+- **Meaning:** breaking a level where resting orders sit is measurably
+  different from breaking an arbitrary 20-bar high. The liquidity layer carries
+  real information — the previous conclusion was wrong only about DIRECTION.
+- **Cost check:** ~+0.04R net per trade after a 0.35 gold round-trip. Real but
+  thin; a worse broker or tighter stop erases it.
+- **Status: PROMISING.** Has NOT faced the multiple-testing bar (t-stat not
+  computed; ~50+ variants tried so the bar is near 2.8), walk-forward, cost
+  sensitivity, or out-of-sample. First result in this project to beat its
+  baseline consistently across markets.
+- **A bug I made and caught:** the first run of this comparison passed the fade
+  direction and concluded sweeps were WORSE than momentum. Corrected before
+  reporting. Recorded because reporting that would have killed a real finding.
