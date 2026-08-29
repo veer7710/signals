@@ -647,3 +647,499 @@ revived, its history is a function of the future.
 
 ### (g) Measurable? Tier 1, once the three events are separated.
 
+---
+
+# PART 2 — LIQUIDITY
+
+**Framing statement that must appear in every report using these terms:**
+no retail XAUUSD feed exposes resting orders. "Liquidity", "resting orders" and
+"stop clusters" as used below are **price-derived proxies**, not observations.
+The only direct evidence that orders cluster at obvious levels is Osler's
+dealer-book work on 1999–2000 FX (see `findings/01_liquidity_evidence.md`),
+which is second-hand here and has not been replicated on a modern venue. Do not
+write code comments that assert stops exist at a level. Write that the level is
+a *candidate* stop cluster under the clustering hypothesis.
+
+## L1. Buy-side / sell-side liquidity
+
+### (a) Competing definitions
+
+1. Buy-side liquidity = the pool of buy-stop orders resting **above** a high;
+   sell-side = sell-stops **below** a low. Standard ICT usage.
+2. Buy-side liquidity = anywhere buyers will be forced in, including above
+   equal highs, above prior day high, above session highs — a *set of levels*
+   rather than a single one.
+3. Some material inverts the naming (calling the pool above a high "sell-side"
+   because that is where you sell into it). This inversion is present in enough
+   sources to be a genuine hazard when transcribing rules from a text.
+
+### (b) Disagreement
+
+Naming inversion (3) is the practical one: it silently reverses a strategy. It
+is worth defining the term *out* of the codebase entirely.
+
+### (c) Canonical definition
+
+```
+Replace the term with a signed structure:
+
+    Level = { price, side, kind, origin_bar, timeframe, touches, consumed }
+      side ∈ {ABOVE, BELOW}      # which side of current price it sat on when created
+      kind ∈ {PIVOT_HIGH, PIVOT_LOW, EQH, EQL, PDH, PDL, PWH, PWL,
+              SESSION_HIGH, SESSION_LOW}
+
+An ABOVE level is a candidate buy-stop cluster (ICT "buy-side liquidity").
+A BELOW level is a candidate sell-stop cluster (ICT "sell-side liquidity").
+The words "buy-side"/"sell-side" appear only in this comment, never in code.
+```
+
+### (d) Lag
+
+Inherited from the level's `kind`: see the confirmation lag table.
+
+### (e) Repaint trap
+
+Recomputing `side` relative to current price. `side` is fixed at creation.
+
+### (f) Parameters — none of its own.
+
+### (g) Measurable? The **level** is Tier 1. The **liquidity** is unobservable;
+it is a hypothesis attached to the level.
+
+---
+
+## L2. Equal highs / equal lows — the tolerance question
+
+### (a) Competing definitions
+
+1. **Absolute tolerance** — "within N pips". Simple, breaks across regimes:
+   $1.00 on gold at $1,800 in a quiet 2019 tape is a different event from
+   $1.00 at $3,400 in a volatile 2026 tape.
+2. **Percent-of-price** — `|Ha-Hb| <= q * price`. Handles the price level but
+   not the volatility regime; gold's ATR/price ratio varies by more than 3×.
+3. **ATR-relative** — `|Ha-Hb| <= q * ATR`. Handles both.
+4. **`smc.py`'s implementation** [VERIFIED, L595]:
+   `pip_range = (ohlc["high"].max() - ohlc["low"].min()) * range_percent`
+   with `range_percent=0.01`. The tolerance is 1% of the **entire dataset's**
+   high-to-low range. On a 2-year gold series that is roughly $15 — an absurdly
+   wide band on M5 — **and it is computed from the whole series including the
+   future.** Both a calibration failure and a lookahead failure in one line.
+5. **Visual / "looks equal"** — the actual method in most educational material.
+   Unfalsifiable.
+
+### (b) Disagreement and why it matters
+
+Tolerance choice directly controls how many EQH/EQL exist, and EQH/EQL is the
+highest-conviction liquidity construct in the framework. Too tight: the pattern
+essentially never occurs on gold and the strategy has no trades. Too loose:
+every pair of nearby highs is "equal" and the concept carries no information.
+There is no principled value in any source — every one found either states a
+default without justification or says "adjust to taste". **Therefore the
+tolerance must be swept in sensitivity testing and the strategy must survive
+the sweep, or it is fitted to the tolerance.**
+
+### (c) Canonical definition
+
+```
+PARAMS: EQ_TOL_ATR      # shared with §S2
+        EQ_MAX_SPAN     # max bars between the first and last member
+        EQ_MIN_COUNT    # minimum pivots in the cluster (>= 2)
+
+Maintain a list of sealed pivot highs.
+At the confirmation bar c of a new sealed pivot high P_n:
+    tol = EQ_TOL_ATR * ATR[c]
+    members = [P_n]
+    for P_m in sealed pivot highs, newest first, while (bar(P_n)-bar(P_m)) <= EQ_MAX_SPAN:
+        if abs(level(P_m) - level(P_n)) <= tol and P_m not already consumed:
+            members.append(P_m)
+    if len(members) >= EQ_MIN_COUNT:
+        emit EQH level with
+            price   = max(level(m) for m in members)   # the extreme, NOT the mean
+            touches = len(members)
+            origin_bar = bar of the OLDEST member
+            known_at   = c
+# EQL is the mirror, price = min(...)
+```
+
+Two deliberate departures from `smc.py`:
+
+- **`ATR[c]`, not a global range.** Causal, and regime-adaptive.
+- **`price = max(members)`, not `mean(members)`.** The stops sit above the
+  *highest* of the equal highs; a mean level would be swept without the pool
+  being reached, systematically mis-timing every sweep measurement by a
+  fraction of `tol`. `smc.py` uses the mean [VERIFIED, L648].
+
+### (d) Lag
+
+Known at `c` = confirmation bar of the newest member = `p_n + K`.
+
+### (e) Repaint trap
+
+Adding a later pivot to an *existing* cluster and retroactively changing its
+`price` or `touches`. A cluster is emitted once, with the members known at `c`.
+A later equal high creates a **new** cluster object with a new `known_at`. The
+old one is not edited.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `EQ_TOL_ATR` | 0.02–0.30 | 0.10 | (shared with §S2) |
+| `EQ_MAX_SPAN` | 10–200 bars | 60 |
+| `EQ_MIN_COUNT` | 2–4 | 2 |
+
+### (g) Measurable? Tier 1 given a declared tolerance; the tolerance itself is
+a free choice with no principled value in the literature.
+
+---
+
+## L3. Liquidity pool / resting orders / stop clusters
+
+### (a) Competing definitions
+
+1. Osler's microstructure result: stop-loss orders cluster *just beyond* round
+   numbers, take-profit orders cluster *at* them [2nd-hand; see
+   `findings/01_liquidity_evidence.md`].
+2. Retail SMC: "liquidity rests above highs and below lows."
+3. "Liquidity pool" = any region of clustered highs/lows, trendline touches,
+   or round numbers, unweighted.
+
+### (b) Disagreement
+
+(1) is an empirical claim about a specific 1999–2000 dealer book; (2) and (3)
+are geometric restatements of "there is a high there". Critically, (1)'s
+stop-loss half predicts **acceleration through** a level (positive feedback),
+not rejection at it — which points the opposite way from the fade-the-sweep
+trade. This is documented at length in `findings/01_liquidity_evidence.md` and
+is not re-argued here.
+
+### (c) Canonical definition
+
+**There is no observable to define.** Refuse to define it. What can be defined
+is the *level* (§L1) and a *score* (§L7) that ranks levels by properties that
+are plausibly correlated with order density. Any code identifier named
+`liquidity_pool` should be renamed `level_cluster`.
+
+### (d)–(f) N/A.
+
+### (g) Measurable? **No.** Tier 3. Unobservable on retail data.
+
+---
+
+## L4. Previous day / week high-low — the rollover matters more than the concept
+
+### (a) Competing definitions of the day boundary
+
+1. **Broker server midnight.** What MT5 gives you for free. Typically GMT+2 in
+   winter / GMT+3 in summer for European brokers, but **not standardised** —
+   this is a per-broker property.
+2. **17:00 America/New_York** — the CME / interbank FX rollover. The
+   "true" trading day for gold.
+3. **00:00 UTC.**
+4. **`smc.py`**: `ohlc.resample("1D")` [VERIFIED, L720] — pandas resamples on
+   the index's own timezone, i.e. whatever the input data was in, undocumented.
+   Then it takes `indices[-2]`, the second-to-last completed period, which is
+   correct and causal for the *previous* period.
+5. Exchange-session-based, e.g. Pine's `request.security(tickerid, "D", ...)`
+   which uses the symbol's exchange session — which for a broker CFD gold
+   symbol is broker-defined again.
+
+### (b) Disagreement and why it matters — this is not pedantry
+
+Gold's largest intraday moves cluster around the NY session. A day boundary at
+00:00 UTC cuts the NY afternoon *away* from its own morning; a boundary at
+17:00 NY keeps the whole session in one day. PDH/PDL differ materially between
+the two — different levels, different sweep events, different trades. And
+because Pine will use the exchange session and MQL5 will use broker server
+time, **the same "strategy" will produce different PDH values in TradingView
+and MetaTrader unless the boundary is forced identically in both.** A
+Pine→MQL5 port that does not force this will not reconcile, and the developer
+will spend days looking for a bug that is a definition.
+
+### (c) Canonical definition
+
+```
+PARAMS: DAY_ROLL_TZ  = "America/New_York"
+        DAY_ROLL_HH  = 17          # 17:00 local, DST-aware
+        WEEK_ROLL    = the DAY_ROLL boundary on Sunday
+
+trading_day(t) = the date d such that
+    roll(d)  <= t <  roll(d+1)
+    where roll(d) = the instant 17:00 on (d-1) in America/New_York, in UTC
+    (i.e. 21:00 UTC in EDT, 22:00 UTC in EST)
+
+PDH(i) = max H over all bars with trading_day == trading_day(i) - 1
+PDL(i) = min L over the same set
+Both are FROZEN at the moment the previous day closes; they never update
+intraday.
+
+PWH/PWL: same with trading_week = weeks starting at the Sunday roll.
+```
+
+Implementation requirement, both platforms: convert every bar's timestamp to
+`America/New_York` **with DST rules**, not with a fixed offset. Pine:
+`timestamp("America/New_York", ...)` / `hour(time, "America/New_York")`.
+MQL5: no native IANA tz — must implement the US DST rule (second Sunday in
+March, first Sunday in November) explicitly, or the levels will be wrong for
+about 8 months of every year relative to Pine.
+
+### (d) Lag
+
+Known at the **first bar of the new trading day** — i.e. immediately, and with
+zero lag for the whole day. This makes PDH/PDL the *lowest-latency* levels in
+the entire framework and the natural first thing to test. It is also the only
+level type with **no `K` dependence**, hence no pivot parameters.
+
+### (e) Repaint trap
+
+Using the *current, still-forming* day's running high as "today's high" and
+then treating a break of it as a sweep of a level. The running high is not a
+level; it is a statistic of the future when read historically. Only the
+completed day is a level.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `DAY_ROLL_TZ` | fixed | America/New_York |
+| `DAY_ROLL_HH` | {0 UTC, 17 NY, broker} | 17 NY |
+
+Treat as a **structural switch to test**, not a parameter to optimise.
+
+### (g) Measurable? Tier 1, and the cleanest object in the document.
+
+---
+
+## L5. Session highs / lows and exact boundaries
+
+### (a) Competing definitions (all UTC unless stated)
+
+| source | Asia | London | New York |
+|---|---|---|---|
+| ICT killzones [2nd-hand, ictkillzonetimes / tradingrage] | 00:00–05:00 | 07:00–10:00 | 12:00–15:00 |
+| ICT killzones, NY-local phrasing [2nd-hand, fxopen] | 19:00–22:00 NY | 02:00–05:00 NY | 07:00–10:00 NY |
+| `smc.py` full sessions [VERIFIED, L820–856] | Tokyo 00:00–09:00 | 07:00–16:00 | 13:00–22:00 |
+| `smc.py` killzones [VERIFIED, L820–856] | 00:00–04:00 | 06:00–09:00 | 11:00–14:00 |
+| Exchange hours | Tokyo 09:00–17:00 JST | LSE 08:00–16:30 London | NYSE 09:30–16:00 NY |
+
+### (b) Disagreement and why it matters
+
+Three separate problems:
+
+1. **The windows themselves disagree** — the London killzone is 07:00–10:00 in
+   one source and 06:00–09:00 in `smc.py`. A one-hour shift on M5 is 12 bars
+   and changes which bar is the session high.
+2. **The two ICT rows above are inconsistent with each other.** 02:00–05:00
+   New York is 06:00–09:00 or 07:00–10:00 UTC depending on the month, because
+   US and UK DST transitions are three weeks apart in spring and one week apart
+   in autumn. Any source quoting a *fixed* UTC killzone is wrong for roughly
+   4 weeks a year. `smc.py` uses fixed wall-clock with no DST handling at all
+   [VERIFIED, L858–866 — it localises to a fixed `Etc/GMT` offset].
+3. **Asia is the only clean one.** JST has no DST, so Tokyo 09:00–17:00 JST is
+   permanently 00:00–08:00 UTC. This is a real argument for making the Asian
+   range the primary session construct in an XAUUSD system: it is the only one
+   with no timezone ambiguity.
+
+### (c) Canonical definition
+
+```
+PARAMS: sessions defined in LOCAL time with an IANA zone, converted per-bar.
+
+  ASIA   : 00:00 - 08:00  UTC          (fixed; = Tokyo 09:00-17:00 JST)
+  LONDON : 08:00 - 16:30  Europe/London  (DST-aware)
+  NY     : 08:00 - 17:00  America/New_York (DST-aware; CME gold pit-equivalent)
+  Overlap: LONDON ∩ NY
+
+For each session S and each trading_day d (per §L4):
+    SESSION_HIGH(S,d) = max H over closed bars whose timestamp ∈ S on day d
+    SESSION_LOW (S,d) = min L over the same
+    Both are EMITTED AS A LEVEL only at the first bar AFTER S closes on day d.
+    Before that instant they do not exist.
+```
+
+The Asian range is then `[SESSION_HIGH(ASIA,d), SESSION_LOW(ASIA,d)]`, emitted
+at 08:00 UTC, available for the whole London and NY sessions. Zero lag from
+that point, no pivot parameters. Together with PDH/PDL these are the two
+cheapest, least-parameterised level families available — and therefore the two
+that should be tested **first and alone**, before any pivot-based level is
+added.
+
+### (d) Lag
+
+Zero, from the session close bar onward. The session high **during** the
+session is not a level.
+
+### (e) Repaint trap
+
+The `smc.py` `sessions()` function returns a per-bar running `High`/`Low` of
+the in-progress session [VERIFIED, L876–890]. Used naively as "the session
+high", this is a forward-looking statistic on every bar except the last one of
+the session. It is safe only if you read it at the final bar of the session.
+Its reset also depends on there being an inactive bar between sessions
+(`high[i-1]` seeds from the previous bar, which is 0 only if that bar was
+inactive) — so with back-to-back session definitions it will not reset.
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| session set | {ASIA, LONDON, NY, OVERLAP} | all four |
+| boundary mode | {fixed-UTC, DST-aware} | DST-aware |
+
+Session windows themselves are **not** to be optimised. Opening them up as
+tunable start/end times adds 8 continuous parameters and is a straight path to
+the 748-parameter failure.
+
+### (g) Measurable? Tier 1. The disagreement is in the constants, not the
+concept.
+
+---
+
+## L6. Inducement
+
+### (a) Competing definitions
+
+1. "The extreme point of the last pullback in a market structure that prompts
+   traders to buy and sell" [2nd-hand, tradingfinder].
+2. "A valid inducement level is the swing high or low of the first valid
+   pullback within the leg that created the most recent significant BOS or
+   CHoCH" [2nd-hand, writofinance]. Note **three** undefined qualifiers in one
+   sentence: *valid* pullback, *significant* BOS, *the* leg.
+3. "The liquidity that must be taken before price can reach the real point of
+   interest." Defined by outcome.
+4. "Inducement typically appears as the first pullback after a BOS or CHOCH,
+   and is followed by a liquidity sweep" [2nd-hand, equiti].
+
+### (b) Disagreement
+
+(1), (2) and (4) are compatible and *nearly* codeable. (3) is the one most
+often used in practice and is circular: an inducement is the liquidity that got
+taken before the move; if no move followed, it "wasn't the inducement". This
+makes the concept **unfalsifiable** — every failed setup is retro-explained as
+having mis-identified the inducement. This is the clearest example in the whole
+framework of a term that cannot be wrong.
+
+Additional problem: definitions (1)/(2)/(4) make inducement a *deterministic
+function of structure* — it is just "the first counter-pivot in the leg". If
+that is all it is, it introduces no information beyond §S1 and §S4, and any
+claimed benefit from "waiting for inducement to be taken" is a claim about
+pullback depth, which is testable directly and much more cheaply.
+
+### (c) Canonical definition — offered as a convention, clearly labelled
+
+```
+PARAMS: none (derived)
+
+After a BOS_BULL / CHOCH_BULL at bar i created by breaking a high from pivot
+bar p_h:
+    candidate pivots = sealed pivot LOWS with bar index in (p_h, i)
+    if none exist:                   inducement := NONE
+    else:                            inducement := the EARLIEST such pivot low
+    # "first pullback within the leg"
+INDUCEMENT_TAKEN at bar j > i  iff  L[j] < inducement.level   (wick basis)
+```
+
+**Report this as `first_leg_pullback`, not `inducement`.** The rename is not
+cosmetic: it stops the code from asserting an intent it cannot observe, and it
+makes the resulting test a test of a geometric fact rather than of a story.
+
+### (d) Lag
+
+Known at bar `i` (the BOS bar), since it only references pivots already sealed
+before `i`. `INDUCEMENT_TAKEN` at the bar it happens.
+
+### (e) Repaint trap
+
+Selecting the inducement *after* seeing which pullback got swept. That is the
+trap that makes the concept look predictive in visual backtests: the analyst
+picks, on the chart, the pullback that was in fact taken, and the rule appears
+to have 90% accuracy. The rule above forces the choice before the outcome.
+
+### (f) Parameters — none.
+
+### (g) Measurable?
+
+**As commonly stated: Tier 3, unfalsifiable.** As the convention above:
+Tier 2, objective, and probably redundant with structure. This is a finding:
+inducement adds a word, not a variable.
+
+---
+
+## L7. Liquidity strength score
+
+There is no published score. This section is therefore **construction, not
+review** — and its most important content is a warning about how to build it.
+
+### (a) Inputs found in the wild that are actually measurable
+
+| input | measurable? | how |
+|---|---|---|
+| touch count | yes | `touches` from §L2, or count of bars whose H came within `tol` and did not close through |
+| age | yes | `i - origin_bar`, in bars of the level's own timeframe |
+| timeframe rank | yes | ordinal: M1 < M5 < M15 < H1 < D1 |
+| round-number proximity | yes | distance to nearest $10 / $5 / $1 multiple, in ATR |
+| volume at level | **partly** | XAUUSD has tick volume only; broker-dependent, not comparable across feeds |
+| "untested" | yes | `touches == 0` since creation |
+| session of origin | yes | which session the level formed in |
+| distance from price | yes | `abs(price - level)/ATR` |
+| "institutional interest" | **no** | unobservable |
+| "how obvious it looks" | **no** | subjective |
+
+### (b) Where scores go wrong
+
+Every one of these components introduces at minimum a weight and often a
+normalisation constant. Eight components with a weight and a scale each is
+**16 new parameters**, none of which has a prior, all fitted on the same data
+that produced the strategy. That is the mechanism by which the previous EA
+reached 748 parameters. A weighted score of eight weakly-informative inputs is
+not more information than the best single input — it is the same information
+plus seven degrees of freedom.
+
+### (c) Canonical definition — deliberately minimal
+
+```
+STAGE 1 (mandatory, before any score exists):
+    Test each candidate input UNIVARIATELY. For input x and outcome y
+    (e.g. did the sweep of this level reverse by >= 1R before -1R):
+        - bucket levels into quintiles of x
+        - report outcome rate per quintile with Wilson CIs
+        - report the monotonicity and the spread between Q1 and Q5
+    Discard every input whose Q1-Q5 spread CI includes zero.
+
+STAGE 2 (only if >= 2 inputs survive Stage 1):
+    LIQ_SCORE = sum over surviving inputs of  w_k * z_k
+    where z_k is the CAUSAL percentile rank of input k, computed over a
+    TRAILING window of the last PCT_WIN completed level-events only,
+    and w_k ∈ {1} unless a test justifies otherwise.
+    Equal weights are the default. Fitted weights must beat equal weights
+    out-of-sample or they are noise.
+
+STAGE 3: use LIQ_SCORE only as a GATE (top tercile vs rest), never as a
+    continuous position-size multiplier. A gate costs 1 parameter; a
+    multiplier costs a functional form.
+```
+
+### (d) Lag
+
+Score is knowable at the same bar as the level, except `touches`/`age` which
+update forward-only and must be read as of the evaluation bar.
+
+### (e) Repaint trap
+
+Percentile ranks computed over the **whole sample**. `z_k` must use a trailing
+window. This is the same class of error as `smc.py` L595 and it is extremely
+easy to commit in pandas (`df['x'].rank(pct=True)` is full-sample).
+
+### (f) Parameters
+
+| name | range | default |
+|---|---|---|
+| `PCT_WIN` | 100–2000 events | 500 |
+| `SCORE_GATE` | top 1/3, 1/2, or off | top 1/3 |
+| weights `w_k` | fixed at 1 | 1 |
+
+**2 parameters if the discipline holds. 16+ if it does not.**
+
+### (g) Measurable? Tier 2 — objective, but every design choice in it is
+arbitrary, so it must earn its existence component by component.
+
