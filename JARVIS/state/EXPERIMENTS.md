@@ -324,3 +324,39 @@ there. Requires daily history the repo does not yet hold.
   naive one only in how many hypotheses it silently tests.
 - **Status:** MEASURED, not CONFIRMED — one instrument, one 2024–2026 window.
 - **Full write-up:** `JARVIS/research/FAILURE_MODES.md` (81 failure modes).
+
+## E-019 — Move size IS predictable at entry (REPLICATED, strongest finding)
+- **Question (Veer's own diagnosis):** "we catch every mini trend... we never
+  know if they are small or massive." Is move SIZE predictable before entry?
+- **Test:** `movesize.py` — every bar, forward travel in ATR over 40 bars,
+  bucketed by decision-time features only.
+- **Result — replicated on GOLD 15m (70d) AND 1h (2.4y), near-identical:**
+
+  | condition | P(>3 ATR move) 15m | P(>3 ATR move) 1h |
+  |---|---|---|
+  | ADX 0-15 | 91% | 90% |
+  | ADX >= 40 | 68% | 66% |
+  | ATR >= 2x its median | — | **25%** |
+  | ATR 0.8-1.0x median | 93% | 83% |
+
+  Hours (15m): 04-12 UTC 89-93% · 14-16 UTC **62%**.
+  Trend efficiency was strong on 15m (+9pts) but weak on 1h (+3pts) — DROPPED.
+- **Mechanism:** volatility contraction precedes expansion. When ATR is already
+  stretched and ADX already high, the move has largely happened.
+- **This predicts SIZE, not DIRECTION.** It is a filter on when to act.
+
+## E-020 — How to USE the move-size predictor (gate beats adaptive targeting)
+- **Tested three uses** on identical donchian entries, 4 markets, full costs:
+  fixed target · gate (only trade when expansion likely) · adaptive target
+  (big target when expansion likely, small when not).
+- **Result, average expectancy across 4 markets:**
+  fixed 1R -0.029R · fixed 3R +0.029R · **gate-only +0.108R** · adaptive +0.001R
+- **My hypothesis was wrong.** Adaptive targeting sounded better and measured
+  worse than a plain fixed 3R. Gating is the right use.
+- **Best single result in the project so far:** donchian + expansion gate on
+  GOLD, **+0.605R, t=+2.9, n=85** (vs +0.198R, t=+1.6 ungated).
+- **Still does not clear the bar.** With ~100 variants now tried the luck
+  threshold is ~3.0, and t=2.9 sits just under it. Also inconsistent: US500
+  turns negative under the same gate.
+- **For the EA:** gate on compressed volatility, do NOT adapt targets, do NOT
+  use early break-even (E-008, worst exit on 4/4 markets).

@@ -92,12 +92,23 @@ maxRiskAtr= input.float(2.5, "Reject setup if stop wider than (× ATR)", minval 
 gD = "DISPLAY"
 nBoxes    = input.int(2, "Completed trade boxes to keep", minval = 0, maxval = 10, group = gD,
      tooltip = "Plus the live one. Keeps the chart clean instead of accumulating history.")
-cBull     = input.color(color.new(#00B4A6, 0),  "Buy",  inline = "c", group = gD)
-cBear     = input.color(color.new(#F0435A, 0),  "Sell", inline = "c", group = gD)
-cBsl      = input.color(color.new(#F0435A, 78), "Sell-side liq (above)", group = gD)
-cSsl      = input.color(color.new(#00B4A6, 78), "Buy-side liq (below)",  group = gD)
-cTp       = input.color(color.new(#00B4A6, 72), "TP zone", inline = "z", group = gD)
-cSl       = input.color(color.new(#F0435A, 72), "SL zone", inline = "z", group = gD)
+theme     = input.string("White / blue candles", "Palette",
+     options = ["White / blue candles", "Classic green / red", "Custom"], group = gD,
+     tooltip = "Zones are deliberately faint so white and blue candles stay the brightest thing on the chart. Only the BUY/SELL labels are fully saturated.")
+uBull     = input.color(color.new(#29B6F6, 0),  "Custom buy",  inline = "c", group = gD)
+uBear     = input.color(color.new(#FF5370, 0),  "Custom sell", inline = "c", group = gD)
+
+// One accent per side, then everything else is a transparency of that accent.
+// Keeping a single hue per side is what stops the chart turning into confetti.
+accBull = theme == "Classic green / red" ? #26A69A : theme == "Custom" ? uBull : #29B6F6
+accBear = theme == "Classic green / red" ? #EF5350 : theme == "Custom" ? uBear : #FF5370
+
+cBull   = accBull
+cBear   = accBear
+cBsl    = color.new(accBear, 86)   // sell-side liquidity sits ABOVE price
+cSsl    = color.new(accBull, 86)   // buy-side liquidity sits BELOW price
+cTp     = color.new(accBull, 88)
+cSl     = color.new(accBear, 88)
 showPanel = input.bool(true, "Show status panel", group = gD)
 
 // ──────────────────────────────── FOUNDATIONS ───────────────────────────────
@@ -185,15 +196,20 @@ extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
             isDead = array.get(dead, i)
             thick = math.min(array.get(hits, i), 3)
             if not na(ln)
+                // y must be re-set too: an equal-high merge MOVES the stored
+                // price, and without this the line drifts away from its own
+                // zone and the chart looks broken.
+                line.set_y1(ln, p)
+                line.set_y2(ln, p)
                 line.set_x2(ln, bar_index + 3)
-                line.set_color(ln, isDead ? color.new(color.gray, 82) : (isHigh ? cBsl : cSsl))
+                line.set_color(ln, isDead ? color.new(color.gray, 88) : color.new(isHigh ? accBear : accBull, 45))
                 line.set_width(ln, isDead ? 1 : thick)
             if not na(bx)
-                zh = 0.10 * atr * thick
+                zh = 0.07 * atr * thick
                 box.set_top(bx, p + (isHigh ? zh : 0))
                 box.set_bottom(bx, p - (isHigh ? 0 : zh))
                 box.set_right(bx, bar_index + 3)
-                box.set_bgcolor(bx, isDead ? color.new(color.gray, 92) : (isHigh ? cBsl : cSsl))
+                box.set_bgcolor(bx, isDead ? color.new(color.gray, 95) : (isHigh ? cBsl : cSsl))
     0
 extend(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, true)
 extend(loPx, loBar, loHits, loDead, loLn, loBx, false)
@@ -337,8 +353,8 @@ cell(int r, string k, string v, color c) =>
     table.cell(panel, 1, r, v, text_size = size.small, text_halign = text.align_right,
          text_color = c, bgcolor = color.new(chart.bg_color, 10))
 
-okc = color.new(#00B4A6, 0)
-bad = color.new(#F0435A, 0)
+okc = accBull
+bad = accBear
 
 if showPanel and barstate.islast
     cell(0, "Mode", isCont ? "CONTINUATION" : "reversal", isCont ? okc : bad)
