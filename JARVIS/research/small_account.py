@@ -25,6 +25,7 @@ import os, sys, random, statistics as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
+import study
 from engine import Costs
 import strategies as S
 
@@ -37,7 +38,8 @@ def trades_for(sym, tf):
          else None
     if fn is None:
         return [], 0.0
-    tr = engine.backtest(s, fn, Costs(), warmup=300, max_bars=50)
+    tr = engine.backtest(s, fn, study.COSTS.get(sym, Costs()),
+                         warmup=300, max_bars=50)
     days = (s.ts[-1] - s.ts[0]) / 86400.0
     return tr, (len(tr) / days if days else 0.0)
 

@@ -130,9 +130,10 @@ emaLen     = input.int(50, "   trend line length", minval = 5, maxval = 400, gro
 emaTol     = input.float(0.30, "   how close to it counts (× ATR)", minval = 0.05, step = 0.05, group = gB)
 
 useBreakout = input.bool(true, "BREAKOUT setups (quiet range, then it goes)", group = gB,
-     tooltip = "Price compresses into a tight range and then leaves it. Catches the start of a move rather than a level being hit, so it fires in places the level-based setups have nothing to say about.")
+     tooltip = "Price compresses into a tight range and then leaves it. HONEST NOTE: measured on 15m and 1h across gold, US500, EURUSD and GBPUSD, this setup did not hold out-of-sample on ANY of the eight - it is here for signal count, not because the evidence supports it. Watch what it does in your own record before sizing up on it.")
 boxLen      = input.int(20, "   range length (bars)", minval = 5, maxval = 100, group = gB)
-boxTight    = input.float(1.2, "   range must be tighter than (× ATR)", minval = 0.3, step = 0.1, group = gB)
+boxTight    = input.float(3.0, "   range must be tighter than (× ATR)", minval = 0.5, step = 0.1, group = gB,
+     tooltip = "3.0 because 1.2 was IMPOSSIBLE. A 20-bar high-low range is never as small as 1.2 x ATR(14) - measured across 41,000 bars of gold, US500 and EURUSD, the smallest ever seen was 1.27 and ZERO bars qualified. The setup could not fire at all. At 3.0 roughly 11-14% of bars qualify, which is what a genuinely quiet range looks like.")
 
 gS = "SWEEP + ENTRY"
 mode      = input.string("Continuation (tested)", "Trade direction",

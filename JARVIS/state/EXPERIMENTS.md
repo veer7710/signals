@@ -686,3 +686,55 @@ After 23 experiments and ~700 configuration tests:
 - **Variants tested in this experiment: 8** (one configuration — the EA's
   defaults — on 8 market/timeframe pairs). No parameter was searched here, but
   E-012's ~780-config history still applies to the data.
+
+---
+
+## E-031 — The seven setup types, measured one at a time
+`python3 JARVIS/research/smc_setups.py`. Each setup implemented as the Pine
+implements it, next-bar fills, first touch, ties lose, per-symbol costs,
+chronological 70/30 split, OOS run once. 8 market/timeframe pairs.
+
+Count of pairs where a setup was positive in BOTH halves:
+
+| setup | held | best OOS |
+|---|---|---|
+| ORDER BLOCK | 2 / 8 | +0.271R (GOLD 15m), +0.262R (US500 1h) |
+| GAP FILL | 2 / 8 | +0.157R (GOLD 1h, t +1.11) |
+| GAP FILL + structure bias | 2 / 8 | +0.036R |
+| PULLBACK | 1 / 8 | +0.096R (GOLD 15m) |
+| DISCOUNT/PREMIUM | 1 / 8 | +0.375R (US500 15m) |
+| BREAKOUT | 0 / 8 | held nowhere |
+
+**Verdict: UNPROVEN, all of them.** The highest out-of-sample t observed is
++1.35 against a multiple-testing threshold of about t = 3.65. Nothing here is
+evidence of an edge; the ranking is only useful for deciding what to leave
+switched on.
+
+Gold is the only market where anything survived both halves twice. Both FX
+pairs are negative nearly everywhere, GBPUSD strongly so (IS t as low as
+-4.99), which is consistent with these setups simply not working on FX.
+
+## E-032 — The BREAKOUT setting shipped in the Pine could never fire
+`boxTight` defaulted to 1.2, meaning a 20-bar high-low range had to be smaller
+than 1.2 x ATR(14). Measured across ~41,000 bars of GOLD 15m/1h and EURUSD 15m:
+
+    smallest 20-bar range / ATR ever observed : 1.27
+    fraction of bars <= 1.2 x ATR             : 0.000%
+    fraction of bars <= 3.0 x ATR             : 11.0 - 13.7%
+
+**ZERO bars could satisfy it.** The setup was dead code in a shipped file, and
+it was reported to Veer as a working source of extra signals. Default corrected
+to 3.0. Found by measuring the setup rather than by reading it - the code was
+correct, the constant was impossible.
+
+## E-033 — Three research scripts were charging GOLD costs to FX
+`smc_setups.py`, `pointscale.py` and `small_account.py` used the bare
+`engine.Costs()` default, which is gold-shaped: a 0.30 spread in PRICE units.
+Applied to EURUSD that is roughly 3000 pips per trade, so every FX row those
+scripts produced was an artefact of the cost model rather than a fact about the
+strategy - EURUSD 15m showed -2.34R per trade with t = -5276 before the fix.
+`study.COSTS` already held correct per-symbol values and the other scripts were
+using it. All three now do.
+
+The GOLD rows were unaffected (the default IS gold), so the stop/target sweep
+conclusion in E-030 stands: DID NOT HOLD on any of the 8 pairs, on correct costs.

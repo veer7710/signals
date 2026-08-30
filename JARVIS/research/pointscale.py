@@ -35,8 +35,16 @@ import os, sys, statistics as st
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
+import study
 from engine import Costs
 import strategies as S
+
+
+def costs_for(sym):
+    """The default Costs() is GOLD-shaped. Using it on EURUSD charges a 0.30
+    spread in price units - about 3000 pips - so every FX row it produced was
+    an artefact of the cost model, not a fact about the strategy."""
+    return study.COSTS.get(sym, engine.Costs())
 
 
 def scan(s, dir_fn, stop_atr=1.5, max_bars=50, warmup=250):
@@ -127,7 +135,7 @@ def report(sym, tf, stop_atr=1.5):
 
     # Does a small fixed target actually pay once the spread is charged?
     # Every trade that does not reach the target is assumed to lose the stop.
-    c = Costs()
+    c = costs_for(sym)
     cost = c.spread + 2 * c.slippage
     print(f"\n  FIXED POINT TARGET, net of {cost:.2f} pts round-trip cost:")
     print(f"     {'target':>7} {'win%':>7} {'exp/trade':>11} {'per day':>9}")
@@ -190,7 +198,7 @@ def expectancy(sig, tgt_atr, cost):
 def sweep(sym, tf):
     s = engine.load(sym, tf)
     ins, oos = split(s)
-    c = Costs(); cost = c.spread + 2 * c.slippage
+    c = costs_for(sym); cost = c.spread + 2 * c.slippage
 
     stops = [0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 3.0]
     tgts  = [0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0]
