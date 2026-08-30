@@ -389,3 +389,30 @@ there. Requires daily history the repo does not yet hold.
   gating on it improves a traded system.
 - **Value of this run:** it prevented an EA being built on a configuration that
   looked best on every in-sample metric and is negative on unseen data.
+
+## E-022 — LeBaron compression-trend effect (DOES NOT REPLICATE — idea closed)
+- **Hypothesis** (from `findings/09_strategy_hunt.md`, ranked #1): Kurth/Eisler/
+  Rej/Bouchaud 2026 find futures trend PnL keeps accruing in LOW volatility
+  even after the post-2008 break. If true here, the flat Donchian result would
+  be a diluted signal rather than no signal.
+- **Method:** `volregime.py`. Take EVERY trade, then partition by the volatility
+  tercile it OPENED in. Terciles computed from the in-sample half ONLY, so the
+  out-of-sample test never sees a boundary derived from its own data. This is a
+  partition of outcomes, not a fitted filter, so it cannot overfit like E-021.
+- **Result — donchian_trend, 1h, 4 markets:**
+
+  | regime | IS n | IS exp | OOS n | OOS exp |
+  |---|---|---|---|---|
+  | low vol | 115 | -0.039R | 41 | **-0.133R** |
+  | mid vol | 219 | **+0.197R** | 85 | -0.044R |
+  | high vol | 402 | -0.029R | 186 | -0.015R |
+
+- **Conclusion: NO low-volatility advantage.** Low vol was NEGATIVE in both
+  halves and worse out-of-sample than high vol. The only positive cell (mid
+  vol, in-sample) went negative out-of-sample — the same in-sample-fitting
+  pattern as E-021.
+- **Idea CLOSED.** The published effect is on large-tick futures contracts;
+  XAUUSD CFD is not one, which the source paper itself flags as the boundary
+  condition. Do not revisit without different instruments.
+- **Cost of this test: one script, zero AI usage for the compute.** This is the
+  intended pattern — falsify cheaply and move on.
