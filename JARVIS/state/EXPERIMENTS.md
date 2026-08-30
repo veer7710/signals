@@ -451,3 +451,35 @@ After 23 experiments and ~700 configuration tests:
 - **The single biggest blocker is still DATA.** M1/M5 do not exist in this repo,
   which blocks the M1 sniper model, the intraday-momentum retest (E-023), and
   any honest test of the scalping layer.
+
+## E-025 — BOUNCE setups: many more entries, no edge (BUILT + MEASURED)
+- **The gap Veer identified, correctly:** the indicator only signalled on
+  BREAKS of a level. Price coming to support/resistance and HOLDING it — the
+  "predictable buys and sells" — was never implemented. That is a whole setup
+  class, and it was the largest source of missed entries.
+- **Built:** bounce detection (level tested within tolerance, closed on the
+  correct side, with a rejection wick) plus multi-scale pivots at 3 lengths so
+  scalp-sized levels appear alongside structural ones.
+- **Frequency achieved:** GOLD 1h goes from ~2,238 sweep events to **7,449
+  bounce setups** — roughly 12/day, the order of magnitude Veer describes.
+- **Edge measured (stop 1 ATR, target 2R, first-touch, ties lose;
+  break-even at 2R is 33.3%):**
+
+  | market | setups | win rate | vs break-even |
+  |---|---|---|---|
+  | GOLD 15m | 2,191 | 30.7% | **-2.6** |
+  | GOLD 1h | 7,449 | 30.5% | **-2.9** |
+  | US500 1h | 6,773 | 33.7% | +0.3 |
+  | EURUSD 1h | 9,157 | 33.0% | -0.3 |
+  | GBPUSD 1h | 9,568 | 33.4% | +0.1 |
+
+- **Conclusion: bounce setups are AT break-even before costs, so they LOSE
+  after them.** More entries were delivered; extra edge was not.
+- **The finding that matters more:** at a 2R target these win ~31-33%, NOT a
+  "fat majority". A fat majority going green implies a SMALL target and a wide
+  stop — which is the 0.53 R:R geometry that made the old EA lose while winning
+  70% of trades. High win rate and losing money are the same phenomenon.
+- **Recorded arithmetic:** break-even win rate is 1/(1+R:R). At 0.5 R:R you
+  need 66.7%; at 2R you need 33.3%. And GBP50/day on a $10k account at 0.5%
+  risk is 1.0R PER DAY, every day, against a best measured expectancy of
+  ~+0.04R per trade.
