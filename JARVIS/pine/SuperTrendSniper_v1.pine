@@ -95,11 +95,25 @@ trackFrom  = input.string("My real entry", "Track profit from",
      tooltip = "Signal price shows the trade the indicator would have got. My real entry shows the trade YOU would have got. They are not the same and the difference is worth looking at.")
 riskMoney  = input.float(0.0, "Size positions for this much risk (0 = off)", minval = 0, step = 5, group = gT,
      tooltip = "Enter what you are willing to lose on one trade and the panel tells you the lot size for the CURRENT setup's stop distance, instead of you doing it on a calculator while the entry runs away.")
-showHist   = input.int(10, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
+showHist   = input.int(15, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
      tooltip = "Past position boxes stay on the chart, drained of colour, so you can see how the last N setups actually played out. The record table shows up to 11 of them.")
 showTable  = input.bool(true, "Show trade record table", group = gT)
 maxTrades  = input.int(1, "Max concurrent trades", minval = 1, maxval = 4, group = gT,
      tooltip = "1 matches the EA, which holds one position at a time. Raise it only if you intend to trade differently from the EA.")
+
+gV = "CLOSE ON A REVERSAL"
+useRevExit = input.bool(true, "Close when the trend turns against the trade", group = gV,
+     tooltip = "You asked for this: take the profit when a reversal shows up rather than riding it back to the stop. A trade is closed the moment the signal that justified it flips the other way. Marked REV.")
+revMinR    = input.float(0.0, "   only once the trade is this far in profit (R)", step = 0.1, group = gV,
+     tooltip = "0 closes on any reversal while not losing. Set it NEGATIVE (e.g. -0.5) to also cut a losing trade early when the trend turns - that stops you paying the full stop on a trade that is already wrong.")
+
+gN = "ENTRY QUALITY  (better fills, less drawdown)"
+usePull  = input.bool(false, "Wait for a pullback instead of chasing", group = gN,
+     tooltip = "Market entry takes the next open, which after a displacement candle is often the worst price of the move - that is where the immediate drawdown comes from. This instead waits for price to come BACK a little and fills there. You get a tighter entry and a smaller stop. You will also MISS the setups that never pull back, and some of those are the biggest ones. It is a genuine trade-off, which is why it is off by default.")
+pullAtr  = input.float(0.30, "   pull back by (× ATR)", minval = 0.05, step = 0.05, group = gN)
+pullBars = input.int(3, "   give it this many bars", minval = 1, maxval = 20, group = gN)
+maxChase = input.float(0.50, "Skip if price already ran this far (× risk)", minval = 0.1, step = 0.1, group = gN,
+     tooltip = "THE SLOW-CHART PROTECTION. TradingView can be late, you can be looking away, the alert can arrive after the move. If price has already travelled this much of your risk in the signal's direction before you get filled, the trade is no longer the trade you were shown - the reward is smaller and the stop is further away. It is marked MISSED instead of taken. This is the single best defence against entering late.")
 
 gD = "DISPLAY"
 showBoxes  = input.bool(true, "Position boxes (target above, stop below)", group = gD)
@@ -243,25 +257,47 @@ if barstate.isconfirmed and (goLong or goShort) and sigRisk > 0
     firedLong  := goLong
     firedShort := goShort
 
-// ---- fill anything whose delay has elapsed, at THIS bar's open
+// ---- FILLS.
+// Two things are modelled here that a normal indicator ignores, and both of
+// them are about the gap between seeing a signal and having a position:
+//   1. a pullback entry only fills if price actually TRADES to your price
+//   2. a signal price has already run away from is not the trade you were
+//      shown, so it is marked MISSED rather than quietly taken at a worse price
 var float lastSlip = na
+var int   nMissed  = 0
+var float lastMiss = na
 if array.size(pdDir) > 0
     for q = array.size(pdDir) - 1 to 0
         aged = bar_index - array.get(pdBar, q)
+        d2   = array.get(pdDir,  q)
+        rk   = array.get(pdRisk, q)
+        sig  = array.get(pdSig,  q)
+        want = sig - d2 * pullAtr * atr     // the pullback price, if used
+
+        float fill = na
         if aged >= entryDelay and array.size(trDir) < maxTrades
-            d2  = array.get(pdDir,  q)
-            rk  = array.get(pdRisk, q)
-            sig = array.get(pdSig,  q)
-            // the first price actually obtainable after you saw the signal
-            fill = trackFrom == "Signal price" ? sig : open
-            lastSlip := (sig - fill) * d2          // + means the delay cost you
+            if usePull
+                // a resting limit fills only if the bar reaches it, and it
+                // fills AT the limit, not at the bar's open
+                if d2 > 0 ? low <= want : high >= want
+                    fill := want
+            else
+                fill := trackFrom == "Signal price" ? sig : open
+
+        // how far the market has already gone your way before you got on
+        chase   = (open - sig) * d2
+        tooLate = chase > maxChase * rk
+
+        if not na(fill) and not tooLate
+            lastSlip := (sig - fill) * d2       // + means the delay cost you
             openTrade(d2, fill, fill - d2 * rk, fill + d2 * targetR * rk)
             array.remove(pdDir, q)
             array.remove(pdBar, q)
             array.remove(pdRisk, q)
             array.remove(pdSig, q)
-        else if aged > entryDelay + 3
-            // the setup went stale before a slot opened; do not enter it late
+        else if tooLate or aged > entryDelay + (usePull ? pullBars : 3)
+            nMissed  += 1
+            lastMiss := chase
             array.remove(pdDir, q)
             array.remove(pdBar, q)
             array.remove(pdRisk, q)
@@ -318,6 +354,11 @@ if array.size(trDir) > 0
         hitStp = d > 0 ? low  <= eStop : high >= eStop
         hitTp  = d > 0 ? high >= tp    : low  <= tp
         hitTim = useTime and held >= maxHold
+        // ---- REVERSAL. The SuperTrend flipping against an open trade is the
+        // signal that justified the trade being withdrawn. Riding that back to
+        // the stop is the give-back this whole file exists to stop.
+        hitRev = useRevExit and rNow >= revMinR
+                 and (d > 0 ? stDir == 1 : stDir == -1)
 
         // ---- GAPS ARE FILLED AT THE GAP, NOT AT THE STOP.
         // If the bar OPENS beyond the stop - a rollover, a Sunday reopen, an
@@ -328,8 +369,8 @@ if array.size(trDir) > 0
         stopFill = d > 0 ? math.min(eStop, open) : math.max(eStop, open)
         exPx  = hitStp ? stopFill : hitTp ? tp : close
         exWhy = hitStp ? (byTrl ? "TRL" : (useBE and eStop == en ? "BE" : "SL"))
-                 : hitTp ? "TP" : "TIME"
-        gone  = hitStp or hitTp or hitTim
+                 : hitTp ? "TP" : hitRev ? "REV" : "TIME"
+        gone  = hitStp or hitTp or hitRev or hitTim
 
         // ---- PEAK. The best this trade was ever worth, in R.
         // Capped at the exit on the bar it dies. Without that cap a long that
@@ -375,8 +416,12 @@ if array.size(trDir) > 0
             lastExit := exWhy
             rFinal = risk > 0 ? (exPx - en) * d / risk : 0.0
             won    = rFinal >= 0
+            // the money is on the mark itself, so every past position on the
+            // chart shows what it actually made without opening the table
+            exMoney = (exPx - en) * d * ccyPerPt * (lotSize / 0.01)
             label.new(bar_index, exPx,
-                 exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy,
+                 (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy) + "  "
+                 + (exMoney >= 0 ? "+" : "") + str.tostring(exMoney, "#.##"),
                  style = d > 0 ? label.style_label_up : label.style_label_down,
                  color = color.new(color.white, 100),
                  textcolor = won ? accBull : accBear, size = size.small)

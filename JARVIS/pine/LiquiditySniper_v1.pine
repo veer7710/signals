@@ -63,6 +63,17 @@ lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, grou
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
 
+gH = "LEVELS FROM FURTHER BACK  (works on any chart timeframe)"
+useHtf = input.bool(true, "Pull levels from higher timeframes", group = gH,
+     tooltip = "Price reacts to levels from a day ago and from three days ago, not only to what is visible on an M1 chart. These are read from the higher timeframes directly, so scalping M1 still shows you the M15, H1 and H4 levels that actually matter - and a level from last week does not vanish because the M1 chart has moved on.")
+htf1 = input.timeframe("15",  "   timeframe 1", group = gH)
+htf2 = input.timeframe("60",  "   timeframe 2", group = gH)
+htf3 = input.timeframe("240", "   timeframe 3", group = gH)
+htfPiv = input.int(5, "   swing size on those timeframes", minval = 2, maxval = 20, group = gH)
+useWeek = input.bool(true, "Previous week high / low", group = gH)
+stickyKeep = input.bool(true, "Never let micro-levels push these off the chart", group = gH,
+     tooltip = "On M1 a 2-bar pivot arrives every few minutes. Without this they fill the level list and evict the daily, weekly and higher-timeframe levels within an hour or two - exactly the levels you most want to keep. With it on, an ordinary level is always discarded before a structural one.")
+
 gZ = "ZONE MEMORY  (what this level did the LAST times price came here)"
 useZoneMem = input.bool(true, "Remember how each zone behaved before", group = gZ,
      tooltip = "A level that has held three times is not the same trade as a level that has been sliced through twice, and without this the indicator treats them identically. Every time price visits a zone the reaction is recorded, so the next visit comes with a history.")
@@ -141,7 +152,7 @@ ccyPerPt   = input.float(1.00, "Account currency per 1.0 price move, per 0.01 lo
 entryDelay = input.int(1, "Bars between signal and your actual entry", minval = 0, maxval = 10, group = gT,
      tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you enter. Set this to how many bars that realistically takes you. Everything tracked - entry price, P/L, the whole record - uses THAT price, not the signal price. At 0 the numbers flatter you.")
 trackFrom  = input.string("My real entry", "Track profit from", options = ["My real entry", "Signal price"], group = gT)
-showHist   = input.int(10, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
+showHist   = input.int(15, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
      tooltip = "Past position boxes stay on the chart, drained of colour, so you can see how the last N setups actually played out instead of only the live one. The record table below shows up to 11 of them.")
 showTable  = input.bool(true, "Show trade record table", group = gT)
 
@@ -153,6 +164,12 @@ useTimeExit  = input.bool(true, "Close a trade that stalls", group = gE,
 maxHoldBars  = input.int(40, "   stalled after (bars)", minval = 5, maxval = 300, group = gE)
 useFlipExit  = input.bool(false, "Close on an opposite signal", group = gE,
      tooltip = "If a fresh signal fires the other way, the reason you are in the trade has gone. Off by default: on a choppy chart this closes good trades early. Marked FLIP.")
+
+gV = "CLOSE ON A REVERSAL"
+useRevExit = input.bool(true, "Close when the trend turns against the trade", group = gV,
+     tooltip = "You asked for this: take the profit when a reversal shows up rather than riding it back to the stop. A trade is closed the moment the signal that justified it flips the other way. Marked REV.")
+revMinR    = input.float(0.0, "   only once the trade is this far in profit (R)", step = 0.1, group = gV,
+     tooltip = "0 closes on any reversal while not losing. Set it NEGATIVE (e.g. -0.5) to also cut a losing trade early when the trend turns - that stops you paying the full stop on a trade that is already wrong.")
 
 gD = "DISPLAY"
 showTrail = input.bool(true, "Show trail guide once trade is in profit", group = gD,
@@ -250,6 +267,7 @@ var array<int>   hiHits = array.new_int()
 var array<bool>  hiDead = array.new_bool()
 var array<line>  hiLn   = array.new_line()
 var array<box>   hiBx   = array.new_box()
+var array<bool>  hiStk  = array.new_bool()
 
 var array<float> loPx   = array.new_float()
 var array<int>   loBar  = array.new_int()
@@ -257,6 +275,7 @@ var array<int>   loHits = array.new_int()
 var array<bool>  loDead = array.new_bool()
 var array<line>  loLn   = array.new_line()
 var array<box>   loBx   = array.new_box()
+var array<bool>  loStk  = array.new_bool()
 
 // ───────────────── ZONE MEMORY — how this level behaved before ──────────────
 // The question: when price comes back to a zone, what did it DO the last times
@@ -336,7 +355,8 @@ touchScan(array<float> px, array<bool> dead, bool isHigh) =>
     0
 
 addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
-         array<line> lns, array<box> bxs, float p, int b, bool isHigh) =>
+         array<line> lns, array<box> bxs, array<bool> stk,
+         float p, int b, bool isHigh, bool sticky) =>
     // merge into an existing near-equal level: equal highs/lows hold MORE
     // resting orders than a lone extreme, so they are strengthened not doubled
     merged = false
@@ -352,6 +372,7 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
         array.push(bar, b)
         array.push(hits, 1)
         array.push(dead, false)
+        array.push(stk, sticky)
         ln = line.new(b, p, bar_index + 3, p, style = line.style_dotted, width = 1,
              color = showLvls ? (isHigh ? cBsl : cSsl) : HIDDEN)
         bx = box.new(b, p, bar_index + 3, p, border_color = na,
@@ -365,7 +386,11 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
         // array. Retiring by age keeps the structural levels alive.
         if array.size(px) > 0
             for j = array.size(px) - 1 to 0
-                if bar_index - array.get(bar, j) > lvlMaxAge
+                // sticky levels are exempt: a weekly high is registered at the
+                // bar we LEARN it, so ageing it out on an M1 chart would
+                // discard it after a few hours - the exact opposite of the
+                // point of keeping levels that reach back days.
+                if not array.get(stk, j) and bar_index - array.get(bar, j) > lvlMaxAge
                     l1 = array.get(lns, j)
                     b1 = array.get(bxs, j)
                     if not na(l1)
@@ -378,49 +403,128 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
                     array.remove(dead, j)
                     array.remove(lns, j)
                     array.remove(bxs, j)
+                    array.remove(stk, j)
 
-        // evict the oldest once past the cap, so the chart never accumulates
+        // Evict past the cap - but drop the oldest ORDINARY level first. A
+        // daily, weekly or higher-timeframe level is marked sticky and is only
+        // discarded when nothing else is left, so the M1 pivot churn cannot
+        // push the levels that matter off the chart.
         while array.size(px) > maxLevels
-            l0 = array.shift(lns)
-            b0 = array.shift(bxs)
+            victim = 0
+            if stickyKeep
+                victim := -1
+                for j = 0 to array.size(px) - 1
+                    if victim == -1 and not array.get(stk, j)
+                        victim := j
+                if victim == -1
+                    victim := 0        // all sticky: fall back to the oldest
+            l0 = array.get(lns, victim)
+            b0 = array.get(bxs, victim)
             if not na(l0)
                 line.delete(l0)
             if not na(b0)
                 box.delete(b0)
-            array.shift(px)
-            array.shift(bar)
-            array.shift(hits)
-            array.shift(dead)
+            array.remove(px, victim)
+            array.remove(bar, victim)
+            array.remove(hits, victim)
+            array.remove(dead, victim)
+            array.remove(lns, victim)
+            array.remove(bxs, victim)
+            array.remove(stk, victim)
     merged
 
 if not na(ph)
-    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, ph, pivotBar, true)
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, ph, pivotBar, true, false)
 if not na(pl)
-    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pl, pivotBar, false)
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, pl, pivotBar, false, false)
 if not na(ph2)
-    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, ph2, pivotBar2, true)
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, ph2, pivotBar2, true, false)
 if not na(pl2)
-    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pl2, pivotBar2, false)
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, pl2, pivotBar2, false, false)
 if not na(ph3)
-    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, ph3, pivotBar3, true)
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, ph3, pivotBar3, true, false)
 if not na(pl3)
-    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pl3, pivotBar3, false)
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, pl3, pivotBar3, false, false)
 
 // previous day — registered once per new value, not once per bar
 var float lastPdh = na
 var float lastPdl = na
 if useDaily and not na(pdh) and pdh != lastPdh
     lastPdh := pdh
-    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, pdh, bar_index, true)
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, pdh, bar_index, true, true)
 if useDaily and not na(pdl) and pdl != lastPdl
     lastPdl := pdl
-    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pdl, bar_index, false)
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, pdl, bar_index, false, true)
 
 // session extremes — registered when the session rolls over
 if useSessH and newSess and not na(sHi[1])
-    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, sHi[1], bar_index, true)
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, sHi[1], bar_index, true, true)
 if useSessH and newSess and not na(sLo[1])
-    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, sLo[1], bar_index, false)
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, sLo[1], bar_index, false, true)
+
+// ─────────────── LEVELS FROM HIGHER TIMEFRAMES AND FURTHER BACK ─────────────
+// Read from the higher timeframe directly, so an M1 chart still carries the
+// M15/H1/H4 swings and last week's extremes. The [1] on the pivot plus
+// lookahead_off means each value is only delivered once its HTF bar has
+// closed - nothing here can repaint.
+//
+// A timeframe LOWER than the chart is skipped rather than requested: asking a
+// 4H chart for M15 pivots returns values the chart cannot represent, and would
+// silently litter it with levels that mean nothing at that scale. This is what
+// makes the same settings usable on M1 and on H4.
+htfOk(string tf) =>
+    useHtf and timeframe.in_seconds(tf) > timeframe.in_seconds(timeframe.period)
+
+htfHi(string tf) =>
+    htfOk(tf) ? request.security(syminfo.tickerid, tf,
+         ta.pivothigh(high, htfPiv, htfPiv)[1], lookahead = barmerge.lookahead_off) : na
+htfLo(string tf) =>
+    htfOk(tf) ? request.security(syminfo.tickerid, tf,
+         ta.pivotlow(low, htfPiv, htfPiv)[1], lookahead = barmerge.lookahead_off) : na
+
+addHtf(float hp, float lp) =>
+    if not na(hp)
+        addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, hp, bar_index, true, true)
+    if not na(lp)
+        addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, lp, bar_index, false, true)
+    0
+
+h1h = htfHi(htf1)
+h1l = htfLo(htf1)
+h2h = htfHi(htf2)
+h2l = htfLo(htf2)
+h3h = htfHi(htf3)
+h3l = htfLo(htf3)
+
+// Register only when the value CHANGES. Without this every bar would re-add
+// the same level, and addLevel's merge would just keep bumping its hit count,
+// making a stale level look like the most retested price on the chart.
+var float p1h = na
+var float p1l = na
+var float p2h = na
+var float p2l = na
+var float p3h = na
+var float p3l = na
+if h1h != p1h or h1l != p1l
+    p1h := h1h
+    p1l := h1l
+    addHtf(h1h, h1l)
+if h2h != p2h or h2l != p2l
+    p2h := h2h
+    p2l := h2l
+    addHtf(h2h, h2l)
+if h3h != p3h or h3l != p3l
+    p3h := h3h
+    p3l := h3l
+    addHtf(h3h, h3l)
+
+// previous WEEK high and low - the levels price still respects days later
+pwh = useWeek ? request.security(syminfo.tickerid, "W", high[1], lookahead = barmerge.lookahead_off) : na
+pwl = useWeek ? request.security(syminfo.tickerid, "W", low[1],  lookahead = barmerge.lookahead_off) : na
+var float lastPwh = na
+if not na(pwh) and pwh != lastPwh
+    lastPwh := pwh
+    addHtf(pwh, pwl)
 
 // round numbers near price
 var float lastRound = na
@@ -429,8 +533,8 @@ if useRound and roundStep > 0
     rDn = math.floor(close / roundStep) * roundStep
     if rUp != lastRound
         lastRound := rUp
-        addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, rUp, bar_index, true)
-        addLevel(loPx, loBar, loHits, loDead, loLn, loBx, rDn, bar_index, false)
+        addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, hiStk, rUp, bar_index, true, false)
+        addLevel(loPx, loBar, loHits, loDead, loLn, loBx, loStk, rDn, bar_index, false, false)
 
 // keep live level drawings anchored to the right edge, fade the dead ones
 extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
@@ -875,6 +979,11 @@ if array.size(trDir) > 0
         hitTp  = d > 0 ? high >= tp    : low  <= tp
         hitFlp = useFlipExit and (d > 0 ? firedShort : firedLong)
         hitTim = useTimeExit and held >= maxHoldBars
+        // ---- REVERSAL. Price closing back through the level the setup was
+        // built on means the reason for the trade is gone. Riding that back to
+        // the stop is the give-back, and it is avoidable.
+        revBar = d > 0 ? (close < open and close < low[1]) : (close > open and close > high[1])
+        hitRev = useRevExit and rNow >= revMinR and revBar
 
         // ---- A GAP IS FILLED AT THE GAP, NOT AT THE STOP. If the bar OPENS
         // beyond the stop, the broker fills there. Booking it at the stop
@@ -882,8 +991,9 @@ if array.size(trDir) > 0
         // through the target is still booked at the target.
         stopFill = d > 0 ? math.min(eStop, open) : math.max(eStop, open)
         exPx  = hitStp ? stopFill : hitTp ? tp : close
-        exWhy = hitStp ? (byTrl ? "TRL" : "SL") : hitTp ? "TP" : hitFlp ? "FLIP" : "TIME"
-        gone  = hitStp or hitTp or hitFlp or hitTim
+        exWhy = hitStp ? (byTrl ? "TRL" : "SL") : hitTp ? "TP"
+                 : hitFlp ? "FLIP" : hitRev ? "REV" : "TIME"
+        gone  = hitStp or hitTp or hitFlp or hitRev or hitTim
 
         // ---- PEAK, capped at the exit on the bar the trade dies. Without the
         // cap, a long stopped out at a bar's low that then rallied was credited
@@ -928,8 +1038,12 @@ if array.size(trDir) > 0
             lastExit := exWhy
             rFinal = risk > 0 ? (exPx - en) * d / risk : 0.0
             won    = rFinal >= 0
+            // money on the mark itself, so every past position shows what it
+            // made without opening the table
+            exMoney = (exPx - en) * d * ccyPerPt * (lotSize / 0.01)
             label.new(bar_index, exPx,
-                 exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy,
+                 (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy) + "  "
+                 + (exMoney >= 0 ? "+" : "") + str.tostring(exMoney, "#.##"),
                  style = d > 0 ? label.style_label_up : label.style_label_down,
                  color = color.new(color.white, 100),
                  textcolor = won ? accBull : accBear, size = size.small)
