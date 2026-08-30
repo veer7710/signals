@@ -66,3 +66,31 @@ was produced by the main session.
 `JARVIS/MASTER_REPORT.md` and `JARVIS/TOMORROW.md` written. 4 commits ready.
 **Push still blocked (403)** — the Claude GitHub App is not installed for
 `veer7710/signals`. This is the top blocker; the container is ephemeral.
+
+
+---
+# UPDATE — Pine indicator + automated search session
+
+## Built
+- `JARVIS/pine/LiquiditySniper_v1.pine` (v1.2, 525 lines, 39 inputs) — live on
+  Veer's charts and compiling. Encodes the continuation finding, the expansion
+  filter as an adjustable preset rather than a hard gate, retest confirmation,
+  multi-trade concurrency, and prior-day/session/round-number liquidity.
+- `JARVIS/research/autosearch.py` — the zero-AI-cost search engine. 672 tests in
+  40 seconds. Chronological 70/30 split, out-of-sample run once, multiple-testing
+  correction stated. THIS IS THE USAGE-CONSERVATION ANSWER: the model picks the
+  search space once, local Python does the grinding.
+- `JARVIS/research/sweeps.py`, `sweep_study.py`, `movesize.py`, `volregime.py`,
+  `intraday_momentum.py` — all runnable locally at no usage cost.
+
+## Bugs I made and caught (all before they reached a result)
+- MFE/MAE measured independently reported "75% reached 1R" while 85% stopped
+  out. Fixed to first-touch, ties lose. Honest figure 44.5%.
+- Momentum comparison run with the fade direction, concluding sweeps were worse
+  than momentum. Would have killed a real finding.
+- Pine: ta.dmi returns [+DI,-DI,ADX] and the ADX variable was reading +DI.
+- Pine: merged equal-high levels moved their price but the line never followed.
+- Pine: line(na) is not a valid constructor.
+
+## What the next session should NOT redo
+E-001, E-002, E-017 (fade), E-022 (LeBaron), lead-lag. All closed with evidence.

@@ -416,3 +416,38 @@ there. Requires daily history the repo does not yet hold.
   condition. Do not revisit without different instruments.
 - **Cost of this test: one script, zero AI usage for the compute.** This is the
   intended pattern — falsify cheaply and move on.
+
+## E-023 — Intraday momentum (VALIDATION FAILED — result correctly refused)
+- **Hypothesis** (strategy hunt #2): Gao/Han/Li/Zhou JFE 2018 — the first
+  half-hour of the session predicts the last half-hour. Pre-registered
+  prediction: POSITIVE correlation.
+- **Design feature that mattered:** US500 was set as a VALIDATION GATE, because
+  that is where the effect is published. If it fails there, the implementation
+  or the data granularity is wrong and no other market's number can be trusted.
+- **Result — validation failed:** US500 NY session IS corr +0.066 (t +1.34),
+  OOS **-0.026**. US500 EU session negative in both halves.
+- **THE FLUKE THIS CAUGHT:** GOLD full-day showed IS corr **+0.129, t=+2.71** —
+  which crosses a naive significance threshold — and OOS **-0.022**. Without the
+  validation gate and the IS/OOS split this would have been reported as a
+  finding. It is noise.
+- **Most likely cause:** 1h bars are too coarse. The paper uses 30-minute bars;
+  the first HOUR is not the first half-hour. This is a data-granularity
+  problem, not a refutation of the published effect.
+- **Status: UNTESTABLE on current data, not disproven.** Re-run on M15/M5 once
+  the MT5 export provides them. Until then it stays open and unclaimed.
+
+## E-024 — Session scoreboard: what is actually left standing
+After 23 experiments and ~700 configuration tests:
+- **DISPROVEN / CLOSED:** old signal system (E-001), capped-target design
+  (E-002), sweep FADE (E-017), LeBaron compression-trend (E-022), lead-lag
+  DXY→gold (research, no peer-reviewed intraday evidence), mean reversion, ORB,
+  ema_pullback.
+- **MEASURED AND STANDING:** sweeps predict CONTINUATION not reversal (E-017,
+  5/5 markets); early break-even is the worst exit rule (E-008, 4/4 markets);
+  compressed volatility precedes bigger moves (E-019, replicated on two
+  timeframes) — though GATING on it fails out-of-sample (E-021).
+- **NOTHING has cleared the multiple-testing bar.** At ~700 tests the luck
+  threshold is t≈3.6; the best out-of-sample t observed anywhere is +2.24.
+- **The single biggest blocker is still DATA.** M1/M5 do not exist in this repo,
+  which blocks the M1 sniper model, the intraday-momentum retest (E-023), and
+  any honest test of the scalping layer.
