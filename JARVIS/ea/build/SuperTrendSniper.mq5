@@ -365,7 +365,7 @@ void TryEntry()
    {
       double sl = NormalizeDouble(ask - stopDist, dg);
       double tp = NormalizeDouble(ask + InpTargetR * stopDist, dg);
-      if(trade.Buy(lots, _Symbol, 0.0, sl, tp, "STS long"))
+      if(trade.Buy(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
          Log(StringFormat("LONG %.2f lots  sl %.*f  tp %.*f  atr %.*f",
@@ -377,7 +377,7 @@ void TryEntry()
    {
       double sl = NormalizeDouble(bid + stopDist, dg);
       double tp = NormalizeDouble(bid - InpTargetR * stopDist, dg);
-      if(trade.Sell(lots, _Symbol, 0.0, sl, tp, "STS short"))
+      if(trade.Sell(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
          Log(StringFormat("SHORT %.2f lots  sl %.*f  tp %.*f  atr %.*f",
@@ -387,9 +387,57 @@ void TryEntry()
    }
 }
 
+//==================== R MEASUREMENT ================================
+// R must be measured against the risk the trade was OPENED with, never against
+// the current stop. The moment a trail moves the stop, |open - sl| shrinks, so
+// R computed from it inflates - and every R-based rule below (partial,
+// break-even, trail arm) fires on a number that is not true. Worse, when a
+// trail crosses the entry price |open - sl| passes through zero, the guard
+// `if(risk <= 0) continue;` fires, and the position stops being managed at all.
+//
+// So the original stop distance rides on the position itself, in its comment,
+// and therefore survives a terminal restart. If a broker mangles the comment
+// the fallback is the old behaviour, which is wrong but not fatal.
+string RiskTag(double stopDist, int dg)
+{
+   return "STS|" + DoubleToString(stopDist, dg);
+}
+
+double OriginalRisk(double openPx, double sl, string cmt)
+{
+   if(StringLen(cmt) > 4 && StringSubstr(cmt, 0, 4) == "STS|")
+   {
+      double d = StringToDouble(StringSubstr(cmt, 4));
+      if(d > 0) return d;
+   }
+   return MathAbs(openPx - sl);
+}
+
+// A partial close must happen ONCE. Without this the old code re-closed half
+// the remaining volume on every single bar the trade spent above 1R, bleeding
+// a winner down to the minimum lot while it was still working.
+ulong g_partialed[];
+
+bool AlreadyPartialed(ulong tk)
+{
+   for(int i = 0; i < ArraySize(g_partialed); i++)
+      if(g_partialed[i] == tk) return true;
+   return false;
+}
+
+void MarkPartialed(ulong tk)
+{
+   int n = ArraySize(g_partialed);
+   ArrayResize(g_partialed, n + 1);
+   g_partialed[n] = tk;
+   if(n > 400) ArrayRemove(g_partialed, 0, 200);   // never grow without bound
+}
+
 //==================== MANAGEMENT ===================================
-// Everything here is OPTIONAL and OFF by default, because the measured result
-// is that doing less to an open trade beats doing more.
+// Two rules are ON by default because they MEASURED better on these entries:
+// a wide 3-ATR trail armed immediately, and a 50-bar stall exit. Break-even
+// and the 1R partial are OFF: break-even was the worst exit rule on all four
+// markets tested, and the partial has never been measured on this strategy.
 void ManagePosition()
 {
    for(int i = PositionsTotal() - 1; i >= 0; i--)
@@ -405,6 +453,7 @@ void ManagePosition()
       double tp    = PositionGetDouble(POSITION_TP);
       double vol   = PositionGetDouble(POSITION_VOLUME);
       datetime ot  = (datetime)PositionGetInteger(POSITION_TIME);
+      string  cmt  = PositionGetString(POSITION_COMMENT);
       int    dg    = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
       double atr   = ATR(1);
       if(atr <= 0) continue;
@@ -413,7 +462,7 @@ void ManagePosition()
                    ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                    : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       int dir      = (type == POSITION_TYPE_BUY) ? 1 : -1;
-      double risk  = MathAbs(open - sl);
+      double risk  = OriginalRisk(open, sl, cmt);
       if(risk <= 0) continue;
       double rNow  = (price - open) * dir / risk;
 
@@ -427,15 +476,19 @@ void ManagePosition()
       }
 
       // --- partial at 1R, optional
-      if(InpPartialAt1R && rNow >= 1.0 && vol > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+      if(InpPartialAt1R && rNow >= 1.0 && !AlreadyPartialed(tk)
+         && vol > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
       {
          double half = NormalizeDouble(vol / 2.0, 2);
          double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
          if(step > 0) half = MathFloor(half / step) * step;
          if(half >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
          {
-            trade.PositionClosePartial(tk, half);
-            Log("partial close at 1R");
+            if(trade.PositionClosePartial(tk, half))
+            {
+               MarkPartialed(tk);
+               Log(StringFormat("partial close %.2f of %.2f at 1R", half, vol));
+            }
          }
       }
 
@@ -449,7 +502,9 @@ void ManagePosition()
          if(better) { trade.PositionModify(tk, be, tp); Log("moved to break-even"); }
       }
 
-      // --- trail. OFF by default, and arms late when on.
+      // --- trail. ON by default and arms IMMEDIATELY (InpTrailAtR = 0), because
+      // a wide trail measured best on these entries and a tight or late one did
+      // not. It only ever moves the stop in the trade's favour.
       if(InpUseTrail && rNow >= InpTrailAtR)
       {
          double t = (dir > 0) ? price - InpTrailAtrMult * atr
