@@ -149,6 +149,8 @@ lotSize    = input.float(0.01, "Your lot size", minval = 0.01, step = 0.01, grou
      tooltip = "Used only to convert points into money on the panel. Change it and every P/L figure rescales.")
 ccyPerPt   = input.float(1.00, "Account currency per 1.0 price move, per 0.01 lot", minval = 0.01, step = 0.01, group = gT,
      tooltip = "XAUUSD at 0.01 lots is normally 1.00 of account currency per 1.00 of price (a 100 oz contract at 0.01 = 1 oz). Check your broker's contract size and adjust if it differs.")
+maxChase   = input.float(0.50, "Skip if price already ran this far (× risk)", minval = 0.1, step = 0.1, group = gT,
+     tooltip = "THE SLOW-CHART PROTECTION. TradingView can be late, the alert can arrive after the move, you can be looking away. If price has already travelled this much of your risk in the signal's direction before you are filled, it is no longer the trade you were shown - same stop, less reward. It is marked MISSED instead of taken.")
 entryDelay = input.int(1, "Bars between signal and your actual entry", minval = 0, maxval = 10, group = gT,
      tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you enter. Set this to how many bars that realistically takes you. Everything tracked - entry price, P/L, the whole record - uses THAT price, not the signal price. At 0 the numbers flatter you.")
 trackFrom  = input.string("My real entry", "Track profit from", options = ["My real entry", "Signal price"], group = gT)
@@ -913,14 +915,24 @@ if canFire
 
 // ---- fill anything whose delay has elapsed, at THIS bar's open
 var float lastSlip = na
+var int   nMissed  = 0
+var float lastMiss = na
 if array.size(pdDir) > 0
     for q = array.size(pdDir) - 1 to 0
         aged = bar_index - array.get(pdBar, q)
-        if aged >= entryDelay and array.size(trDir) < maxTrades
-            d2   = array.get(pdDir,  q)
-            rk   = array.get(pdRisk, q)
-            rrq  = array.get(pdRR,   q)
-            sig  = array.get(pdSig,  q)
+        d2   = array.get(pdDir,  q)
+        rk   = array.get(pdRisk, q)
+        rrq  = array.get(pdRR,   q)
+        sig  = array.get(pdSig,  q)
+
+        // how far the market has already gone your way before you got on. If
+        // it has run more than maxChase of the risk, this is no longer the
+        // trade you were shown - same stop, less reward - so it is recorded as
+        // MISSED rather than quietly taken at the worse price.
+        chase   = (open - sig) * d2
+        tooLate = chase > maxChase * rk
+
+        if aged >= entryDelay and array.size(trDir) < maxTrades and not tooLate
             // THE realistic price: this bar's open, the first thing you could
             // actually have been filled at after seeing the signal.
             fill = trackFrom == "Signal price" ? sig : open
@@ -933,7 +945,9 @@ if array.size(pdDir) > 0
             array.remove(pdRisk, q)
             array.remove(pdRR, q)
             array.remove(pdSig, q)
-        else if aged > entryDelay + 3
+        else if (tooLate and aged >= entryDelay) or aged > entryDelay + 3
+            nMissed  += 1
+            lastMiss := chase
             array.remove(pdDir, q)
             array.remove(pdBar, q)
             array.remove(pdRisk, q)
@@ -1121,7 +1135,7 @@ drawZoneLabels(hiPx, hiDead, true)
 drawZoneLabels(loPx, loDead, false)
 
 // ──────────────────────────────── STATUS PANEL ──────────────────────────────
-var table panel = table.new(position.top_right, 2, 9, frame_width = 1,
+var table panel = table.new(position.top_right, 2, 10, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -1169,7 +1183,11 @@ if showPanel and barstate.islast
     cell(7, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
          zt == "" ? "no record yet" : zt,
          zh < 0 ? dim : zh >= 60 ? okc : zh <= 40 ? bad : color.new(#FFB300, 0))
-    cell(8, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+    cell(8, "Missed (too late)", nMissed == 0 ? "none"
+         : str.tostring(nMissed) + (na(lastMiss) ? ""
+           : "   last ran " + str.tostring(lastMiss, "#.##")),
+         nMissed == 0 ? okc : color.new(#FFB300, 0))
+    cell(9, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
          na(lastSlip) ? "no fills yet"
          : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
          na(lastSlip) ? color.new(chart.fg_color, 30) : lastSlip > 0 ? bad : okc)

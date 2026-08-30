@@ -473,7 +473,7 @@ plotshape(skipDown, "skipped SELL", shape.xcross, location.abovebar,
      color.new(color.gray, 35), size = size.tiny)
 
 // ───────────────────────────────── PANEL ────────────────────────────────────
-var table panel = table.new(position.top_right, 2, 8, frame_width = 1,
+var table panel = table.new(position.top_right, 2, 9, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -519,7 +519,14 @@ if showPanel and barstate.islast
          : nPend > 0 ? color.new(#FFB300, 0) : dim)
     // What the gap between signal and click actually cost, in price. Most
     // indicators hide this by pretending you filled at the signal.
-    cell(7, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+    // Signals that were real but could not be taken at a price worth taking.
+    // A rising count here means you are consistently seeing them late, which is
+    // a workflow problem, not a strategy problem - and it is fixable.
+    cell(7, "Missed (too late)", nMissed == 0 ? "none"
+         : str.tostring(nMissed) + (na(lastMiss) ? ""
+           : "   last ran " + str.tostring(lastMiss, "#.##")),
+         nMissed == 0 ? okc : color.new(#FFB300, 0))
+    cell(8, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
          na(lastSlip) ? "no fills yet"
          : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
          na(lastSlip) ? dim : lastSlip > 0 ? bad : okc)
