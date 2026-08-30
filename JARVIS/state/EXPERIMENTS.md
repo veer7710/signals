@@ -519,3 +519,170 @@ After 23 experiments and ~700 configuration tests:
   confluence — has failed to separate winners from losers. The problem is not
   which setups to pick from the current signal family; it is that the family
   itself has no measured edge.
+
+---
+## E-027 — SuperTrend Sniper: how often does it actually trade? (MEASURED)
+- **Question asked:** "how many entries per day, on every market and timeframe
+  in the repo" — never stated before, and everything downstream depends on it.
+- **Setup measured:** signal `supertrend_sniper_ea` (ST 7/1.2 + DEMA200 slope +
+  ADX<=35, the EA's defaults), exits = the EA's own (3R target, 50-bar cap,
+  3.0xATR trail armed at 0R, no break-even), one position at a time, warmup 300.
+- **Reproduce:** `python3 JARVIS/research/test_engine.py` (ALL TESTS PASSED)
+  then `python3 JARVIS/research/st_capacity.py`, section 1.
+- **Result (full series, entries after the ADX gate and occupancy):**
+
+  | market | bars | session days | raw signals | entries | ent/session day | median bars held | full-sample exp | t |
+  |---|---|---|---|---|---|---|---|---|
+  | GOLD 15m | 4501 | 58 | 146 | 113 | 1.948 | 10 | +0.119R | +0.76 |
+  | GOLD 1h | 13750 | 720 | 373 | 302 | **0.419** | 10 | +0.167R | +1.71 |
+  | US500 15m | 4500 | 58 | 156 | 119 | 2.052 | 9 | -0.235R | -1.92 |
+  | US500 1h | 13716 | 721 | 463 | 375 | 0.520 | 8 | +0.088R | +1.06 |
+  | EURUSD 15m | 5624 | 69 | 267 | 202 | 2.928 | 6 | -0.480R | -4.94 |
+  | EURUSD 1h | 17252 | 799 | 653 | 535 | 0.670 | 8 | -0.013R | -0.18 |
+  | GBPUSD 15m | 5624 | 69 | 262 | 210 | 3.043 | 7 | -0.426R | -4.40 |
+  | GBPUSD 1h | 17253 | 799 | 650 | 533 | 0.667 | 8 | -0.124R | -1.85 |
+
+- **The number that matters:** on 1h the strategy trades **0.42-0.69 times per
+  session day** per market. On GOLD 1h that is one trade every 2.4 days.
+  Occupancy is not the binding constraint — the raw signal count is only
+  ~19-24% above the entry count.
+- **Missing data, stated rather than estimated:** there is **no M1 data in this
+  repo**. The EA is documented as an M1 sniper. Every number here is 15m/1h.
+  The 15m files cover only 58-69 session days (2026-06 -> 2026-08), so their
+  out-of-sample slices are 16-19 days — one month at most.
+
+## E-028 — SuperTrend Sniper out-of-sample expectancy (UNPROVEN; 15m REJECTED)
+- **Hypothesis:** the SuperTrend flip + DEMA-slope + ADX<=35 entry has positive
+  expectancy per trade after realistic costs on data it was not chosen on.
+- **Method:** chronological 70/30 split (`autosearch.IS_FRAC = 0.70`, same
+  split used by E-021). Nothing tuned on the OOS slice; EA defaults only.
+- **Reproduce:** `python3 JARVIS/research/st_capacity.py`, section 2.
+- **Result:**
+
+  | market | IS n | IS exp | IS t | OOS n | OOS win | OOS exp | OOS SE | OOS t |
+  |---|---|---|---|---|---|---|---|---|
+  | GOLD 15m | 73 | +0.197 | +0.99 | 31 | 32.3% | +0.010 | 0.288 | +0.04 |
+  | GOLD 1h | 206 | +0.040 | +0.35 | 95 | 37.9% | **+0.455** | 0.187 | **+2.43** |
+  | US500 15m | 92 | -0.344 | -2.70 | 24 | 25.0% | -0.280 | 0.279 | -1.00 |
+  | US500 1h | 254 | +0.140 | +1.37 | 111 | 27.9% | -0.020 | 0.151 | -0.13 |
+  | EURUSD 15m | 133 | -0.389 | -3.13 | 53 | 13.2% | -0.743 | 0.158 | -4.72 |
+  | EURUSD 1h | 373 | -0.038 | -0.47 | 152 | 28.9% | +0.032 | 0.138 | +0.23 |
+  | GBPUSD 15m | 148 | -0.427 | -3.69 | 50 | 26.0% | -0.498 | 0.189 | -2.64 |
+  | GBPUSD 1h | 365 | -0.137 | -1.73 | 159 | 28.3% | -0.075 | 0.128 | -0.58 |
+  | **POOLED OOS** | | | | **675** | 28.4% | **-0.054** | **0.062** | **-0.87** |
+
+  Pooled OOS 95% CI on expectancy: **[-0.177R, +0.068R]** — straddles zero,
+  point estimate negative.
+- **Verdict, pooled: UNPROVEN.** Expectancy is not distinguishable from zero
+  and its point estimate is negative.
+- **Verdict, 15m FX: REJECTED.** EURUSD 15m -0.743R (t -4.72, two-sided
+  p=0.00002, still p=0.014 after a 780-config Sidak correction) and GBPUSD 15m
+  -0.498R (t -2.64). Significantly negative, not merely unproven.
+- **The one positive result and why it is not enough:** GOLD 1h OOS +0.455R,
+  t +2.43, two-sided p=0.017. The multiple-testing bar for this dataset is
+  t ~ 3.65 (E-012, ~780 configurations). Even ignoring all prior tests, this
+  was the best of 8 series measured in one run: Sidak best-of-8 p = 0.128.
+  It also **contradicts its own in-sample slice** (IS +0.040R, t +0.35): the
+  OOS number is 11x the IS number, which is the signature of a regime, not a
+  stable edge. The OOS window is 2025-12-19 -> 2026-08-24 with gold +7.3%.
+  Walk-forward with EA exits: **4/6 folds positive**, and fold expectancy rises
+  monotonically with recency (-0.228, +0.243, -0.037, +0.183, +0.329, +0.526R).
+  Direction split OOS: long +0.275R (n 56, t +1.19), short +0.712R (n 39,
+  t +2.30). Cost sensitivity is flat (0.5x -> 2x spread: +0.458R -> +0.447R),
+  so costs are not what is deciding this.
+- **Standard harness for the record** (`python3 JARVIS/research/study.py GOLD 1h`,
+  fixed 3R exits rather than the EA's): supertrend_sniper_ea, 277 trades,
+  30.0% win, PF 1.20, exp +0.144R, t +1.34, 4/6 folds positive,
+  **VERDICT: UNPROVEN (edge not distinguishable from noise)**.
+
+## E-029 — The GBP60/day arithmetic (the claim is DISPROVEN)
+- **Question:** what account size and risk setting makes GBP60/day?
+- **Identity used:** `60 = trades_per_day x expectancy_R x GBP_risked`, then
+  `account = GBP_risked / 0.005` at the EA's 0.50% risk default.
+- **Reproduce:** `python3 JARVIS/research/st_capacity.py`, section 3.
+- **Result, using OOS expectancy and OOS entry rate per market:**
+
+  | market | OOS ent/day | OOS exp R | R/day | GBP risk/trade | account @0.5% |
+  |---|---|---|---|---|---|
+  | GOLD 15m | 1.938 | +0.010 | +0.0198 | 3,037 | 607,477 |
+  | GOLD 1h | 0.459 | +0.455 | +0.2086 | 288 | **57,515** |
+  | US500 15m | 1.500 | -0.280 | -0.4200 | impossible | impossible |
+  | US500 1h | 0.541 | -0.020 | -0.0107 | impossible | impossible |
+  | EURUSD 15m | 2.789 | -0.743 | -2.0727 | impossible | impossible |
+  | EURUSD 1h | 0.664 | +0.032 | +0.0214 | 2,803 | 560,552 |
+  | GBPUSD 15m | 2.632 | -0.498 | -1.3100 | impossible | impossible |
+  | GBPUSD 1h | 0.694 | -0.075 | -0.0519 | impossible | impossible |
+  | all 8 series together | 11.217 | — | **-3.6154** | **no account size works** | — |
+  | all 4 markets, 1h only | 2.358 | — | +0.1675 | 358 | 71,629 |
+
+- **The honest denominator.** GOLD 1h's +0.2086 R/day is the single
+  cherry-picked best cell. Using GOLD 1h's **full sample** instead (2024-04 ->
+  2026-08, exp +0.167R, 0.419 entries/day = +0.0700 R/day) the answer becomes
+  **GBP 858 risked per trade = a GBP 171,505 account at 0.50%**.
+- **What a normal account actually yields at 0.50% risk (GOLD 1h):**
+
+  | account | risk/trade | GBP/day at OOS rate | GBP/day at full-sample rate |
+  |---|---|---|---|
+  | 2,000 | 10.00 | 2.09 | 0.70 |
+  | 5,000 | 25.00 | 5.21 | 1.75 |
+  | 10,000 | 50.00 | 10.43 | 3.50 |
+  | 25,000 | 125.00 | 26.07 | 8.75 |
+  | 57,515 | 287.57 | 59.99 | 20.13 |
+  | 100,000 | 500.00 | 104.30 | 35.00 |
+  | 171,505 | 857.52 | 178.88 | 60.03 |
+
+- **If the account is GBP10,000 instead**, GBP60/day requires **2.88% risk per
+  trade** (best-case OOS rate) or **8.57%** (full-sample rate). Monte Carlo at
+  those risk levels: 2.88% -> median maxDD 21.6%, 95th 36.4%, P(dd>30%) 15.2%.
+  8.57% -> **median maxDD 87.2%, P(dd>30%) 100.0%, P(dd>50%) 100.0%**.
+- **ONE-SENTENCE FINDING:** GBP60/day from this strategy needs a **GBP57,515
+  account at 0.50% risk on the single best cherry-picked slice, GBP171,505 on
+  GOLD 1h's full history, and is arithmetically impossible on 6 of the 8
+  market/timeframe combinations because their out-of-sample expectancy is
+  negative** — so the claim that it can produce GBP60/day on a retail-sized
+  account is **DISPROVEN**.
+
+## E-030 — Is GBP60/day CONSISTENT? (DISPROVEN)
+- **Point:** "consistent GBP60/day" is a claim about the distribution, not the
+  mean. Measured directly.
+- **Reproduce:** `python3 JARVIS/research/st_capacity.py`, sections 4, 5 and 7.
+- **Bootstrapped months** (a month = 21 trading days x that series' OOS entry
+  rate, 20,000 draws from its OOS trade distribution):
+
+  | market | trades/month | P(month < 0) | median month | 5th pct | 95th pct | P(month hits 60/day avg) |
+  |---|---|---|---|---|---|---|
+  | GOLD 15m | 41 | 48.8% | +0.28R | -15.69R | +17.33R | 49.5% |
+  | GOLD 1h | 10 | **23.5%** | +4.14R | -4.83R | +14.39R | **48.9%** |
+  | US500 15m | 32 | 87.8% | -9.36R | -20.78R | +4.08R | n/a (neg) |
+  | US500 1h | 11 | 53.3% | -0.55R | -8.26R | +9.04R | n/a (neg) |
+  | EURUSD 15m | 59 | 100.0% | -44.21R | -57.41R | -28.72R | n/a (neg) |
+  | EURUSD 1h | 14 | 49.0% | +0.31R | -9.74R | +11.13R | 49.3% |
+  | GBPUSD 15m | 55 | 99.5% | -27.80R | -42.71R | -10.71R | n/a (neg) |
+  | GBPUSD 1h | 15 | 59.0% | -1.64R | -10.76R | +9.50R | n/a (neg) |
+  | POOLED (all 8) | 236 | **70.5%** | -13.50R | -53.53R | +28.33R | n/a (neg) |
+
+- **Even in the single best cell (GOLD 1h at its cherry-picked OOS rate):
+  23.5% of months are negative and only 48.9% of months reach the GBP60/day
+  average the account was sized for.** Longer horizons: quarter P(<0) 8.4%,
+  P(hits target) 51.5%; year P(<0) 0.2%, P(hits target) 54.0%.
+- **Actual calendar months in the OOS slices (not bootstrapped):** GOLD 1h
+  1/9 negative; US500 1h 4/9; EURUSD 1h 7/10; GBPUSD 1h 6/10; every 15m series
+  has only 1 OOS month and 3 of those 4 are negative.
+- **Day level (section 7), the level the claim is actually made at:** on 1h,
+  **44.5%-58.5% of session days contain no trade at all**, the median day is
+  0.00R, and only 14.1%-17.9% of days are positive. A GBP60/day target cannot
+  be met by an instrument that does not trade on most days; the daily figure
+  can only ever be an average over months.
+- **Pooled Monte Carlo at 0.50% risk (engine.monte_carlo, 20k reshuffles,
+  675 OOS trades):** median maxDD 29.2%, 95th-pct maxDD 46.2%,
+  P(dd>30%) 46.8%, P(dd>50%) 2.1%, **P(losing overall) 83.6%**.
+- **VERDICT: DISPROVEN** as a consistent daily income. The distribution
+  requirement fails even where the mean does not: the best case is a coin-flip
+  month (48.9% of months hit the target, 23.5% lose money), and pooled across
+  everything in the repo the strategy loses money in 83.6% of reshuffles.
+- **Underlying edge, separately: UNPROVEN.** GOLD 1h OOS t = +2.43 against a
+  multiple-testing bar of t ~ 3.65 (E-012), and it disagrees with its own
+  in-sample slice by 11x. 15m FX is REJECTED (significantly negative).
+- **Variants tested in this experiment: 8** (one configuration — the EA's
+  defaults — on 8 market/timeframe pairs). No parameter was searched here, but
+  E-012's ~780-config history still applies to the data.
