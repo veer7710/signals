@@ -54,10 +54,18 @@ gL = "LIQUIDITY"
 pivLen    = input.int(8,    "Swing size (bars each side)", minval = 2, maxval = 50, group = gL,
      tooltip = "Bigger = fewer, more significant levels. A pivot is only KNOWN this many bars after it forms, and the indicator respects that.")
 eqTol     = input.float(0.20, "Equal high/low tolerance (× ATR)", minval = 0.02, step = 0.02, group = gL)
-maxLevels = input.int(12,   "Max live levels per side", minval = 2, maxval = 30, group = gL)
+maxLevels = input.int(20,   "Max live levels per side", minval = 2, maxval = 40, group = gL)
 lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, group = gL)
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
+
+gX = "EXTRA LIQUIDITY SOURCES"
+useDaily = input.bool(true, "Previous day high / low", group = gX,
+     tooltip = "The most-watched liquidity on any chart. Adding these is one of the biggest sources of extra setups.")
+useSessH = input.bool(true, "Session highs / lows (Asia, London, NY)", group = gX)
+useRound = input.bool(false, "Round numbers", group = gX,
+     tooltip = "Gold clusters stops at whole and half dollars. Off by default because it generates a lot of levels.")
+roundStep = input.float(10.0, "   round step", minval = 0.1, step = 0.5, group = gX)
 
 gS = "SWEEP + ENTRY"
 mode      = input.string("Continuation (tested)", "Trade direction",
@@ -72,6 +80,8 @@ minLvlAge = input.int(5,    "Level must be this many bars old", minval = 0, grou
      tooltip = "A level formed moments ago has no resting orders behind it yet.")
 
 gP = "SIGNAL FREQUENCY"
+maxTrades = input.int(3, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
+     tooltip = "The single biggest limiter on how many entries you see. At 1 the indicator sits idle through every setup that appears while a trade is already open - which on a trending day is most of them.")
 preset = input.string("Balanced", "Preset",
      options = ["Sniper (fewest, best measured)", "Balanced", "Scalper (most signals)", "Manual"],
      group = gP,
@@ -149,6 +159,25 @@ adxGate = preset == "Sniper (fewest, best measured)" ? 20.0 :
 
 expansionOk = (not useSqueeze or sqz <= sqzGate) and (not useAdx or adxV <= adxGate) and inSess
 
+// ---- previous-day and session levels.
+// request.security with lookahead_off already returns the last CLOSED daily
+// bar, so no [1] offset is needed. Adding one would silently plot the day
+// BEFORE yesterday, which is a classic and invisible error.
+pdh = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
+
+// rolling session extremes, reset when the session block changes
+sessId  = math.floor(hour(time, "UTC") / 8)          // 0 Asia, 1 London, 2 NY
+newSess = sessId != sessId[1]
+var float sHi = na
+var float sLo = na
+if newSess
+    sHi := high
+    sLo := low
+else
+    sHi := math.max(nz(sHi, high), high)
+    sLo := math.min(nz(sLo, low), low)
+
 // ───────────────────────────── LIQUIDITY REGISTRY ───────────────────────────
 // Parallel arrays: price, bar formed, touch count, swept flag, drawing handles.
 var array<float> hiPx   = array.new_float()
@@ -206,6 +235,32 @@ if not na(ph)
     addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, ph, pivotBar, true)
 if not na(pl)
     addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pl, pivotBar, false)
+
+// previous day — registered once per new value, not once per bar
+var float lastPdh = na
+var float lastPdl = na
+if useDaily and not na(pdh) and pdh != lastPdh
+    lastPdh := pdh
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, pdh, bar_index, true)
+if useDaily and not na(pdl) and pdl != lastPdl
+    lastPdl := pdl
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, pdl, bar_index, false)
+
+// session extremes — registered when the session rolls over
+if useSessH and newSess and not na(sHi[1])
+    addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, sHi[1], bar_index, true)
+if useSessH and newSess and not na(sLo[1])
+    addLevel(loPx, loBar, loHits, loDead, loLn, loBx, sLo[1], bar_index, false)
+
+// round numbers near price
+var float lastRound = na
+if useRound and roundStep > 0
+    rUp = math.ceil(close / roundStep) * roundStep
+    rDn = math.floor(close / roundStep) * roundStep
+    if rUp != lastRound
+        lastRound := rUp
+        addLevel(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, rUp, bar_index, true)
+        addLevel(loPx, loBar, loHits, loDead, loLn, loBx, rDn, bar_index, false)
 
 // keep live level drawings anchored to the right edge, fade the dead ones
 extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
@@ -295,14 +350,20 @@ nextLiq(bool up) =>
     best
 
 // ───────────────────────────── TRADE STATE + BOXES ──────────────────────────
-var int    tDir   = 0
-var float  tEntry = na
-var float  tSl    = na
-var float  tTp    = na
-var int    tBar   = 0
-var box    liveTp = na
-var box    liveSl = na
-var array<box> oldBoxes = array.new_box()
+// ───────────────────────── TRADE STATE (multiple concurrent) ────────────────
+// Parallel arrays so several setups can run at once. With only one slot the
+// indicator ignores every setup that appears while a trade is already open,
+// which on a trending day is most of them — that single limit was the largest
+// cause of "it does not catch enough entries".
+var array<int>   trDir = array.new_int()
+var array<float> trEnt = array.new_float()
+var array<float> trSl  = array.new_float()
+var array<float> trTp  = array.new_float()
+var array<int>   trBar = array.new_int()
+var array<box>   trBxT = array.new_box()
+var array<box>   trBxS = array.new_box()
+var array<line>  trTrl = array.new_line()
+var array<box>   oldBoxes = array.new_box()
 
 pushOld(box b) =>
     if not na(b)
@@ -321,25 +382,28 @@ var float armExt  = na
 
 breakNow = barstate.isconfirmed and expansionOk and dispOk and (goLong or goShort)
 
-if needRetest and breakNow and tDir == 0
+if needRetest and breakNow
     armDir := goLong ? 1 : -1
     armLvl := goLong ? nz(sweptHi, close) : nz(sweptLo, close)
     armBar := bar_index
     armExt := goLong ? high : low
 if armDir != 0
-    // track how far the break ran, so the stop still sits beyond the extreme
     armExt := armDir > 0 ? math.max(armExt, high) : math.min(armExt, low)
     if bar_index - armBar > retestBars
-        armDir := 0          // never came back — this one is gone, no chasing
+        armDir := 0
 
 // A retest fires when price returns to the broken level and CLOSES on the
-// correct side of it. Coming back and failing to hold is the fakeout, and
-// this refuses it.
+// correct side. Coming back and failing to hold is the fakeout; this refuses it.
 retestHit = armDir != 0 and bar_index > armBar and barstate.isconfirmed and
      (armDir > 0 ? (low <= armLvl and close > armLvl)
                  : (high >= armLvl and close < armLvl))
 
-canFire = tDir == 0 and (needRetest ? retestHit : breakNow)
+canFire = array.size(trDir) < maxTrades and (needRetest ? retestHit : breakNow)
+
+var bool firedLong  = false
+var bool firedShort = false
+firedLong  := false
+firedShort := false
 
 if canFire
     dir   = needRetest ? armDir : (goLong ? 1 : -1)
@@ -351,82 +415,78 @@ if canFire
     lvlTp = nextLiq(dir > 0)
     tp    = tpMode == "Fixed R" or na(lvlTp) ? entry + dir * tpR * risk : lvlTp
     rr    = risk > 0 ? math.abs(tp - entry) / risk : 0
-    okRisk = risk > 0 and risk <= maxRiskAtr * atr
-    if okRisk and rr >= minR
-        tDir   := dir
-        tEntry := entry
-        tSl    := sl
-        tTp    := tp
-        tBar   := bar_index
-        liveTp := box.new(bar_index, math.max(entry, tp), bar_index + 20, math.min(entry, tp),
-             border_color = na, bgcolor = cTp)
-        liveSl := box.new(bar_index, math.max(entry, sl), bar_index + 20, math.min(entry, sl),
-             border_color = na, bgcolor = cSl)
+    if risk > 0 and risk <= maxRiskAtr * atr and rr >= minR
+        array.push(trDir, dir)
+        array.push(trEnt, entry)
+        array.push(trSl,  sl)
+        array.push(trTp,  tp)
+        array.push(trBar, bar_index)
+        array.push(trBxT, box.new(bar_index, math.max(entry, tp), bar_index + 2,
+             math.min(entry, tp), border_color = na, bgcolor = cTp))
+        array.push(trBxS, box.new(bar_index, math.max(entry, sl), bar_index + 2,
+             math.min(entry, sl), border_color = na, bgcolor = cSl))
+        array.push(trTrl, na)
+        firedLong  := dir > 0
+        firedShort := dir < 0
         armDir := 0
 
-// manage the open trade — stop is checked FIRST, so a bar containing both
-// levels resolves as a loss. Intrabar order is unknowable and the pessimistic
-// read is the only honest one.
+// ---- manage every open trade. Iterating backwards so removals are safe.
 var string lastExit = ""
-var line   beLine   = na
-var label  rLabel   = na
+if array.size(trDir) > 0
+    for k = array.size(trDir) - 1 to 0
+        d  = array.get(trDir, k)
+        en = array.get(trEnt, k)
+        sl = array.get(trSl,  k)
+        tp = array.get(trTp,  k)
+        bt = array.get(trBxT, k)
+        bs = array.get(trBxS, k)
+        tl = array.get(trTrl, k)
 
-if tDir != 0
-    // boxes GROW with the trade instead of sitting at a fixed width
-    box.set_right(liveTp, bar_index + 2)
-    box.set_right(liveSl, bar_index + 2)
+        // boxes GROW with the trade rather than sitting at a fixed width
+        box.set_right(bt, bar_index + 2)
+        box.set_right(bs, bar_index + 2)
 
-    risk  = math.abs(tEntry - tSl)
-    prof  = (close - tEntry) * tDir
-    rNow  = risk > 0 ? prof / risk : 0
-    trail = tDir > 0 ? close - trailAtr * atr : close + trailAtr * atr
+        risk = math.abs(en - sl)
+        rNow = risk > 0 ? (close - en) * d / risk : 0
+        trailPx = d > 0 ? close - trailAtr * atr : close + trailAtr * atr
 
-    // Guide line: where a trail WOULD sit once the trade has earned it.
-    // It only appears past trailArm because moving a stop up early measured as
-    // the WORST exit rule on all four markets tested - it scratches the trade
-    // before the tail that pays for everything can develop.
-    if showTrail and rNow >= trailArm
-        if na(beLine)
-            beLine := line.new(bar_index - 1, trail, bar_index + 2, trail,
-                 color = color.new(accBull, 35), style = line.style_dashed, width = 1)
-        else
-            line.set_xy1(beLine, bar_index - 1, trail)
-            line.set_xy2(beLine, bar_index + 2, trail)
+        // Trail guide appears only once the trade has EARNED it. Moving a stop
+        // up early measured as the worst exit rule on all four markets tested.
+        if showTrail and rNow >= trailArm
+            if na(tl)
+                tl := line.new(bar_index - 1, trailPx, bar_index + 2, trailPx,
+                     color = color.new(d > 0 ? accBull : accBear, 40),
+                     style = line.style_dashed, width = 1)
+                array.set(trTrl, k, tl)
+            else
+                line.set_xy1(tl, bar_index - 1, trailPx)
+                line.set_xy2(tl, bar_index + 2, trailPx)
 
-    // live R readout that follows the right edge
-    if showRlive
-        if not na(rLabel)
-            label.delete(rLabel)
-        rLabel := label.new(bar_index + 2, close,
-             str.tostring(rNow, "#.#") + "R", style = label.style_label_left,
-             color = color.new(color.white, 100),
-             textcolor = rNow >= 0 ? accBull : accBear, size = size.small)
-    hitSl = tDir > 0 ? low  <= tSl : high >= tSl
-    hitTp = tDir > 0 ? high >= tTp : low  <= tTp
-    if barstate.isconfirmed and (hitSl or hitTp)
-        lastExit := hitSl ? "SL" : "TP"
-        label.new(bar_index, hitSl ? tSl : tTp, hitSl ? "✕" : "✓",
-             style = tDir > 0 ? label.style_label_up : label.style_label_down,
-             color = color.new(color.white, 100),
-             textcolor = hitSl ? cBear : cBull, size = size.small)
-        pushOld(liveTp)
-        pushOld(liveSl)
-        liveTp := na
-        liveSl := na
-        tDir   := 0
-        if not na(beLine)
-            line.delete(beLine)
-            beLine := na
-        if not na(rLabel)
-            label.delete(rLabel)
-            rLabel := na
+        hitSl = d > 0 ? low  <= sl : high >= sl
+        hitTp = d > 0 ? high >= tp : low  <= tp
+        if barstate.isconfirmed and (hitSl or hitTp)
+            lastExit := hitSl ? "SL" : "TP"
+            label.new(bar_index, hitSl ? sl : tp, hitSl ? "✕" : "✓",
+                 style = d > 0 ? label.style_label_up : label.style_label_down,
+                 color = color.new(color.white, 100),
+                 textcolor = hitSl ? accBear : accBull, size = size.small)
+            pushOld(bt)
+            pushOld(bs)
+            if not na(tl)
+                line.delete(tl)
+            array.remove(trDir, k)
+            array.remove(trEnt, k)
+            array.remove(trSl,  k)
+            array.remove(trTp,  k)
+            array.remove(trBar, k)
+            array.remove(trBxT, k)
+            array.remove(trBxS, k)
+            array.remove(trTrl, k)
 
-plotshape(canFire and goLong  and tDir != 0 and tBar == bar_index, "BUY",
-     shape.labelup, location.belowbar, cBull, text = "BUY",
-     textcolor = color.white, size = size.small)
-plotshape(canFire and goShort and tDir != 0 and tBar == bar_index, "SELL",
-     shape.labeldown, location.abovebar, cBear, text = "SELL",
-     textcolor = color.white, size = size.small)
+plotshape(firedLong,  "BUY",  shape.labelup,   location.belowbar, cBull,
+     text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(firedShort, "SELL", shape.labeldown, location.abovebar, cBear,
+     text = "SELL", textcolor = color.white, size = size.small)
 
 // ──────────────────────────────── STATUS PANEL ──────────────────────────────
 var table panel = table.new(position.top_right, 2, 6, frame_width = 1,
@@ -453,10 +513,11 @@ if showPanel and barstate.islast
          + (adxV <= adxGate ? "  ok" : "  too high"), adxV <= adxGate ? okc : bad)
     cell(3, "Session " + str.tostring(hourNow) + ":00 UTC", inSess ? "ok" : "outside", inSess ? okc : bad)
     cell(4, "Setups allowed", expansionOk ? "YES" : "NO — waiting", expansionOk ? okc : bad)
-    cell(5, "Trade", tDir != 0 ? (tDir > 0 ? "LONG open" : "SHORT open")
-         : armDir != 0 ? ("ARMED — waiting retest " + str.tostring(bar_index - armBar) + "/" + str.tostring(retestBars))
+    nOpen = array.size(trDir)
+    cell(5, "Trades", nOpen > 0 ? (str.tostring(nOpen) + "/" + str.tostring(maxTrades) + " open")
+         : armDir != 0 ? ("ARMED " + str.tostring(bar_index - armBar) + "/" + str.tostring(retestBars))
          : ("flat" + (lastExit == "" ? "" : "  last " + lastExit)),
-         tDir != 0 ? (tDir > 0 ? okc : bad) : armDir != 0 ? color.new(#FFB300, 0) : color.new(chart.fg_color, 30))
+         nOpen > 0 ? okc : armDir != 0 ? color.new(#FFB300, 0) : color.new(chart.fg_color, 30))
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
 alertcondition(canFire and goLong,  "Liquidity Sniper BUY",  "LiqSniper BUY {{ticker}} {{interval}}")
