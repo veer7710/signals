@@ -483,3 +483,39 @@ After 23 experiments and ~700 configuration tests:
   need 66.7%; at 2R you need 33.3%. And GBP50/day on a $10k account at 0.5%
   risk is 1.0R PER DAY, every day, against a best measured expectancy of
   ~+0.04R per trade.
+
+## E-026 — Higher-timeframe level confluence (NO ADVANTAGE — do not build)
+- **Veer's idea:** "on M15, a buy opportunity aligned with levels from last
+  week." The intuition that a level from a higher timeframe is worth more. This
+  was the most promising remaining SELECTION idea, because E-025 showed bounce
+  setups run at break-even overall — if HTF-aligned ones were better, the
+  average would be hiding a good subset.
+- **Method:** levels derived at three scales from the same series (1h local,
+  ~daily via resample 24, ~weekly via resample 120), each carrying its own
+  confirmation lag so a weekly pivot is unusable until its weekly bar closed.
+  Setups bucketed by whether the level they fired at coincided with a higher
+  timeframe one.
+- **Result — pooled across 4 markets, 33,600 setups:**
+
+  | confluence | n | win rate @2R | vs 33.3% break-even |
+  |---|---|---|---|
+  | local only | 23,500 | 32.9% | -0.4 |
+  | + daily | 8,393 | 32.6% | -0.7 |
+  | + both daily & weekly | 1,717 | 33.2% | -0.1 |
+
+  Everything sits within 0.6 points of everything else, and all of it at or
+  below break-even.
+- **The tempting false positive:** GOLD "+ both" showed 37.3% (+4.0) — but on
+  118 samples, and it does not replicate on the other three markets (35.0%,
+  33.5%, 32.3%). Noise.
+- **Conclusion: DO NOT build confluence as a filter.** A level from last week
+  performs the same as a local one in this data.
+- **Precise limit of the test:** the WEEKLY-only bucket never gathered enough
+  samples (0-19 per market) because few setups coincide with a weekly level at
+  all. So "daily confluence gives no advantage" is MEASURED; "weekly confluence
+  specifically" is UNTESTED, not disproven.
+- **What this means cumulatively:** across E-019 to E-026 every selection rule
+  tried — volatility gate, sweep class, level strength, sweep depth, HTF
+  confluence — has failed to separate winners from losers. The problem is not
+  which setups to pick from the current signal family; it is that the family
+  itself has no measured edge.
