@@ -34,6 +34,56 @@ IDENT = re.compile(r'(?<![\w.])([a-zA-Z_]\w*)(?![\w(])')
 
 
 # ---------------------------------------------------------------- order
+
+# -------------------------------------------------- line continuations
+def check_continuation(src):
+    """A continuation line indented by a multiple of 4 reads as a new block, so
+    a multi-line boolean silently becomes a statement that does nothing.
+
+    This only applies OUTSIDE brackets. Inside an unclosed ( or [ Pine ignores
+    indentation entirely, so a ternary wrapped across lines inside a function
+    call is fine - flagging those was pure noise."""
+    out = []
+    depth = 0
+    for i, l in enumerate(src, 1):
+        code = re.sub(r'"(\\.|[^"\\])*"', '""', l.split("//")[0])
+        if depth == 0:
+            m = re.match(r'^(\s+)(and|or|\?|:)\s', code)
+            if m and len(m.group(1)) % 4 == 0:
+                out.append((i, "CONTINUATION indented by a multiple of 4 "
+                               "(reads as a new block, not a continuation)",
+                            l.strip()[:60]))
+        depth += code.count("(") + code.count("[")
+        depth -= code.count(")") + code.count("]")
+        depth = max(depth, 0)
+    return out
+
+
+# ----------------------------------------------- variable history offset
+def check_var_offset(src):
+    """`close[j]` with a LOOP VARIABLE offset. Pine cannot always infer how far
+    back to buffer, and throws 'cannot determine the referencing length' at
+    runtime. Declaring max_bars_back on the indicator() call fixes it."""
+    loopvars = set(re.findall(r'^\s*for\s+([a-zA-Z_]\w*)\s*=', "\n".join(src), re.M))
+    if not loopvars:
+        return []
+    # the indicator() call can sit well past line 40 when the header carries a
+    # long comment block, which this file's does
+    has_mbb = any("max_bars_back" in l for l in src[:120])
+    if has_mbb:
+        return []
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        for v in loopvars:
+            if re.search(r'\b(?:open|high|low|close|volume|time)\s*\[\s*' + v + r'\s*\]', code):
+                out.append((i, f"VARIABLE HISTORY OFFSET ([{v}]) with no "
+                               f"max_bars_back declared on indicator()",
+                            l.strip()[:60]))
+                break
+    return out
+
+
 def check_order(src, declared):
     """Pine is single-pass: a name must appear textually BEFORE it is used.
     The existence check alone passes a file that reads a variable declared
@@ -214,6 +264,8 @@ def check(path):
                 continue
             problems.append((i, name, l.strip()[:70]))
 
+    problems += check_continuation(src)
+    problems += check_var_offset(src)
     problems += check_order(src, declared)
     problems += check_arity(src)
     problems += check_tables(src)

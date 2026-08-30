@@ -47,7 +47,13 @@
 // ============================================================================
 
 indicator("Liquidity Sniper v1", "LiqSniper", overlay = true,
-     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500,
+     // The order-block walk-back reads close[j] with a LOOP VARIABLE offset.
+     // Pine cannot always infer the buffer that needs and throws "cannot
+     // determine the referencing length" at runtime, on the user's chart,
+     // after the script has apparently loaded fine. Declaring it removes the
+     // guesswork.
+     max_bars_back = 500)
 
 // ─────────────────────────────────── INPUTS ─────────────────────────────────
 gL = "LIQUIDITY"
@@ -87,6 +93,8 @@ gI = "IMBALANCES AND ORDER BLOCKS"
 useFvg = input.bool(true, "Fair value gaps (unfilled imbalance)", group = gI,
      tooltip = "Three bars where the middle one moves so fast that the first bar's high never meets the third bar's low. Price returns to fill those gaps far more often than not, and the gap edge is a precise place to enter rather than a rough zone.")
 fvgMin = input.float(0.25, "   gap must be at least (× ATR)", minval = 0.05, step = 0.05, group = gI)
+obLife = input.int(60, "   an order block goes stale after (bars)", minval = 5, maxval = 500, group = gI,
+     tooltip = "Price that has not returned to a block within this many bars is not coming back to that one. Without an expiry a block from hours ago keeps producing entries at a price the market has long since left behind.")
 useOb  = input.bool(true, "Order blocks (last candle before the move)", group = gI,
      tooltip = "The last down candle before a move that breaks structure upward is where the buying actually came from. Price returning there is the highest quality retest available, and it is a much tighter stop than anything else on the chart.")
 showSmc = input.bool(true, "Draw gaps and order blocks", group = gI)
@@ -798,19 +806,32 @@ if fvgUp
 if fvgDn
     addFvg(low[2], high, -1)
 
-// an unfilled gap that price has now come back into is the entry
+// An unfilled gap that price has come back into is the entry - ONCE. Without
+// removing it, the same gap re-fires on every bar price spends inside it, which
+// on M1 is dozens of identical signals from one imbalance.
 float fvLong  = na
 float fvShort = na
 if array.size(fvTop) > 0
     for i = array.size(fvTop) - 1 to 0
-        t = array.get(fvTop, i)
-        b = array.get(fvBot, i)
+        t  = array.get(fvTop, i)
+        b  = array.get(fvBot, i)
         dr = array.get(fvDir, i)
         if barstate.isconfirmed and low <= t and high >= b
+            took = false
             if dr > 0 and close > b and na(fvLong)
                 fvLong := b
+                took := true
             if dr < 0 and close < t and na(fvShort)
                 fvShort := t
+                took := true
+            if took
+                bx0 = array.get(fvBx, i)
+                if not na(bx0)
+                    box.set_bgcolor(bx0, color.new(color.gray, 94))
+                array.remove(fvTop, i)
+                array.remove(fvBot, i)
+                array.remove(fvDir, i)
+                array.remove(fvBx, i)
 
 // ════════════════════ ORDER BLOCKS ═══════════════════════════════════════════
 // The last DOWN candle before a move that breaks structure upward is where the
@@ -820,6 +841,8 @@ var float obUpTop = na
 var float obUpBot = na
 var float obDnTop = na
 var float obDnBot = na
+var int   obUpBar = 0
+var int   obDnBar = 0
 
 if useOb and bosUp
     // walk back for the most recent bearish candle before this impulse
@@ -827,18 +850,40 @@ if useOb and bosUp
         if close[j] < open[j]
             obUpTop := high[j]
             obUpBot := low[j]
+            obUpBar := bar_index
             break
 if useOb and bosDn
     for j = 1 to 20
         if close[j] > open[j]
             obDnTop := high[j]
             obDnBot := low[j]
+            obDnBar := bar_index
             break
 
-obLong  = useOb and not na(obUpBot) and barstate.isconfirmed
-          and low <= obUpTop and close > obUpBot
-obShort = useOb and not na(obDnTop) and barstate.isconfirmed
-          and high >= obDnBot and close < obDnTop
+// A return INTO the block, not merely near it: the bar must trade inside the
+// block's range and close back out on the correct side. Testing only
+// `low <= obUpTop` fired on essentially every bar once price was anywhere
+// below the block's high. An order block also goes stale - price that has not
+// come back within obLife bars is not coming back to that one.
+obUpLive = useOb and not na(obUpBot) and (bar_index - obUpBar) <= obLife
+obDnLive = useOb and not na(obDnTop) and (bar_index - obDnBar) <= obLife
+obLong  = obUpLive and barstate.isconfirmed
+          and low <= obUpTop and low >= obUpBot - zoneTol * atr and close > obUpBot
+obShort = obDnLive and barstate.isconfirmed
+          and high >= obDnBot and high <= obDnTop + zoneTol * atr and close < obDnTop
+
+// The level must be CAPTURED before the block is cleared, or setupLvl below
+// reads na and the stop falls back to the signal bar's close.
+float obLvlL = obLong  ? obUpBot : na
+float obLvlS = obShort ? obDnTop : na
+
+// used once, so one block cannot supply the same entry all afternoon
+if obLong
+    obUpTop := na
+    obUpBot := na
+if obShort
+    obDnTop := na
+    obDnBot := na
 
 // ─────────────────────── RETEST / RECLAIM SETUPS ────────────────────────────
 // A level that has been taken out is not finished - it is the next level, from
@@ -937,12 +982,12 @@ setupIsBounce = (bncLong or bncShort or newLong or newShort)
 setupLvl(int dir) =>
     float lv = na
     if dir > 0
-        lv := not na(fvLong) ? fvLong : obLong ? obUpBot
+        lv := not na(fvLong) ? fvLong : obLong ? obLvlL
               : not na(rcLong) ? rcLong : bncLong ? bounceUpLvl
               : pbLong ? emaT : boLong ? boxHi
               : (isCont ? sweptHi : sweptLo)
     else
-        lv := not na(fvShort) ? fvShort : obShort ? obDnTop
+        lv := not na(fvShort) ? fvShort : obShort ? obLvlS
               : not na(rcShort) ? rcShort : bncShort ? bounceDnLvl
               : pbShort ? emaT : boShort ? boxLo
               : (isCont ? sweptLo : sweptHi)
@@ -1267,8 +1312,11 @@ if array.size(trDir) > 0
         // ---- REVERSAL. Price closing back through the level the setup was
         // built on means the reason for the trade is gone. Riding that back to
         // the stop is the give-back, and it is avoidable.
+        // held > 0: the fill loop runs BEFORE this one, so a trade opened on
+        // this bar is already here and would otherwise be closed on its own
+        // entry bar - a one-bar box and an exit no one could have taken.
         revBar = d > 0 ? (close < open and close < low[1]) : (close > open and close > high[1])
-        hitRev = useRevExit and rNow >= revMinR and revBar
+        hitRev = useRevExit and held > 0 and rNow >= revMinR and revBar
 
         // ---- A GAP IS FILLED AT THE GAP, NOT AT THE STOP. If the bar OPENS
         // beyond the stop, the broker fills there. Booking it at the stop

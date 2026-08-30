@@ -388,7 +388,11 @@ if array.size(trDir) > 0
         // ---- REVERSAL. The SuperTrend flipping against an open trade is the
         // signal that justified the trade being withdrawn. Riding that back to
         // the stop is the give-back this whole file exists to stop.
-        hitRev = useRevExit and rNow >= revMinR
+        // held > 0 matters: the fill loop runs BEFORE this one, so a trade
+        // opened on this bar is already here. Without the guard a reversal
+        // closes a position on the same bar it opened, printing a one-bar box
+        // and an exit no one could have taken.
+        hitRev = useRevExit and held > 0 and rNow >= revMinR
                  and (d > 0 ? stDir == 1 : stDir == -1)
 
         // ---- GAPS ARE FILLED AT THE GAP, NOT AT THE STOP.
@@ -526,7 +530,13 @@ suggLots = riskMoney > 0 and sigRisk > 0 and ccyPerPt > 0
 
 if showPanel and barstate.islast
     // Line one is the money, because that is what you actually want to see.
-    openM    = array.size(trDir) > 0 and not na(liveM) ? liveM : 0.0
+    // liveM holds only the LAST trade the manage loop touched, so with more
+    // than one position open the day's figure silently omitted the rest.
+    openM = 0.0
+    if array.size(trDir) > 0
+        for k2 = 0 to array.size(trDir) - 1
+            openM += (close - array.get(trEnt, k2)) * array.get(trDir, k2)
+                     * ccyPerPt * (lotSize / 0.01)
     totToday = dayPnl + openM
     cell(0, "TODAY  at " + str.tostring(lotSize) + " lots",
          (totToday >= 0 ? "+" : "") + str.tostring(totToday, "#.##")
