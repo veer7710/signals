@@ -1,0 +1,520 @@
+//@version=6
+// ============================================================================
+//  SUPERTREND SNIPER v1.0
+//  The same signal the MT5 EA trades, with the exits that were measured
+// ============================================================================
+//
+//  WHY THIS FILE EXISTS
+//  The EA (JARVIS/ea/build/SuperTrendSniper.mq5) and this indicator are one
+//  strategy. Every number below is the EA's default, so what you see on the
+//  chart and what the EA does on the account are the same thing. If you change
+//  a setting here, change it there too or you are trading two systems.
+//
+//  THE SIGNAL — unchanged
+//      SuperTrend(ATR 7, multiplier 1.2) flips direction
+//      DEMA(200) must be sloping the same way
+//  That is the entry you already use. It was left alone deliberately.
+//
+//  WHAT WAS ACTUALLY WRONG — and it was not the entry
+//  Measured on GOLD, US500, EURUSD and GBPUSD with next-bar fills, first-touch
+//  resolution and ties counted as losses:
+//      Early break-even was the WORST exit rule on all four markets.
+//      A tight trail was second worst.
+//      A wide (3 ATR) trail armed immediately measured best on these entries.
+//      A 50-bar time cap beat a 20-bar cap.
+//  A majority of these trades do go into profit. The give-back was the exit,
+//  not the entry - so the exits are what this rebuilds.
+//
+//  THE ONE FILTER THAT SURVIVED A HOLD-OUT
+//      ADX >= 35 at entry measured -0.132R.  ADX < 20 measured +0.304R.
+//  Entering when the trend is ALREADY extended is the losing bucket. The
+//  filter below refuses those. It held on data it was not chosen on.
+//
+//  HONEST STATUS
+//  Roughly 780 configurations have been tested against this data. At that
+//  count, the best of a set of WORTHLESS strategies would be expected to
+//  score about t = 3.65 on luck alone. The best out-of-sample result measured
+//  here is t = +2.09. That is encouraging and it is NOT proof. Forward-test it
+//  on demo before it sees money. No number on this chart is a promise.
+//
+//  NON-REPAINTING
+//  Signals require barstate.isconfirmed, so nothing prints on a forming bar
+//  and then vanishes. Entries are FILLED at a later bar's open, not at the
+//  signal price - see the LIVE TRADING group.
+// ============================================================================
+
+indicator("SuperTrend Sniper v1", "STSniper", overlay = true,
+     max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ─────────────────────────────────── SIGNAL ─────────────────────────────────
+gS = "SIGNAL  (identical to the EA)"
+stAtrLen = input.int(7,    "SuperTrend ATR length", minval = 1, maxval = 50, group = gS)
+stMult   = input.float(1.2, "SuperTrend multiplier", minval = 0.2, step = 0.1, group = gS)
+useDema  = input.bool(true, "Require DEMA slope agreement", group = gS,
+     tooltip = "A SuperTrend flip against the longer trend is the flip that gets reversed. The EA reads DEMA now against DEMA two bars ago; this does the same.")
+demaLen  = input.int(200,  "   DEMA length", minval = 10, maxval = 500, group = gS,
+     tooltip = "200 on M5 and above. The EA uses 60 on M1 and 100 on M3 - match whichever you run.")
+showSt   = input.bool(true, "Draw the SuperTrend line", group = gS)
+
+gFl = "FILTERS  (these held out-of-sample)"
+useAdx   = input.bool(true, "Skip entries when the trend is already extended", group = gFl,
+     tooltip = "MEASURED: ADX >= 35 at entry gave -0.132R per trade. ADX < 20 gave +0.304R. This is the single filter that survived being tested on data it was not chosen on.")
+maxAdx   = input.float(35.0, "   max ADX", minval = 10, maxval = 60, step = 1, group = gFl)
+useSess  = input.bool(false, "Restrict to a session (UTC)", group = gFl,
+     tooltip = "NY 13-20 UTC measured best. OFF by default: it was measured on gold, and turning it on cuts your trade count hard. Test it on your own instrument before trusting it.")
+sessFrom = input.int(13, "   from hour", minval = 0, maxval = 23, group = gFl)
+sessTo   = input.int(20, "   to hour",   minval = 0, maxval = 23, group = gFl)
+
+// ──────────────────────────────── RISK / EXITS ──────────────────────────────
+gR = "RISK"
+stopAtr  = input.float(1.5, "Stop distance (× ATR)", minval = 0.2, step = 0.1, group = gR)
+targetR  = input.float(3.0, "Take profit (× risk)",  minval = 0.5, step = 0.25, group = gR)
+
+gE = "EXITS  (this is what was rebuilt)"
+useTrail = input.bool(true, "ATR trail", group = gE,
+     tooltip = "MEASURED BEST on these entries. It is deliberately WIDE and arms immediately - a tight trail measured second worst of everything tested.")
+trailAtr = input.float(3.0, "   trail distance (× ATR)", minval = 0.5, step = 0.25, group = gE)
+trailArm = input.float(0.0, "   arm after (R in profit)", minval = 0, step = 0.25, group = gE)
+useTime  = input.bool(true, "Close a trade that stalls", group = gE)
+maxHold  = input.int(50, "   stalled after (bars)", minval = 5, maxval = 400, group = gE,
+     tooltip = "50 measured better than 20 on this strategy. Cutting winners early is a cost, not a safety feature.")
+useBE    = input.bool(false, "Move stop to break-even", group = gE,
+     tooltip = "LEAVE THIS OFF. It measured as the WORST exit rule on all four markets tested. It is here only so you can switch it on and watch it lose, rather than wonder.")
+beAtR    = input.float(1.5, "   break-even after (R)", minval = 0.25, step = 0.25, group = gE)
+
+// ────────────────────────────── LIVE TRADING ────────────────────────────────
+gT = "LIVE TRADING (manual)"
+lotSize    = input.float(0.01, "Your lot size", minval = 0.01, step = 0.01, group = gT,
+     tooltip = "Used only to turn price into money on the panel and the record. Change it and every P/L figure rescales.")
+ccyPerPt   = input.float(1.00, "Account currency per 1.0 price move, per 0.01 lot", minval = 0.01, step = 0.01, group = gT,
+     tooltip = "XAUUSD at 0.01 lots is normally 1.00 of account currency per 1.00 of price (a 100 oz contract at 0.01 = 1 oz). Check your broker's contract size and change it if yours differs, or every money figure here is wrong.")
+entryDelay = input.int(1, "Bars between signal and your actual entry", minval = 0, maxval = 10, group = gT,
+     tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you click. Set this to how many bars that realistically takes you. Entry price, stop, target, P/L and the whole record then use THAT price. At 0 the numbers flatter you and the chart stops being a record of trades you could have taken.")
+trackFrom  = input.string("My real entry", "Track profit from",
+     options = ["My real entry", "Signal price"], group = gT,
+     tooltip = "Signal price shows the trade the indicator would have got. My real entry shows the trade YOU would have got. They are not the same and the difference is worth looking at.")
+riskMoney  = input.float(0.0, "Size positions for this much risk (0 = off)", minval = 0, step = 5, group = gT,
+     tooltip = "Enter what you are willing to lose on one trade and the panel tells you the lot size for the CURRENT setup's stop distance, instead of you doing it on a calculator while the entry runs away.")
+showHist   = input.int(10, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
+     tooltip = "Past position boxes stay on the chart, drained of colour, so you can see how the last N setups actually played out. The record table shows up to 11 of them.")
+showTable  = input.bool(true, "Show trade record table", group = gT)
+maxTrades  = input.int(1, "Max concurrent trades", minval = 1, maxval = 4, group = gT,
+     tooltip = "1 matches the EA, which holds one position at a time. Raise it only if you intend to trade differently from the EA.")
+
+gD = "DISPLAY"
+showBoxes  = input.bool(true, "Position boxes (target above, stop below)", group = gD)
+showTrail  = input.bool(true, "Show where the trail sits", group = gD)
+showRlive  = input.bool(true, "Live R and money on the open trade", group = gD)
+showPanel  = input.bool(true, "Status panel", group = gD)
+theme      = input.string("White / blue candles", "Palette",
+     options = ["White / blue candles", "Classic green / red", "Custom"], group = gD)
+uBull      = input.color(color.new(#29B6F6, 0), "Custom buy",  inline = "c", group = gD)
+uBear      = input.color(color.new(#FF5370, 0), "Custom sell", inline = "c", group = gD)
+
+accBull = theme == "Classic green / red" ? #26A69A : theme == "Custom" ? uBull : #29B6F6
+accBear = theme == "Classic green / red" ? #EF5350 : theme == "Custom" ? uBear : #FF5370
+cTp     = color.new(accBull, 88)
+cSl     = color.new(accBear, 88)
+
+// ───────────────────────────────── FOUNDATIONS ──────────────────────────────
+atr = ta.atr(14)
+
+// ta.supertrend returns direction -1 when bullish and +1 when bearish. The EA
+// carries the same convention, and the backtest engine's supertrend_dir() was
+// written against this so all three agree.
+[stLine, stDir] = ta.supertrend(stMult, stAtrLen)
+
+dema1 = ta.ema(close, demaLen)
+dema  = 2 * dema1 - ta.ema(dema1, demaLen)
+
+[diP, diM, adxV] = ta.dmi(14, 14)
+
+hourNow = hour(time, "UTC")
+inSess  = not useSess or (sessFrom <= sessTo ? (hourNow >= sessFrom and hourNow < sessTo)
+                                             : (hourNow >= sessFrom or hourNow < sessTo))
+
+flipUp   = stDir == -1 and stDir[1] ==  1
+flipDown = stDir ==  1 and stDir[1] == -1
+
+// The EA compares DEMA at shift 1 against shift 3 — two closed bars apart.
+demaUp   = dema > dema[2]
+demaDn   = dema < dema[2]
+adxOk    = not useAdx or adxV <= maxAdx
+
+goLong  = flipUp   and (not useDema or demaUp) and adxOk and inSess
+goShort = flipDown and (not useDema or demaDn) and adxOk and inSess
+
+plot(showSt ? stLine : na, "SuperTrend", stDir == -1 ? accBull : accBear,
+     2, plot.style_linebr)
+
+// ─────────────────────────────── TRADE STATE ────────────────────────────────
+var array<int>   trDir = array.new_int()
+var array<float> trEnt = array.new_float()
+var array<float> trSl  = array.new_float()
+var array<float> trTp  = array.new_float()
+var array<int>   trBar = array.new_int()
+var array<float> trTrs = array.new_float()   // ratcheting trail, per trade
+var array<box>   trBxT = array.new_box()
+var array<box>   trBxS = array.new_box()
+var array<line>  trTrl = array.new_line()
+var array<line>  trEnl = array.new_line()    // the line from your real fill
+
+// A signal is known at a bar close. The FILL is not. Queue it.
+var array<int>   pdDir  = array.new_int()
+var array<int>   pdBar  = array.new_int()
+var array<float> pdRisk = array.new_float()
+var array<float> pdSig  = array.new_float()
+
+// completed trades, newest last
+var array<int>    hDir = array.new_int()
+var array<float>  hEnt = array.new_float()
+var array<float>  hExt = array.new_float()
+var array<float>  hR   = array.new_float()
+var array<string> hWhy = array.new_string()
+
+var array<box>  oldBoxes = array.new_box()
+var array<line> oldLines = array.new_line()
+
+// Completed trades do not vanish. Their boxes stay, drained of colour, so the
+// last `showHist` trades read as history instead of competing with the live one.
+pushOld(box b, bool won) =>
+    if not na(b)
+        box.set_bgcolor(b, color.new(won ? accBull : accBear, 93))
+        array.push(oldBoxes, b)
+        while array.size(oldBoxes) > math.max(showHist, 1) * 2
+            b0 = array.shift(oldBoxes)
+            if not na(b0)
+                box.delete(b0)
+    0
+
+pushOldLine(line l) =>
+    if not na(l)
+        line.set_color(l, color.new(color.gray, 55))
+        line.set_width(l, 1)
+        array.push(oldLines, l)
+        while array.size(oldLines) > math.max(showHist, 1)
+            l0 = array.shift(oldLines)
+            if not na(l0)
+                line.delete(l0)
+    0
+
+openTrade(int d, float en, float sl, float tp) =>
+    array.push(trDir, d)
+    array.push(trEnt, en)
+    array.push(trSl,  sl)
+    array.push(trTp,  tp)
+    array.push(trBar, bar_index)
+    array.push(trTrs, float(na))
+    array.push(trTrl, line(na))
+    // Created unconditionally and hidden with transparency: box.new inside a
+    // ternary would leak an orphan box on every entry.
+    array.push(trBxT, box.new(bar_index, math.max(en, tp), bar_index + 2,
+         math.min(en, tp), border_color = na,
+         bgcolor = showBoxes ? cTp : color.new(color.gray, 100)))
+    array.push(trBxS, box.new(bar_index, math.max(en, sl), bar_index + 2,
+         math.min(en, sl), border_color = na,
+         bgcolor = showBoxes ? cSl : color.new(color.gray, 100)))
+    // The line the trade is actually measured from: your fill, not the signal.
+    // Extended every bar so an open position is trackable from entry to close.
+    array.push(trEnl, line.new(bar_index, en, bar_index + 2, en, width = 2,
+         color = color.new(d > 0 ? accBull : accBear, 10)))
+    0
+
+// ───────────────────────────────── FIRE ─────────────────────────────────────
+var bool firedLong  = false
+var bool firedShort = false
+firedLong  := false
+firedShort := false
+
+// Risk is sized from the ATR of the SIGNAL bar, exactly as the EA does, so the
+// stop distance does not drift while you are waiting to click.
+sigRisk = stopAtr * atr
+
+if barstate.isconfirmed and (goLong or goShort) and sigRisk > 0
+    d0 = goLong ? 1 : -1
+    array.push(pdDir,  d0)
+    array.push(pdBar,  bar_index)
+    array.push(pdRisk, sigRisk)
+    array.push(pdSig,  close)
+    firedLong  := goLong
+    firedShort := goShort
+
+// ---- fill anything whose delay has elapsed, at THIS bar's open
+var float lastSlip = na
+if array.size(pdDir) > 0
+    for q = array.size(pdDir) - 1 to 0
+        aged = bar_index - array.get(pdBar, q)
+        if aged >= entryDelay and array.size(trDir) < maxTrades
+            d2  = array.get(pdDir,  q)
+            rk  = array.get(pdRisk, q)
+            sig = array.get(pdSig,  q)
+            // the first price actually obtainable after you saw the signal
+            fill = trackFrom == "Signal price" ? sig : open
+            lastSlip := (sig - fill) * d2          // + means the delay cost you
+            openTrade(d2, fill, fill - d2 * rk, fill + d2 * targetR * rk)
+            array.remove(pdDir, q)
+            array.remove(pdBar, q)
+            array.remove(pdRisk, q)
+            array.remove(pdSig, q)
+        else if aged > entryDelay + 3
+            // the setup went stale before a slot opened; do not enter it late
+            array.remove(pdDir, q)
+            array.remove(pdBar, q)
+            array.remove(pdRisk, q)
+            array.remove(pdSig, q)
+
+// ──────────────────────────────── MANAGE ────────────────────────────────────
+var string lastExit = ""
+var float  liveR    = na
+var float  liveM    = na
+liveR := na
+liveM := na
+
+if array.size(trDir) > 0
+    for k = array.size(trDir) - 1 to 0
+        d  = array.get(trDir, k)
+        en = array.get(trEnt, k)
+        sl = array.get(trSl,  k)
+        tp = array.get(trTp,  k)
+        bt = array.get(trBxT, k)
+        bs = array.get(trBxS, k)
+        tl = array.get(trTrl, k)
+        el = array.get(trEnl, k)
+        held = bar_index - array.get(trBar, k)
+
+        // boxes and the entry line GROW with the trade instead of sitting at a
+        // fixed width, so the position is readable from fill to close
+        if not na(bt)
+            box.set_right(bt, bar_index + 2)
+        if not na(bs)
+            box.set_right(bs, bar_index + 2)
+        if not na(el)
+            line.set_x2(el, bar_index + 2)
+
+        risk = math.abs(en - sl)
+        rNow = risk > 0 ? (close - en) * d / risk : 0.0
+
+        // ---- BREAK-EVEN. Off by default because it measured worst on all four
+        // markets. Applied to the hard stop so its damage is visible if used.
+        if useBE and rNow >= beAtR
+            sl := d > 0 ? math.max(sl, en) : math.min(sl, en)
+            array.set(trSl, k, sl)
+
+        // ---- TRAIL. Wide on purpose, and it RATCHETS: once moved it never
+        // gives ground back, so it cannot walk away from you on a pullback.
+        trs = array.get(trTrs, k)
+        if useTrail and rNow >= trailArm
+            cand = d > 0 ? close - trailAtr * atr : close + trailAtr * atr
+            trs := na(trs) ? cand : (d > 0 ? math.max(trs, cand) : math.min(trs, cand))
+            array.set(trTrs, k, trs)
+
+        if showTrail and not na(trs)
+            if na(tl)
+                tl := line.new(bar_index - 1, trs, bar_index + 2, trs,
+                     color = color.new(d > 0 ? accBull : accBear, 40),
+                     style = line.style_dashed, width = 1)
+                array.set(trTrl, k, tl)
+            else
+                line.set_xy1(tl, bar_index - 1, trs)
+                line.set_xy2(tl, bar_index + 2, trs)
+
+        liveR := rNow
+        liveM := (close - en) * d * ccyPerPt * (lotSize / 0.01)
+        if showRlive and barstate.islast
+            label.new(bar_index + 2, close,
+                 str.tostring(rNow, "#.#") + "R  " +
+                 (liveM >= 0 ? "+" : "") + str.tostring(liveM, "#.##"),
+                 style = label.style_label_left,
+                 color = color.new(color.white, 100),
+                 textcolor = liveM >= 0 ? accBull : accBear, size = size.small)
+
+        // ---- EXITS. Not every trade reaches TP. The effective stop is whichever
+        // of the hard stop and the trail price would be reached FIRST, so a bar
+        // that touches both is not ambiguous about which one fired.
+        useTrl = useTrail and not na(trs)
+        eStop  = useTrl ? (d > 0 ? math.max(sl, trs) : math.min(sl, trs)) : sl
+        byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
+        hitStp = d > 0 ? low  <= eStop : high >= eStop
+        hitTp  = d > 0 ? high >= tp    : low  <= tp
+        hitTim = useTime and held >= maxHold
+
+        // ties lose: the stop is checked before the target
+        exPx  = hitStp ? eStop : hitTp ? tp : close
+        exWhy = hitStp ? (byTrl ? "TRL" : (useBE and eStop == en ? "BE" : "SL"))
+                 : hitTp ? "TP" : "TIME"
+        gone  = hitStp or hitTp or hitTim
+
+        if barstate.isconfirmed and gone
+            lastExit := exWhy
+            rFinal = risk > 0 ? (exPx - en) * d / risk : 0.0
+            won    = rFinal >= 0
+            label.new(bar_index, exPx,
+                 exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy,
+                 style = d > 0 ? label.style_label_up : label.style_label_down,
+                 color = color.new(color.white, 100),
+                 textcolor = won ? accBull : accBear, size = size.small)
+            array.push(hDir, d)
+            array.push(hEnt, en)
+            array.push(hExt, exPx)
+            array.push(hR,   rFinal)
+            array.push(hWhy, exWhy)
+            while array.size(hDir) > 40
+                array.shift(hDir)
+                array.shift(hEnt)
+                array.shift(hExt)
+                array.shift(hR)
+                array.shift(hWhy)
+            pushOld(bt, won)
+            pushOld(bs, won)
+            pushOldLine(el)
+            if not na(tl)
+                line.delete(tl)
+            array.remove(trDir, k)
+            array.remove(trEnt, k)
+            array.remove(trSl,  k)
+            array.remove(trTp,  k)
+            array.remove(trBar, k)
+            array.remove(trTrs, k)
+            array.remove(trBxT, k)
+            array.remove(trBxS, k)
+            array.remove(trTrl, k)
+            array.remove(trEnl, k)
+
+// ──────────────────────────────── SIGNALS ───────────────────────────────────
+plotshape(firedLong,  "BUY",  shape.labelup,   location.belowbar, accBull,
+     text = "BUY",  textcolor = color.white, size = size.small)
+plotshape(firedShort, "SELL", shape.labeldown, location.abovebar, accBear,
+     text = "SELL", textcolor = color.white, size = size.small)
+
+// A flip that a filter REFUSED. Seeing what was skipped, and why, is how you
+// find out whether the filter is helping you or robbing you.
+skipUp   = barstate.isconfirmed and flipUp   and not goLong
+skipDown = barstate.isconfirmed and flipDown and not goShort
+plotshape(skipUp,   "skipped BUY",  shape.xcross, location.belowbar,
+     color.new(color.gray, 35), size = size.tiny)
+plotshape(skipDown, "skipped SELL", shape.xcross, location.abovebar,
+     color.new(color.gray, 35), size = size.tiny)
+
+// ───────────────────────────────── PANEL ────────────────────────────────────
+var table panel = table.new(position.top_right, 2, 8, frame_width = 1,
+     frame_color = color.new(color.gray, 60), border_width = 1,
+     border_color = color.new(color.gray, 85))
+
+cell(int r, string k, string v, color c) =>
+    table.cell(panel, 0, r, k, text_size = size.small, text_halign = text.align_left,
+         text_color = color.new(chart.fg_color, 40), bgcolor = color.new(chart.bg_color, 10))
+    table.cell(panel, 1, r, v, text_size = size.small, text_halign = text.align_right,
+         text_color = c, bgcolor = color.new(chart.bg_color, 10))
+
+okc = accBull
+bad = accBear
+dim = color.new(chart.fg_color, 35)
+
+// Lots for a fixed money risk at the CURRENT stop distance, so the sizing is
+// done before the entry rather than on a calculator while price runs away.
+suggLots = riskMoney > 0 and sigRisk > 0 and ccyPerPt > 0
+     ? riskMoney * 0.01 / (sigRisk * ccyPerPt) : na
+
+if showPanel and barstate.islast
+    cell(0, "SuperTrend " + str.tostring(stAtrLen) + "/" + str.tostring(stMult),
+         stDir == -1 ? "BULLISH" : "BEARISH", stDir == -1 ? okc : bad)
+    cell(1, "DEMA " + str.tostring(demaLen),
+         not useDema ? "off" : demaUp ? "rising" : "falling",
+         not useDema ? dim : demaUp ? okc : bad)
+    cell(2, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(maxAdx, "#.#")
+         + (adxOk ? "  ok" : "  extended"), adxOk ? okc : bad)
+    cell(3, "Session " + str.tostring(hourNow) + ":00 UTC",
+         not useSess ? "any" : inSess ? "ok" : "outside",
+         not useSess ? dim : inSess ? okc : bad)
+    cell(4, "Stop / target",
+         str.tostring(sigRisk, "#.##") + "  →  " + str.tostring(targetR, "#.#") + "R", dim)
+    cell(5, "Lots for " + str.tostring(riskMoney, "#.##") + " risk",
+         na(suggLots) ? "set a risk amount" : str.tostring(suggLots, "#.###"),
+         na(suggLots) ? dim : okc)
+    nOpen = array.size(trDir)
+    nPend = array.size(pdDir)
+    cell(6, "Position", nOpen > 0
+         ? (str.tostring(liveR, "#.##") + "R  " + (liveM >= 0 ? "+" : "")
+            + str.tostring(liveM, "#.##"))
+         : nPend > 0 ? "ENTER NOW"
+         : ("flat" + (lastExit == "" ? "" : "  last " + lastExit)),
+         nOpen > 0 ? (liveM >= 0 ? okc : bad)
+         : nPend > 0 ? color.new(#FFB300, 0) : dim)
+    // What the gap between signal and click actually cost, in price. Most
+    // indicators hide this by pretending you filled at the signal.
+    cell(7, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+         na(lastSlip) ? "no fills yet"
+         : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
+         na(lastSlip) ? dim : lastSlip > 0 ? bad : okc)
+
+// ────────────────────────────── TRADE RECORD ────────────────────────────────
+// What actually happened, in money, at your lot size, using the DELAYED fill
+// throughout — the record of trades you could really have taken.
+var table rec = table.new(position.bottom_right, 5, 14, frame_width = 1,
+     frame_color = color.new(color.gray, 60), border_width = 1,
+     border_color = color.new(color.gray, 85))
+
+recCell(int c, int r, string txt, color col, bool head) =>
+    table.cell(rec, c, r, txt, text_size = size.tiny,
+         text_halign = c == 0 ? text.align_left : text.align_right,
+         text_color = head ? color.new(chart.fg_color, 30) : col,
+         bgcolor = color.new(chart.bg_color, 5))
+
+if showTable and barstate.islast and array.size(hDir) > 0
+    recCell(0, 0, "#",     chart.fg_color, true)
+    recCell(1, 0, "dir",   chart.fg_color, true)
+    recCell(2, 0, "R",     chart.fg_color, true)
+    recCell(3, 0, str.tostring(lotSize) + " lot", chart.fg_color, true)
+    recCell(4, 0, "exit",  chart.fg_color, true)
+    n     = array.size(hDir)
+    shown = math.min(showHist, math.min(n, 11))
+    totR  = 0.0
+    totM  = 0.0
+    wins  = 0
+    nTp   = 0
+    nErl  = 0
+    nSl   = 0
+    for j = 0 to n - 1
+        r_  = array.get(hR, j)
+        wy_ = array.get(hWhy, j)
+        totR += r_
+        totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
+                * ccyPerPt * (lotSize / 0.01)
+        wins += r_ > 0 ? 1 : 0
+        nTp  += wy_ == "TP" ? 1 : 0
+        nSl  += wy_ == "SL" ? 1 : 0
+        nErl += (wy_ == "TRL" or wy_ == "TIME" or wy_ == "BE") ? 1 : 0
+    for k = 0 to shown - 1
+        j  = n - 1 - k
+        d_ = array.get(hDir, j)
+        r_ = array.get(hR, j)
+        m_ = (array.get(hExt, j) - array.get(hEnt, j)) * d_ * ccyPerPt * (lotSize / 0.01)
+        col = r_ >= 0 ? accBull : accBear
+        recCell(0, k + 1, str.tostring(n - k), color.new(chart.fg_color, 45), false)
+        recCell(1, k + 1, d_ > 0 ? "L" : "S", col, false)
+        recCell(2, k + 1, str.tostring(r_, "#.##"), col, false)
+        recCell(3, k + 1, (m_ >= 0 ? "+" : "") + str.tostring(m_, "#.##"), col, false)
+        recCell(4, k + 1, array.get(hWhy, j), col, false)
+    totRow = shown + 1
+    recCell(0, totRow, "TOTAL " + str.tostring(n), chart.fg_color, true)
+    recCell(1, totRow, str.tostring(math.round(100.0 * wins / n)) + "%", chart.fg_color, true)
+    recCell(2, totRow, str.tostring(totR, "#.#"), totR >= 0 ? accBull : accBear, false)
+    recCell(3, totRow, (totM >= 0 ? "+" : "") + str.tostring(totM, "#.##"),
+         totM >= 0 ? accBull : accBear, false)
+    recCell(4, totRow, "R " + str.tostring(totR / n, "#.##"), chart.fg_color, true)
+    // How the trades ENDED. If "early" dominates, the target is too far away
+    // for this market. If SL dominates, the stop is too close to it.
+    mixRow = totRow + 1
+    recCell(0, mixRow, "how they ended", chart.fg_color, true)
+    recCell(1, mixRow, "TP " + str.tostring(nTp), accBull, false)
+    recCell(2, mixRow, "early " + str.tostring(nErl), color.new(#FFB300, 0), false)
+    recCell(3, mixRow, "SL " + str.tostring(nSl), accBear, false)
+    recCell(4, mixRow, str.tostring(entryDelay) + "-bar fill", chart.fg_color, true)
+
+// ───────────────────────────────── ALERTS ───────────────────────────────────
+alertcondition(goLong,  "SuperTrend Sniper BUY",
+     "STSniper BUY {{ticker}} {{interval}} at {{close}}")
+alertcondition(goShort, "SuperTrend Sniper SELL",
+     "STSniper SELL {{ticker}} {{interval}} at {{close}}")
+alertcondition(goLong or goShort, "SuperTrend Sniper ANY",
+     "STSniper signal {{ticker}} {{interval}} at {{close}}")
