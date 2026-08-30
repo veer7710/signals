@@ -63,6 +63,18 @@ lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, grou
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
 
+gZ = "ZONE MEMORY  (what this level did the LAST times price came here)"
+useZoneMem = input.bool(true, "Remember how each zone behaved before", group = gZ,
+     tooltip = "A level that has held three times is not the same trade as a level that has been sliced through twice, and without this the indicator treats them identically. Every time price visits a zone the reaction is recorded, so the next visit comes with a history.")
+zoneTol    = input.float(0.25, "   counts as 'at the zone' within (× ATR)", minval = 0.05, step = 0.05, group = gZ)
+reactBars  = input.int(10, "   judge the reaction this many bars later", minval = 2, maxval = 60, group = gZ,
+     tooltip = "How long to wait before deciding whether the zone HELD or BROKE. Too short and every touch looks like a hold; too long and the reaction has nothing to do with the level any more.")
+memMax     = input.int(60, "   zones to remember", minval = 10, maxval = 200, group = gZ,
+     tooltip = "This memory outlives the drawn line on purpose. Lines are evicted to keep the chart readable, but the history of a price area should not vanish with its drawing - that is the whole point of remembering PREVIOUS zones.")
+showZoneStats = input.bool(true, "   label each zone with its record", group = gZ)
+useZoneFilter = input.bool(false, "   only trade zones with a matching history", group = gZ,
+     tooltip = "Bounce setups only where the zone has HELD more often than it broke, break setups only where it has BROKEN more often. Off by default: it is a real filter, it will cut your signal count, and it has not been measured yet.")
+
 gX = "EXTRA LIQUIDITY SOURCES"
 useDaily = input.bool(true, "Previous day high / low", group = gX,
      tooltip = "The most-watched liquidity on any chart. Adding these is one of the biggest sources of extra setups.")
@@ -242,6 +254,74 @@ var array<bool>  loDead = array.new_bool()
 var array<line>  loLn   = array.new_line()
 var array<box>   loBx   = array.new_box()
 
+// ───────────────── ZONE MEMORY — how this level behaved before ──────────────
+// The question: when price comes back to a zone, what did it DO the last times
+// it was here? This memory is deliberately SEPARATE from the drawn levels.
+// Drawings get evicted to keep the chart readable, but the history of a price
+// area should outlive its line - that is the "previous zones" part.
+var array<float> memPx    = array.new_float()
+var array<int>   memTouch = array.new_int()
+var array<int>   memHold  = array.new_int()
+var array<int>   memBreak = array.new_int()
+var array<float> memMove  = array.new_float()
+var array<int>   memLast  = array.new_int()
+
+// touches whose reaction is not yet known
+var array<float> pnPx  = array.new_float()
+var array<int>   pnBar = array.new_int()
+var array<bool>  pnHi  = array.new_bool()
+
+memFind(float p) =>
+    idx = -1
+    tol = zoneTol * atr
+    if array.size(memPx) > 0
+        for i = 0 to array.size(memPx) - 1
+            if idx == -1 and math.abs(array.get(memPx, i) - p) <= tol
+                idx := i
+    idx
+
+memAdd(float p) =>
+    array.push(memPx, p)
+    array.push(memTouch, 0)
+    array.push(memHold, 0)
+    array.push(memBreak, 0)
+    array.push(memMove, 0.0)
+    array.push(memLast, bar_index)
+    while array.size(memPx) > memMax
+        array.shift(memPx)
+        array.shift(memTouch)
+        array.shift(memHold)
+        array.shift(memBreak)
+        array.shift(memMove)
+        array.shift(memLast)
+    array.size(memPx) - 1
+
+regTouch(float p, bool isHigh) =>
+    i = memFind(p)
+    if i == -1
+        i := memAdd(p)
+    array.set(memTouch, i, array.get(memTouch, i) + 1)
+    array.set(memLast,  i, bar_index)
+    array.push(pnPx,  p)
+    array.push(pnBar, bar_index)
+    array.push(pnHi,  isHigh)
+    0
+
+// Record a visit to any live level. Re-registering the same zone every bar of
+// a long consolidation would turn one visit into forty, so a zone is only
+// re-registered once its previous visit has been resolved.
+touchScan(array<float> px, array<bool> dead, bool isHigh) =>
+    if useZoneMem and barstate.isconfirmed and array.size(px) > 0
+        tol = zoneTol * atr
+        for i = 0 to array.size(px) - 1
+            if not array.get(dead, i)
+                p = array.get(px, i)
+                if low <= p + tol and high >= p - tol
+                    m = memFind(p)
+                    if m == -1 or (bar_index - array.get(memLast, m)) > reactBars
+                        regTouch(p, isHigh)
+    0
+
 addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
          array<line> lns, array<box> bxs, float p, int b, bool isHigh) =>
     // merge into an existing near-equal level: equal highs/lows hold MORE
@@ -351,6 +431,54 @@ extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
 extend(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, true)
 extend(loPx, loBar, loHits, loDead, loLn, loBx, false)
 
+// ---- record visits, then judge them `reactBars` later
+touchScan(hiPx, hiDead, true)
+touchScan(loPx, loDead, false)
+
+if array.size(pnPx) > 0
+    for q = array.size(pnPx) - 1 to 0
+        if bar_index - array.get(pnBar, q) >= reactBars
+            lp   = array.get(pnPx, q)
+            isHi = array.get(pnHi, q)
+            m    = memFind(lp)
+            if m != -1
+                thr   = zoneTol * atr
+                moved = close - lp
+                // a resistance HELD if price is now below it; a support HELD if
+                // price is now above it. Anything inside the tolerance is
+                // neither - it is still sitting on the level, so it is not counted.
+                held  = isHi ? (moved < -thr) : (moved >  thr)
+                broke = isHi ? (moved >  thr) : (moved < -thr)
+                if held
+                    array.set(memHold, m, array.get(memHold, m) + 1)
+                    array.set(memMove, m, array.get(memMove, m) + math.abs(moved))
+                else if broke
+                    array.set(memBreak, m, array.get(memBreak, m) + 1)
+                    array.set(memMove, m, array.get(memMove, m) + math.abs(moved))
+            array.remove(pnPx,  q)
+            array.remove(pnBar, q)
+            array.remove(pnHi,  q)
+
+// ---- what the nearest zone's record says about what price may do here
+zoneHold(float p) =>
+    m = memFind(p)
+    m == -1 ? -1.0 : (array.get(memHold, m) + array.get(memBreak, m) == 0 ? -1.0
+         : 100.0 * array.get(memHold, m)
+           / (array.get(memHold, m) + array.get(memBreak, m)))
+
+zoneText(float p) =>
+    m = memFind(p)
+    string t = ""
+    if m != -1
+        h = array.get(memHold, m)
+        b = array.get(memBreak, m)
+        n = h + b
+        avg = n > 0 ? array.get(memMove, m) / n : 0.0
+        t := n == 0 ? "new"
+             : str.tostring(h) + " held / " + str.tostring(b) + " broke  ~"
+               + str.tostring(avg, "#.#") + "pt"
+    t
+
 // ───────────────────────────── SWEEP DETECTION ──────────────────────────────
 // A break is: price takes out a level that is old enough to hold orders, and
 // (optionally) CLOSES beyond it on an expanding candle. The close requirement
@@ -431,8 +559,18 @@ brkShort = useBreak and (isCont ? rawShort : rawLong)
 bncLong  = useBounce and not na(bounceUpLvl)
 bncShort = useBounce and not na(bounceDnLvl)
 
-goLong   = brkLong  or bncLong
-goShort  = brkShort or bncShort
+// ---- ZONE HISTORY FILTER.
+// A bounce is a bet that the level HOLDS, so take it where this zone has held
+// more often than it broke. A break is the opposite bet, so take it where the
+// zone has actually been broken before. A zone with no record (-1) is allowed
+// through either way - absence of history is not evidence against the trade.
+bncHold  = bncLong  ? zoneHold(bounceUpLvl) : bncShort ? zoneHold(bounceDnLvl) : -1.0
+brkHold  = brkLong  ? zoneHold(nz(sweptHi, close)) : brkShort ? zoneHold(nz(sweptLo, close)) : -1.0
+bncOk    = not useZoneFilter or bncHold < 0 or bncHold >= 50.0
+brkOk    = not useZoneFilter or brkHold < 0 or brkHold <  50.0
+
+goLong   = (brkLong  and brkOk) or (bncLong  and bncOk)
+goShort  = (brkShort and brkOk) or (bncShort and bncOk)
 setupIsBounce = (bncLong or bncShort) and not (brkLong or brkShort)
 
 // ─────────────────────────── TARGET: NEXT LIQUIDITY ─────────────────────────
@@ -740,8 +878,37 @@ plotshape(firedLong  and firedBounce, "BUY bounce",  shape.triangleup,
 plotshape(firedShort and firedBounce, "SELL bounce", shape.triangledown,
      location.abovebar, cBear, size = size.tiny)
 
+// ──────────────── ZONE RECORD LABELS — the history, on the chart ────────────
+// Drawn only on the last bar so they cost one label per level, not one per bar.
+var array<label> zLabs = array.new_label()
+
+drawZoneLabels(array<float> px, array<bool> dead, bool isHigh) =>
+    if showZoneStats and useZoneMem and barstate.islast and array.size(px) > 0
+        for i = 0 to array.size(px) - 1
+            if not array.get(dead, i)
+                p = array.get(px, i)
+                t = zoneText(p)
+                if t != ""
+                    hp = zoneHold(p)
+                    col = hp < 0 ? color.new(chart.fg_color, 45)
+                         : hp >= 60 ? accBull : hp <= 40 ? accBear
+                         : color.new(#FFB300, 0)
+                    array.push(zLabs, label.new(bar_index + 4, p, t,
+                         style = label.style_label_left, size = size.tiny,
+                         color = color.new(color.white, 100), textcolor = col))
+    0
+
+// labels are redrawn each time the last bar updates, so clear the previous set
+if barstate.islast and array.size(zLabs) > 0
+    while array.size(zLabs) > 0
+        l0 = array.shift(zLabs)
+        if not na(l0)
+            label.delete(l0)
+drawZoneLabels(hiPx, hiDead, true)
+drawZoneLabels(loPx, loDead, false)
+
 // ──────────────────────────────── STATUS PANEL ──────────────────────────────
-var table panel = table.new(position.top_right, 2, 8, frame_width = 1,
+var table panel = table.new(position.top_right, 2, 9, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -753,6 +920,7 @@ cell(int r, string k, string v, color c) =>
 
 okc = accBull
 bad = accBear
+dim = color.new(chart.fg_color, 35)
 
 if showPanel and barstate.islast
     cell(0, "Mode", (isCont ? "CONT" : "REV") + " · " +
@@ -777,7 +945,17 @@ if showPanel and barstate.islast
          : armDir != 0 ? color.new(#FFB300, 0) : color.new(chart.fg_color, 30))
     // What the delay between signal and click actually cost, in price. This is
     // the number most indicators hide by pretending you filled at the signal.
-    cell(7, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+    // The nearest zone's own record, so you know what price did here before.
+    nearHi = nextLiq(true)
+    nearLo = nextLiq(false)
+    nearP  = na(nearHi) ? nearLo : na(nearLo) ? nearHi
+             : (math.abs(nearHi - close) < math.abs(close - nearLo) ? nearHi : nearLo)
+    zt = na(nearP) ? "" : zoneText(nearP)
+    zh = na(nearP) ? -1.0 : zoneHold(nearP)
+    cell(7, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
+         zt == "" ? "no record yet" : zt,
+         zh < 0 ? dim : zh >= 60 ? okc : zh <= 40 ? bad : color.new(#FFB300, 0))
+    cell(8, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
          na(lastSlip) ? "no fills yet"
          : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
          na(lastSlip) ? color.new(chart.fg_color, 30) : lastSlip > 0 ? bad : okc)
