@@ -360,3 +360,32 @@ there. Requires daily history the repo does not yet hold.
   turns negative under the same gate.
 - **For the EA:** gate on compressed volatility, do NOT adapt targets, do NOT
   use early break-even (E-008, worst exit on 4/4 markets).
+
+## E-021 — Automated search: in-sample winners FAILED out-of-sample (MAJOR)
+- **Built:** `autosearch.py` — runs the whole config space locally at zero AI
+  cost. Three defences baked in: chronological 70/30 split, out-of-sample run
+  ONCE on the top handful, and a multiple-testing correction stating the luck
+  bar for the number of configs tried.
+- **Run:** 672 tests, 168 configs x 4 markets, 1h, 40 seconds.
+- **Result — the overfitting was caught red-handed:**
+
+  | config | in-sample | out-of-sample |
+  |---|---|---|
+  | sweep_continuation + gate adx25/1.15, rr3 | **4/4 markets, +0.166R** | **1/4 markets, -0.109R** |
+  | sweep_continuation + gate adx20/1.0, rr3 | 3/4, +0.185R | 1/2, -0.158R |
+  | ma_cross, NO gate, rr3 | 3/4, +0.094R | **3/3, +0.208R (only survivor)** |
+
+  **7 of 8 in-sample winners failed out-of-sample.** The best in-sample config
+  inverted completely.
+- **Luck bar at N=672 is t=3.61.** Best out-of-sample t anywhere was +2.24.
+  **NOTHING cleared it.**
+- **This CORRECTS E-020.** That test found the expansion gate averaged +0.108R
+  against +0.029R ungated — but it was NOT split in-sample/out-of-sample. Under
+  a proper split the gated configs are the ones that collapse, and the two best
+  out-of-sample configs both had **gate = none**. The gate's apparent value in
+  E-020 was substantially in-sample fitting.
+  E-019 (that compressed volatility PRECEDES bigger moves) still stands — it was
+  a direct measurement, not a fitted strategy. What does not stand is that
+  gating on it improves a traded system.
+- **Value of this run:** it prevented an EA being built on a configuration that
+  looked best on every in-sample metric and is negative on unseen data.
