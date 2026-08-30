@@ -164,6 +164,9 @@ cBull   = accBull
 cBear   = accBear
 cBsl    = color.new(accBear, 86)   // sell-side liquidity sits ABOVE price
 cSsl    = color.new(accBull, 86)   // buy-side liquidity sits BELOW price
+// Fully transparent. Drawings are created unconditionally and hidden with
+// this, never by putting a *.new() call inside a ternary.
+HIDDEN  = color.new(color.gray, 100)
 cTp     = color.new(accBull, 88)
 cSl     = color.new(accBear, 88)
 showPanel = input.bool(true, "Show status panel", group = gD)
@@ -256,10 +259,10 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
         array.push(bar, b)
         array.push(hits, 1)
         array.push(dead, false)
-        ln = showLvls ? line.new(b, p, bar_index + 3, p,
-             color = isHigh ? cBsl : cSsl, style = line.style_dotted, width = 1) : na
-        bx = showZones ? box.new(b, p, bar_index + 3, p, border_color = na,
-             bgcolor = isHigh ? cBsl : cSsl) : na
+        ln = line.new(b, p, bar_index + 3, p, style = line.style_dotted, width = 1,
+             color = showLvls ? (isHigh ? cBsl : cSsl) : HIDDEN)
+        bx = box.new(b, p, bar_index + 3, p, border_color = na,
+             bgcolor = showZones ? (isHigh ? cBsl : cSsl) : HIDDEN)
         array.push(lns, ln)
         array.push(bxs, bx)
         // evict the oldest once past the cap, so the chart never accumulates
@@ -332,14 +335,18 @@ extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
                 line.set_y1(ln, p)
                 line.set_y2(ln, p)
                 line.set_x2(ln, bar_index + 3)
-                line.set_color(ln, isDead ? color.new(color.gray, 88) : color.new(isHigh ? accBear : accBull, 45))
+                line.set_color(ln, not showLvls ? HIDDEN
+                     : isDead ? color.new(color.gray, 88)
+                     : color.new(isHigh ? accBear : accBull, 45))
                 line.set_width(ln, isDead ? 1 : thick)
             if not na(bx)
                 zh = (zoneGrow ? 0.16 : 0.07) * atr * thick
                 box.set_top(bx, p + (isHigh ? zh : 0))
                 box.set_bottom(bx, p - (isHigh ? 0 : zh))
                 box.set_right(bx, zoneGrow ? bar_index + 6 : bar_index + 3)
-                box.set_bgcolor(bx, isDead ? color.new(color.gray, 95) : (isHigh ? cBsl : cSsl))
+                box.set_bgcolor(bx, not showZones ? HIDDEN
+                     : isDead ? color.new(color.gray, 95)
+                     : (isHigh ? cBsl : cSsl))
     0
 extend(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, true)
 extend(loPx, loBar, loHits, loDead, loLn, loBx, false)
@@ -841,5 +848,13 @@ if showTable and barstate.islast and array.size(hDir) > 0
     recCell(4, mixRow, str.tostring(entryDelay) + "-bar fill", chart.fg_color, true)
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
-alertcondition(canFire and goLong,  "Liquidity Sniper BUY",  "LiqSniper BUY {{ticker}} {{interval}}")
-alertcondition(canFire and goShort, "Liquidity Sniper SELL", "LiqSniper SELL {{ticker}} {{interval}}")
+// Alerts fire on firedLong/firedShort - the direction actually TAKEN - not on
+// canFire and goLong. With "wait for a retest" on, the trade direction comes
+// from the armed setup, which can differ from goLong on the retest bar: the
+// old condition could alert BUY on a bar the indicator went short.
+alertcondition(firedLong,  "Liquidity Sniper BUY",
+     "LiqSniper BUY {{ticker}} {{interval}} at {{close}}")
+alertcondition(firedShort, "Liquidity Sniper SELL",
+     "LiqSniper SELL {{ticker}} {{interval}} at {{close}}")
+alertcondition(firedLong or firedShort, "Liquidity Sniper ANY",
+     "LiqSniper signal {{ticker}} {{interval}} at {{close}}")

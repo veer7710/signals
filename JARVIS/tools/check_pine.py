@@ -32,6 +32,138 @@ PARAM = re.compile(r'\b(?:int|float|bool|string|color|line|label|box|table|array
 IDENT = re.compile(r'(?<![\w.])([a-zA-Z_]\w*)(?![\w(])')
 
 
+
+# ---------------------------------------------------------------- order
+def check_order(src, declared):
+    """Pine is single-pass: a name must appear textually BEFORE it is used.
+    The existence check alone passes a file that reads a variable declared
+    fifty lines further down, which will not compile."""
+    first = {}
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        m = DECL.match(code)
+        # A named argument on a continuation line ("color = isHigh ? ..") looks
+        # exactly like a declaration. A builtin name is never being declared.
+        if m and m.group(1) not in first and m.group(1) not in BUILTIN:
+            first[m.group(1)] = i
+        m = MULTI.match(code)
+        if m:
+            for n in m.group(1).split(","):
+                first.setdefault(n.strip(), i)
+        m = FUNC.match(code)
+        if m and "=>" in code:
+            first.setdefault(m.group(1), i)
+        for n in PARAM.findall(code):
+            first.setdefault(n, i)
+        m = re.match(r'\s*for\s+([a-zA-Z_]\w*)\s*=', code)
+        if m:
+            first.setdefault(m.group(1), i)
+
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        if not code.strip():
+            continue
+        code = re.sub(r'"[^"]*"', '""', code)
+        code = re.sub(r'#[0-9A-Fa-f]{6,8}', '0', code)
+        code = re.sub(r'\b[a-zA-Z_]\w*\s*=(?!=)', ' ', code)
+        for name in IDENT.findall(code):
+            d = first.get(name)
+            if d is not None and d > i:
+                out.append((i, f"USED BEFORE DECLARED ({name}, declared line {d})",
+                            l.strip()[:70]))
+    return out
+
+
+# ---------------------------------------------------------------- arity
+def check_arity(src):
+    """A user function called with the wrong number of arguments. This is what
+    a rename or a signature change silently leaves behind."""
+    sig = {}
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        m = re.match(r'^([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>', code)
+        if m:
+            params = [p for p in m.group(2).split(",") if p.strip()]
+            sig[m.group(1)] = (len(params), i)
+
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        if re.match(r'^[a-zA-Z_]\w*\s*\([^)]*\)\s*=>', code):
+            continue                      # the definition itself
+        for fn, (want, dline) in sig.items():
+            for m in re.finditer(r'(?<![\w.])' + fn + r'\s*\(', code):
+                rest, depth, args, cur = code[m.end():], 1, [], ""
+                for ch in rest:
+                    if ch in "([": depth += 1
+                    elif ch in ")]":
+                        depth -= 1
+                        if depth == 0: break
+                    if ch == "," and depth == 1:
+                        args.append(cur); cur = ""; continue
+                    cur += ch
+                else:
+                    continue              # call spans lines; skip rather than guess
+                if cur.strip() or args:
+                    args.append(cur)
+                got = len([a for a in args if a.strip()])
+                if got != want:
+                    out.append((i, f"ARITY: {fn}() wants {want} arg(s), called "
+                                   f"with {got} (defined line {dline})",
+                                l.strip()[:70]))
+    return out
+
+
+# --------------------------------------------------------------- tables
+def check_tables(src):
+    """table.cell() writing outside the rows/columns the table was created
+    with. Pine throws at runtime, so the script loads and then dies."""
+    dims, out = {}, []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        m = re.search(r'(?:var\s+)?table\s+([a-zA-Z_]\w*)\s*=\s*table\.new\s*\(([^)]*)', code)
+        if m:
+            parts = [p.strip() for p in m.group(2).split(",")]
+            nums = [p for p in parts if re.fullmatch(r'\d+', p)]
+            if len(nums) >= 2:
+                dims[m.group(1)] = (int(nums[0]), int(nums[1]), i)
+
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        for m in re.finditer(r'table\.cell\s*\(\s*([a-zA-Z_]\w*)\s*,\s*([^,]+),\s*([^,]+),', code):
+            t = m.group(1)
+            if t not in dims:
+                continue
+            cols, rows, dl = dims[t]
+            for val, lim, what in ((m.group(2), cols, "column"),
+                                   (m.group(3), rows, "row")):
+                v = val.strip()
+                if re.fullmatch(r'\d+', v) and int(v) >= lim:
+                    out.append((i, f"TABLE BOUNDS: {t} has {lim} {what}s "
+                                   f"(0..{lim-1}), writing {what} {v}",
+                                l.strip()[:70]))
+    return out
+
+
+# ------------------------------------------------- drawings in ternaries
+def check_draw_in_ternary(src):
+    """box.new / line.new / label.new inside a ternary. Pine evaluates both
+    branches, so the branch you thought was skipped still allocates an object
+    every bar - a silent leak that eventually hits max_boxes_count."""
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        if "?" not in code:
+            continue
+        head = code.split("?")[0]
+        if re.search(r'(box|line|label|table)\.new\s*\(', code) and \
+           not re.search(r'(box|line|label|table)\.new\s*\(', head):
+            out.append((i, "DRAWING INSIDE A TERNARY (both branches allocate)",
+                        l.strip()[:70]))
+    return out
+
+
 def check(path):
     src = open(path, encoding="utf-8").read().split("\n")
     declared, problems = set(BUILTIN), []
@@ -82,6 +214,11 @@ def check(path):
                 continue
             problems.append((i, name, l.strip()[:70]))
 
+    problems += check_order(src, declared)
+    problems += check_arity(src)
+    problems += check_tables(src)
+    problems += check_draw_in_ternary(src)
+
     print("=" * 74)
     print(f"  PINE STATIC CHECK — {path.split('/')[-1]}")
     print("=" * 74)
@@ -89,12 +226,20 @@ def check(path):
         print(f"  CLEAN — every identifier used is declared. "
               f"({len(src)} lines, {len(declared)-len(BUILTIN)} own names)")
         return 0
-    seen = {}
-    for ln, name, ctx in problems:
-        seen.setdefault(name, []).append(ln)
-    print(f"  {len(seen)} UNDECLARED IDENTIFIER(S) — this file will not compile:\n")
-    for name, lines in sorted(seen.items()):
-        print(f"    {name:<20} used at line(s) {', '.join(map(str, lines[:8]))}")
+    bare = [(ln, n, c) for ln, n, c in problems if " " not in n]
+    rich = [(ln, n, c) for ln, n, c in problems if " " in n]
+    if bare:
+        seen = {}
+        for ln, name, ctx in bare:
+            seen.setdefault(name, []).append(ln)
+        print(f"  {len(seen)} UNDECLARED IDENTIFIER(S) — will not compile:\n")
+        for name, lines in sorted(seen.items()):
+            print(f"    {name:<20} used at line(s) {', '.join(map(str, lines[:8]))}")
+    if rich:
+        print(f"\n  {len(rich)} STRUCTURAL PROBLEM(S):\n")
+        for ln, msg, ctx in rich[:40]:
+            print(f"    line {ln:<5} {msg}")
+            print(f"              {ctx}")
     return 1
 
 
