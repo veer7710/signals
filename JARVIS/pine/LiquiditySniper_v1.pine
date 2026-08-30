@@ -71,6 +71,12 @@ needClose = input.bool(true, "Require close beyond the level", group = gS,
 minLvlAge = input.int(5,    "Level must be this many bars old", minval = 0, group = gS,
      tooltip = "A level formed moments ago has no resting orders behind it yet.")
 
+gP = "SIGNAL FREQUENCY"
+preset = input.string("Balanced", "Preset",
+     options = ["Sniper (fewest, best measured)", "Balanced", "Scalper (most signals)", "Manual"],
+     group = gP,
+     tooltip = "This is a genuine trade-off, not a free lunch. Sniper uses the gates that MEASURED best (ADX<=20, ATR<=1.0x median) and will sit out most of the day. Scalper opens the gates wide and WILL take setups that measured worse. Balanced sits between. Manual uses your own values below.")
+
 gF = "EXPANSION FILTER  (the 'is this move going to be big?' test)"
 useSqueeze = input.bool(true, "Only trade compressed volatility", group = gF,
      tooltip = "MEASURED: ATR at or below its median precedes 3+ ATR moves ~90% of the time. ATR at 2x its median precedes them 25% of the time.")
@@ -90,6 +96,12 @@ minR      = input.float(1.2, "Reject setup if R:R below", minval = 0.5, step = 0
 maxRiskAtr= input.float(2.5, "Reject setup if stop wider than (× ATR)", minval = 0.5, step = 0.1, group = gR)
 
 gD = "DISPLAY"
+showTrail = input.bool(true, "Show trail guide once trade is in profit", group = gD,
+     tooltip = "Dashed line showing where an ATR trail would sit. It deliberately does NOT appear until the trade is in profit: moving a stop up early measured as the worst exit rule on all four markets tested.")
+trailArm  = input.float(1.0, "   only after (R in profit)", minval = 0, step = 0.25, group = gD)
+trailAtr  = input.float(2.0, "   trail distance (× ATR)", minval = 0.5, step = 0.25, group = gD)
+showRlive = input.bool(true, "Show live R on the open trade", group = gD)
+zoneGrow  = input.bool(true, "Liquidity zones extend to the right edge", group = gD)
 nBoxes    = input.int(2, "Completed trade boxes to keep", minval = 0, maxval = 10, group = gD,
      tooltip = "Plus the live one. Keeps the chart clean instead of accumulating history.")
 theme     = input.string("White / blue candles", "Palette",
@@ -125,7 +137,17 @@ pivotBar = bar_index - 1 - pivLen
 hourNow = hour(time, "UTC")
 inSess  = not useSess or (sessFrom <= sessTo ? (hourNow >= sessFrom and hourNow < sessTo)
                                              : (hourNow >= sessFrom or hourNow < sessTo))
-expansionOk = (not useSqueeze or sqz <= maxSqueeze) and (not useAdx or adxV <= maxAdx) and inSess
+// Preset overrides the manual gates unless "Manual" is chosen.
+// The numbers come from the measured table: ADX 0-15 preceded a 3+ ATR move
+// ~90% of the time, ADX>=40 only 66%, ATR at 2x its median only 25%.
+sqzGate = preset == "Sniper (fewest, best measured)" ? 1.00 :
+          preset == "Balanced" ? 1.15 :
+          preset == "Scalper (most signals)" ? 1.60 : maxSqueeze
+adxGate = preset == "Sniper (fewest, best measured)" ? 20.0 :
+          preset == "Balanced" ? 25.0 :
+          preset == "Scalper (most signals)" ? 45.0 : maxAdx
+
+expansionOk = (not useSqueeze or sqz <= sqzGate) and (not useAdx or adxV <= adxGate) and inSess
 
 // ───────────────────────────── LIQUIDITY REGISTRY ───────────────────────────
 // Parallel arrays: price, bar formed, touch count, swept flag, drawing handles.
@@ -205,10 +227,10 @@ extend(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
                 line.set_color(ln, isDead ? color.new(color.gray, 88) : color.new(isHigh ? accBear : accBull, 45))
                 line.set_width(ln, isDead ? 1 : thick)
             if not na(bx)
-                zh = 0.07 * atr * thick
+                zh = (zoneGrow ? 0.16 : 0.07) * atr * thick
                 box.set_top(bx, p + (isHigh ? zh : 0))
                 box.set_bottom(bx, p - (isHigh ? 0 : zh))
-                box.set_right(bx, bar_index + 3)
+                box.set_right(bx, zoneGrow ? bar_index + 6 : bar_index + 3)
                 box.set_bgcolor(bx, isDead ? color.new(color.gray, 95) : (isHigh ? cBsl : cSsl))
     0
 extend(hiPx, hiBar, hiHits, hiDead, hiLn, hiBx, true)
@@ -291,11 +313,38 @@ pushOld(box b) =>
                 box.delete(b0)
     0
 
-canFire = barstate.isconfirmed and tDir == 0 and expansionOk and dispOk and (goLong or goShort)
+// ---- armed state (only used when needRetest is on)
+var int   armDir  = 0
+var float armLvl  = na
+var int   armBar  = 0
+var float armExt  = na
+
+breakNow = barstate.isconfirmed and expansionOk and dispOk and (goLong or goShort)
+
+if needRetest and breakNow and tDir == 0
+    armDir := goLong ? 1 : -1
+    armLvl := goLong ? nz(sweptHi, close) : nz(sweptLo, close)
+    armBar := bar_index
+    armExt := goLong ? high : low
+if armDir != 0
+    // track how far the break ran, so the stop still sits beyond the extreme
+    armExt := armDir > 0 ? math.max(armExt, high) : math.min(armExt, low)
+    if bar_index - armBar > retestBars
+        armDir := 0          // never came back — this one is gone, no chasing
+
+// A retest fires when price returns to the broken level and CLOSES on the
+// correct side of it. Coming back and failing to hold is the fakeout, and
+// this refuses it.
+retestHit = armDir != 0 and bar_index > armBar and barstate.isconfirmed and
+     (armDir > 0 ? (low <= armLvl and close > armLvl)
+                 : (high >= armLvl and close < armLvl))
+
+canFire = tDir == 0 and (needRetest ? retestHit : breakNow)
 
 if canFire
-    dir   = goLong ? 1 : -1
-    ext   = dir > 0 ? math.max(high, nz(sweptHi, high)) : math.min(low, nz(sweptLo, low))
+    dir   = needRetest ? armDir : (goLong ? 1 : -1)
+    ext   = needRetest ? armExt
+             : (dir > 0 ? math.max(high, nz(sweptHi, high)) : math.min(low, nz(sweptLo, low)))
     entry = close
     sl    = dir > 0 ? math.min(low, ext) - slBuf * atr : math.max(high, ext) + slBuf * atr
     risk  = math.abs(entry - sl)
@@ -313,14 +362,45 @@ if canFire
              border_color = na, bgcolor = cTp)
         liveSl := box.new(bar_index, math.max(entry, sl), bar_index + 20, math.min(entry, sl),
              border_color = na, bgcolor = cSl)
+        armDir := 0
 
 // manage the open trade — stop is checked FIRST, so a bar containing both
 // levels resolves as a loss. Intrabar order is unknowable and the pessimistic
 // read is the only honest one.
 var string lastExit = ""
+var line   beLine   = na
+var label  rLabel   = na
+
 if tDir != 0
-    box.set_right(liveTp, bar_index + 3)
-    box.set_right(liveSl, bar_index + 3)
+    // boxes GROW with the trade instead of sitting at a fixed width
+    box.set_right(liveTp, bar_index + 2)
+    box.set_right(liveSl, bar_index + 2)
+
+    risk  = math.abs(tEntry - tSl)
+    prof  = (close - tEntry) * tDir
+    rNow  = risk > 0 ? prof / risk : 0
+    trail = tDir > 0 ? close - trailAtr * atr : close + trailAtr * atr
+
+    // Guide line: where a trail WOULD sit once the trade has earned it.
+    // It only appears past trailArm because moving a stop up early measured as
+    // the WORST exit rule on all four markets tested - it scratches the trade
+    // before the tail that pays for everything can develop.
+    if showTrail and rNow >= trailArm
+        if na(beLine)
+            beLine := line.new(bar_index - 1, trail, bar_index + 2, trail,
+                 color = color.new(accBull, 35), style = line.style_dashed, width = 1)
+        else
+            line.set_xy1(beLine, bar_index - 1, trail)
+            line.set_xy2(beLine, bar_index + 2, trail)
+
+    // live R readout that follows the right edge
+    if showRlive
+        if not na(rLabel)
+            label.delete(rLabel)
+        rLabel := label.new(bar_index + 2, close,
+             str.tostring(rNow, "#.#") + "R", style = label.style_label_left,
+             color = color.new(color.white, 100),
+             textcolor = rNow >= 0 ? accBull : accBear, size = size.small)
     hitSl = tDir > 0 ? low  <= tSl : high >= tSl
     hitTp = tDir > 0 ? high >= tTp : low  <= tTp
     if barstate.isconfirmed and (hitSl or hitTp)
@@ -334,6 +414,12 @@ if tDir != 0
         liveTp := na
         liveSl := na
         tDir   := 0
+        if not na(beLine)
+            line.delete(beLine)
+            beLine := na
+        if not na(rLabel)
+            label.delete(rLabel)
+            rLabel := na
 
 plotshape(canFire and goLong  and tDir != 0 and tBar == bar_index, "BUY",
      shape.labelup, location.belowbar, cBull, text = "BUY",
@@ -357,15 +443,20 @@ okc = accBull
 bad = accBear
 
 if showPanel and barstate.islast
-    cell(0, "Mode", isCont ? "CONTINUATION" : "reversal", isCont ? okc : bad)
-    cell(1, "Squeeze  ATR/med", str.tostring(sqz, "#.##") + (sqz <= maxSqueeze ? "  ok" : "  too hot"),
-         sqz <= maxSqueeze ? okc : bad)
-    cell(2, "ADX", str.tostring(adxV, "#.#") + (adxV <= maxAdx ? "  ok" : "  too high"),
-         adxV <= maxAdx ? okc : bad)
+    cell(0, "Mode", (isCont ? "CONT" : "REV") + " · " +
+         (preset == "Sniper (fewest, best measured)" ? "SNIPER"
+        : preset == "Scalper (most signals)" ? "SCALPER"
+        : preset == "Balanced" ? "BALANCED" : "MANUAL"), isCont ? okc : bad)
+    cell(1, "Squeeze  ATR/med", str.tostring(sqz, "#.##") + " / " + str.tostring(sqzGate, "#.##")
+         + (sqz <= sqzGate ? "  ok" : "  too hot"), sqz <= sqzGate ? okc : bad)
+    cell(2, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(adxGate, "#.#")
+         + (adxV <= adxGate ? "  ok" : "  too high"), adxV <= adxGate ? okc : bad)
     cell(3, "Session " + str.tostring(hourNow) + ":00 UTC", inSess ? "ok" : "outside", inSess ? okc : bad)
     cell(4, "Setups allowed", expansionOk ? "YES" : "NO — waiting", expansionOk ? okc : bad)
-    cell(5, "Trade", tDir == 0 ? ("flat" + (lastExit == "" ? "" : "  last " + lastExit))
-         : (tDir > 0 ? "LONG" : "SHORT"), tDir == 0 ? color.new(chart.fg_color, 30) : (tDir > 0 ? okc : bad))
+    cell(5, "Trade", tDir != 0 ? (tDir > 0 ? "LONG open" : "SHORT open")
+         : armDir != 0 ? ("ARMED — waiting retest " + str.tostring(bar_index - armBar) + "/" + str.tostring(retestBars))
+         : ("flat" + (lastExit == "" ? "" : "  last " + lastExit)),
+         tDir != 0 ? (tDir > 0 ? okc : bad) : armDir != 0 ? color.new(#FFB300, 0) : color.new(chart.fg_color, 30))
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
 alertcondition(canFire and goLong,  "Liquidity Sniper BUY",  "LiqSniper BUY {{ticker}} {{interval}}")
