@@ -443,3 +443,41 @@ def sweep_continuation(s: Series, pivot_n=3, stop_atr=1.0, rr=2.0,
 
 
 REGISTRY["sweep_continuation"] = sweep_continuation
+
+
+def expansion_filter(ctx, i, max_squeeze=1.15, max_adx=25):
+    """
+    THE TRADE SELECTION FILTER (from E-019).
+
+    Veer's problem: "we catch every mini trend... we never know if they are
+    small or massive." This answers it. Measured on GOLD 15m AND 1h, over two
+    independent periods, with near-identical results:
+
+        ADX 0-15   -> 90-91% chance of a 3+ ATR move in the next 40 bars
+        ADX >= 40  -> 66-68%
+        ATR >= 2x its own median -> 25%
+
+    The logic is volatility contraction preceding expansion: when ATR is
+    already stretched and ADX is already high, the move has ALREADY happened
+    and you are buying the end of it. When the market is quiet, the move is
+    still ahead.
+
+    This predicts move SIZE, not DIRECTION. It is a filter on when to act,
+    not a signal.
+    """
+    a, m, adx = ctx["atr"][i], ctx["atr_med"][i], ctx["adx"][i]
+    if a is None or m is None or m <= 0:
+        return False
+    return (a / m) <= max_squeeze and adx <= max_adx
+
+
+def filtered(base_factory, **filt):
+    """Wrap any strategy so it only fires when the expansion filter passes."""
+    def make(s, **kw):
+        inner = base_factory(s, **kw)
+        def sig(ctx, i):
+            if not expansion_filter(ctx, i, **filt):
+                return None
+            return inner(ctx, i)
+        return sig
+    return make
