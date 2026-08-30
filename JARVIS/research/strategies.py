@@ -571,3 +571,27 @@ def supertrend_sniper(s: Series, atr_len=7, mult=1.2, dema_len=200,
 
 
 REGISTRY["supertrend_sniper"] = supertrend_sniper
+
+
+def supertrend_sniper_ea(s: Series, atr_len=7, mult=1.2, dema_len=200,
+                         use_dema=True, stop_atr=1.5, rr=3.0, adx_max=35.0):
+    """
+    SuperTrend Sniper *as the EA actually gates it*: the signal above, plus the
+    EA's ADX ceiling (skip entries when ADX > adx_max).
+
+    Nothing else differs. Exits are supplied by the caller (engine.backtest
+    gives fixed stop/target + bar cap; exits.simulate can apply the EA's
+    3R-target / 50-bar cap / 3.0-ATR trail combination).
+    """
+    inner = supertrend_sniper(s, atr_len=atr_len, mult=mult, dema_len=dema_len,
+                              use_dema=use_dema, stop_atr=stop_atr, rr=rr)
+
+    def sig(ctx, i):
+        ad = ctx["adx"][i]
+        if ad is None or ad > adx_max:
+            return None
+        return inner(ctx, i)
+    return sig
+
+
+REGISTRY["supertrend_sniper_ea"] = supertrend_sniper_ea
