@@ -604,6 +604,7 @@ var array<box>   trBxS = array.new_box()
 var array<line>  trTrl = array.new_line()
 var array<line>  trEnl = array.new_line()   // the line from your real fill
 var array<float> trTrs = array.new_float()  // ratcheting trail stop, per trade
+var array<float> trMfe = array.new_float()  // best price the trade ever saw
 var array<box>   oldBoxes = array.new_box()
 var array<line>  oldLines = array.new_line()
 
@@ -623,6 +624,8 @@ var array<int>   hDir = array.new_int()
 var array<float> hEnt = array.new_float()
 var array<float> hExt = array.new_float()
 var array<float> hR   = array.new_float()
+var array<float>  hMfe = array.new_float()   // the best it was EVER worth, in R
+var array<float>  hRsk = array.new_float()   // risk in price, to price the gap
 var array<string> hWhy = array.new_string()
 
 // Completed trades do not vanish. Their boxes stay, drained of colour, so the
@@ -657,6 +660,7 @@ openTrade(int d, float en, float sl, float tp) =>
     array.push(trTp,  tp)
     array.push(trBar, bar_index)
     array.push(trTrs, float(na))
+    array.push(trMfe, 0.0)
     array.push(trTrl, line(na))
     array.push(trBxT, box.new(bar_index, math.max(en, tp), bar_index + 2,
          math.min(en, tp), border_color = na, bgcolor = cTp))
@@ -784,6 +788,15 @@ if array.size(trDir) > 0
         risk = math.abs(en - sl)
         rNow = risk > 0 ? (close - en) * d / risk : 0
 
+        // ---- PEAK. The best this trade was EVER worth, in R. This is the
+        // execution number: the gap between it and the R actually banked is
+        // exactly "it went into profit and we did not close in that profit",
+        // and until it is measured per trade it can only be argued about.
+        favNow = ((d > 0 ? high : low) - en) * d
+        mfe    = math.max(array.get(trMfe, k), favNow)
+        array.set(trMfe, k, mfe)
+        peakR  = risk > 0 ? mfe / risk : 0.0
+
         // ---- TRAIL. Arms only once the trade has EARNED it (moving a stop up
         // early measured as the worst exit rule on all four markets tested),
         // and once armed it RATCHETS - it never gives ground back.
@@ -843,12 +856,16 @@ if array.size(trDir) > 0
             array.push(hEnt, en)
             array.push(hExt, exPx)
             array.push(hR,   rFinal)
+            array.push(hMfe, peakR)
+            array.push(hRsk, risk)
             array.push(hWhy, exWhy)
             while array.size(hDir) > 30
                 array.shift(hDir)
                 array.shift(hEnt)
                 array.shift(hExt)
                 array.shift(hR)
+                array.shift(hMfe)
+                array.shift(hRsk)
                 array.shift(hWhy)
             pushOld(bt, won)
             pushOld(bs, won)
@@ -865,6 +882,7 @@ if array.size(trDir) > 0
             array.remove(trTrl, k)
             array.remove(trEnl, k)
             array.remove(trTrs, k)
+            array.remove(trMfe, k)
 
 plotshape(firedLong  and not firedBounce, "BUY break",  shape.labelup,
      location.belowbar, cBull, text = "BUY",  textcolor = color.white, size = size.small)
@@ -964,7 +982,7 @@ if showPanel and barstate.islast
 // What actually happened, in money, at your lot size. Every figure uses the
 // DELAYED fill price, so this is the record of trades you could really have
 // taken - not the record the signal price would have produced.
-var table rec = table.new(position.bottom_right, 5, 14, frame_width = 1,
+var table rec = table.new(position.bottom_right, 6, 15, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -975,11 +993,12 @@ recCell(int c, int r, string txt, color col, bool head) =>
          bgcolor = color.new(chart.bg_color, 5))
 
 if showTable and barstate.islast and array.size(hDir) > 0
-    recCell(0, 0, "#",     chart.fg_color, true)
-    recCell(1, 0, "dir",   chart.fg_color, true)
-    recCell(2, 0, "R",     chart.fg_color, true)
-    recCell(3, 0, str.tostring(lotSize) + " lot", chart.fg_color, true)
-    recCell(4, 0, "exit",  chart.fg_color, true)
+    recCell(0, 0, "#",    chart.fg_color, true)
+    recCell(1, 0, "dir",  chart.fg_color, true)
+    recCell(2, 0, "got",  chart.fg_color, true)
+    recCell(3, 0, "peak", chart.fg_color, true)
+    recCell(4, 0, str.tostring(lotSize) + " lot", chart.fg_color, true)
+    recCell(5, 0, "exit", chart.fg_color, true)
     n     = array.size(hDir)
     shown = math.min(showHist, math.min(n, 11))
     totR  = 0.0
@@ -988,9 +1007,16 @@ if showTable and barstate.islast and array.size(hDir) > 0
     nTp   = 0
     nErl  = 0
     nSl   = 0
+    totPk = 0.0          // total R that was AVAILABLE at each trade's best
+    totLeft = 0.0        // the give-back, in account money
+    wentGreen = 0        // trades that were ever in profit at all
     for j = 0 to n - 1
         rr_ = array.get(hR, j)
         wy_ = array.get(hWhy, j)
+        pk_ = array.get(hMfe, j)
+        totPk += pk_
+        totLeft += (pk_ - rr_) * array.get(hRsk, j) * ccyPerPt * (lotSize / 0.01)
+        wentGreen += pk_ > 0 ? 1 : 0
         totR += rr_
         totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
                 * ccyPerPt * (lotSize / 0.01)
@@ -1004,18 +1030,26 @@ if showTable and barstate.islast and array.size(hDir) > 0
         r_ = array.get(hR, j)
         m_ = (array.get(hExt, j) - array.get(hEnt, j)) * d_ * ccyPerPt * (lotSize / 0.01)
         col = r_ >= 0 ? accBull : accBear
+        pkr = array.get(hMfe, j)
         recCell(0, k + 1, str.tostring(n - k), color.new(chart.fg_color, 45), false)
         recCell(1, k + 1, d_ > 0 ? "L" : "S", col, false)
         recCell(2, k + 1, str.tostring(r_, "#.##"), col, false)
-        recCell(3, k + 1, (m_ >= 0 ? "+" : "") + str.tostring(m_, "#.##"), col, false)
-        recCell(4, k + 1, array.get(hWhy, j), col, false)
+        // amber when the trade gave back most of its best: an execution
+        // problem, not a signal problem
+        recCell(3, k + 1, str.tostring(pkr, "#.##"),
+             pkr > 0 and r_ < pkr * 0.5 ? color.new(#FFB300, 0)
+             : color.new(chart.fg_color, 45), false)
+        recCell(4, k + 1, (m_ >= 0 ? "+" : "") + str.tostring(m_, "#.##"), col, false)
+        recCell(5, k + 1, array.get(hWhy, j), col, false)
     totRow = shown + 1
     recCell(0, totRow, "TOTAL " + str.tostring(n), chart.fg_color, true)
     recCell(1, totRow, str.tostring(math.round(100.0 * wins / n)) + "%", chart.fg_color, true)
     recCell(2, totRow, str.tostring(totR, "#.#"), totR >= 0 ? accBull : accBear, false)
-    recCell(3, totRow, (totM >= 0 ? "+" : "") + str.tostring(totM, "#.##"),
+    recCell(3, totRow, str.tostring(totPk, "#.#"), color.new(chart.fg_color, 45), false)
+    recCell(4, totRow, (totM >= 0 ? "+" : "") + str.tostring(totM, "#.##"),
          totM >= 0 ? accBull : accBear, false)
-    recCell(4, totRow, "R " + str.tostring(totR / n, "#.##"), chart.fg_color, true)
+    recCell(5, totRow, "avg " + str.tostring(totR / n, "#.##") + "R",
+         chart.fg_color, true)
     // How the trades actually ENDED. If "early" dominates, your target is too
     // far away for this market; if SL dominates, your stop is too close.
     mixRow = totRow + 1
@@ -1024,6 +1058,25 @@ if showTable and barstate.islast and array.size(hDir) > 0
     recCell(2, mixRow, "early " + str.tostring(nErl), color.new(#FFB300, 0), false)
     recCell(3, mixRow, "SL " + str.tostring(nSl), accBear, false)
     recCell(4, mixRow, str.tostring(entryDelay) + "-bar fill", chart.fg_color, true)
+    recCell(5, mixRow, "", chart.fg_color, true)
+
+    // ---- THE EXECUTION ROW.
+    // "kept" is what was actually banked as a share of what the trades were
+    // worth at their best. It separates a signal problem from an execution
+    // problem: if most trades go green and "kept" is low, the entries are
+    // fine and the exits are throwing the money away.
+    exRow = mixRow + 1
+    capture = totPk > 0 ? 100.0 * totR / totPk : 0.0
+    recCell(0, exRow, "EXECUTION", chart.fg_color, true)
+    recCell(1, exRow, str.tostring(math.round(100.0 * wentGreen / n)) + "% green",
+         wentGreen > n / 2 ? accBull : color.new(chart.fg_color, 45), false)
+    recCell(2, exRow, "kept " + str.tostring(capture, "#") + "%",
+         capture >= 50 ? accBull : capture >= 25 ? color.new(#FFB300, 0) : accBear, false)
+    recCell(3, exRow, "left " + str.tostring(totPk - totR, "#.#") + "R",
+         color.new(#FFB300, 0), false)
+    recCell(4, exRow, "-" + str.tostring(totLeft, "#.##"),
+         color.new(#FFB300, 0), false)
+    recCell(5, exRow, "left behind", chart.fg_color, true)
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
 // Alerts fire on firedLong/firedShort - the direction actually TAKEN - not on
