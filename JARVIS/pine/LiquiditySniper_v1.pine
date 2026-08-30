@@ -220,11 +220,15 @@ adxGate = preset == "Sniper (fewest, best measured)" ? 20.0 :
 expansionOk = (not useSqueeze or sqz <= sqzGate) and (not useAdx or adxV <= adxGate) and inSess
 
 // ---- previous-day and session levels.
-// request.security with lookahead_off already returns the last CLOSED daily
-// bar, so no [1] offset is needed. Adding one would silently plot the day
-// BEFORE yesterday, which is a classic and invisible error.
-pdh = request.security(syminfo.tickerid, "D", high, lookahead = barmerge.lookahead_off)
-pdl = request.security(syminfo.tickerid, "D", low,  lookahead = barmerge.lookahead_off)
+// The [1] IS required. lookahead_off stops the call leaking the FUTURE; it does
+// not step back a day. Without the offset this returns the DEVELOPING daily
+// bar - today's running high - so on a trending day it produced a fresh level
+// at every new high, five minutes later those became eligible, and price
+// closing above them manufactured a stream of "break" longs against a line
+// drawn at the current high. The earlier comment here asserted the opposite and
+// was wrong.
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_off)
+pdl = request.security(syminfo.tickerid, "D", low[1], lookahead = barmerge.lookahead_off)
 
 // rolling session extremes, reset when the session block changes
 sessId  = math.floor(hour(time, "UTC") / 8)          // 0 Asia, 1 London, 2 NY
@@ -265,22 +269,30 @@ var array<int>   memHold  = array.new_int()
 var array<int>   memBreak = array.new_int()
 var array<float> memMove  = array.new_float()
 var array<int>   memLast  = array.new_int()
+// Side matters. Resistance at 3400 and support at 3400 are different
+// behaviours, and without this they shared one record - so "5 held" could be
+// the sum of holds from above and holds from below, which is not a fact about
+// anything. A level that breaks and flips is the most common event on a chart,
+// so this was not an edge case.
+var array<bool>  memHi    = array.new_bool()
 
 // touches whose reaction is not yet known
 var array<float> pnPx  = array.new_float()
 var array<int>   pnBar = array.new_int()
 var array<bool>  pnHi  = array.new_bool()
 
-memFind(float p) =>
+memFind(float p, bool isHigh) =>
     idx = -1
     tol = zoneTol * atr
     if array.size(memPx) > 0
         for i = 0 to array.size(memPx) - 1
-            if idx == -1 and math.abs(array.get(memPx, i) - p) <= tol
+            if idx == -1 and array.get(memHi, i) == isHigh
+                 and math.abs(array.get(memPx, i) - p) <= tol
                 idx := i
     idx
 
-memAdd(float p) =>
+memAdd(float p, bool isHigh) =>
+    array.push(memHi, isHigh)
     array.push(memPx, p)
     array.push(memTouch, 0)
     array.push(memHold, 0)
@@ -288,6 +300,7 @@ memAdd(float p) =>
     array.push(memMove, 0.0)
     array.push(memLast, bar_index)
     while array.size(memPx) > memMax
+        array.shift(memHi)
         array.shift(memPx)
         array.shift(memTouch)
         array.shift(memHold)
@@ -297,9 +310,9 @@ memAdd(float p) =>
     array.size(memPx) - 1
 
 regTouch(float p, bool isHigh) =>
-    i = memFind(p)
+    i = memFind(p, isHigh)
     if i == -1
-        i := memAdd(p)
+        i := memAdd(p, isHigh)
     array.set(memTouch, i, array.get(memTouch, i) + 1)
     array.set(memLast,  i, bar_index)
     array.push(pnPx,  p)
@@ -317,7 +330,7 @@ touchScan(array<float> px, array<bool> dead, bool isHigh) =>
             if not array.get(dead, i)
                 p = array.get(px, i)
                 if low <= p + tol and high >= p - tol
-                    m = memFind(p)
+                    m = memFind(p, isHigh)
                     if m == -1 or (bar_index - array.get(memLast, m)) > reactBars
                         regTouch(p, isHigh)
     0
@@ -345,6 +358,27 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
              bgcolor = showZones ? (isHigh ? cBsl : cSsl) : HIDDEN)
         array.push(lns, ln)
         array.push(bxs, bx)
+        // Age out first. lvlMaxAge was declared and never referenced, so the
+        // ONLY eviction was the FIFO cap below - and on M1 a 2-bar pivot
+        // arrives every few minutes, so the previous-day and session levels
+        // were pushed out within about 100 bars while micro-pivots filled the
+        // array. Retiring by age keeps the structural levels alive.
+        if array.size(px) > 0
+            for j = array.size(px) - 1 to 0
+                if bar_index - array.get(bar, j) > lvlMaxAge
+                    l1 = array.get(lns, j)
+                    b1 = array.get(bxs, j)
+                    if not na(l1)
+                        line.delete(l1)
+                    if not na(b1)
+                        box.delete(b1)
+                    array.remove(px, j)
+                    array.remove(bar, j)
+                    array.remove(hits, j)
+                    array.remove(dead, j)
+                    array.remove(lns, j)
+                    array.remove(bxs, j)
+
         // evict the oldest once past the cap, so the chart never accumulates
         while array.size(px) > maxLevels
             l0 = array.shift(lns)
@@ -440,7 +474,7 @@ if array.size(pnPx) > 0
         if bar_index - array.get(pnBar, q) >= reactBars
             lp   = array.get(pnPx, q)
             isHi = array.get(pnHi, q)
-            m    = memFind(lp)
+            m    = memFind(lp, isHi)
             if m != -1
                 thr   = zoneTol * atr
                 moved = close - lp
@@ -460,14 +494,14 @@ if array.size(pnPx) > 0
             array.remove(pnHi,  q)
 
 // ---- what the nearest zone's record says about what price may do here
-zoneHold(float p) =>
-    m = memFind(p)
+zoneHold(float p, bool isHigh) =>
+    m = memFind(p, isHigh)
     m == -1 ? -1.0 : (array.get(memHold, m) + array.get(memBreak, m) == 0 ? -1.0
          : 100.0 * array.get(memHold, m)
            / (array.get(memHold, m) + array.get(memBreak, m)))
 
-zoneText(float p) =>
-    m = memFind(p)
+zoneText(float p, bool isHigh) =>
+    m = memFind(p, isHigh)
     string t = ""
     if m != -1
         h = array.get(memHold, m)
@@ -564,14 +598,41 @@ bncShort = useBounce and not na(bounceDnLvl)
 // more often than it broke. A break is the opposite bet, so take it where the
 // zone has actually been broken before. A zone with no record (-1) is allowed
 // through either way - absence of history is not evidence against the trade.
-bncHold  = bncLong  ? zoneHold(bounceUpLvl) : bncShort ? zoneHold(bounceDnLvl) : -1.0
-brkHold  = brkLong  ? zoneHold(nz(sweptHi, close)) : brkShort ? zoneHold(nz(sweptLo, close)) : -1.0
+// A setup is a BOUNCE when only the bounce side fired. Declared here, above
+// the two helpers that read it, because Pine is single-pass.
+setupIsBounce = (bncLong or bncShort) and not (brkLong or brkShort)
+
+// THE LEVEL A SETUP IS ABOUT. A continuation long comes from a swept HIGH; a
+// reversal long comes from a swept LOW; a bounce long comes from the support
+// that held. Assuming "long implies sweptHi" was only true in continuation
+// mode, and na everywhere else - which fell back to `close`, i.e. no level.
+setupLvl(int dir) =>
+    dir > 0 ? (setupIsBounce ? bounceUpLvl : (isCont ? sweptHi : sweptLo))
+            : (setupIsBounce ? bounceDnLvl : (isCont ? sweptLo : sweptHi))
+
+// Which SIDE of the book the setup's level lives on: a long bounces off a
+// support (a low), a short bounces off a resistance (a high); a continuation
+// long breaks a high, a reversal long fades a broken low.
+setupIsHigh(int dir) =>
+    setupIsBounce ? (dir < 0) : (isCont ? (dir > 0) : (dir < 0))
+
+bncHold  = bncLong  ? zoneHold(bounceUpLvl, false)
+           : bncShort ? zoneHold(bounceDnLvl, true) : -1.0
+brkHold  = brkLong  ? zoneHold(nz(setupLvl(1), close),  setupIsHigh(1))
+           : brkShort ? zoneHold(nz(setupLvl(-1), close), setupIsHigh(-1)) : -1.0
 bncOk    = not useZoneFilter or bncHold < 0 or bncHold >= 50.0
 brkOk    = not useZoneFilter or brkHold < 0 or brkHold <  50.0
 
-goLong   = (brkLong  and brkOk) or (bncLong  and bncOk)
-goShort  = (brkShort and brkOk) or (bncShort and bncOk)
-setupIsBounce = (bncLong or bncShort) and not (brkLong or brkShort)
+// A single spike can take out levels on BOTH sides - an ordinary news minute
+// on M1. Both brkLong and brkShort then fire, and `dir = goLong ? 1 : -1`
+// silently resolved that to LONG every time, printing a BUY on a bar that
+// closed down. The bar's own close breaks the tie: it is the only evidence on
+// that bar about which side actually gave way.
+bothWays = (brkLong and brkShort) or (bncLong and bncShort)
+tieLong  = close >= open
+
+goLong   = ((brkLong  and brkOk) or (bncLong  and bncOk)) and (not bothWays or tieLong)
+goShort  = ((brkShort and brkOk) or (bncShort and bncOk)) and (not bothWays or not tieLong)
 
 // ─────────────────────────── TARGET: NEXT LIQUIDITY ─────────────────────────
 nextLiq(bool up) =>
@@ -685,7 +746,12 @@ breakNow = barstate.isconfirmed and expansionOk and (goLong or goShort) and
 
 if needRetest and breakNow
     armDir := goLong ? 1 : -1
-    armLvl := goLong ? nz(sweptHi, close) : nz(sweptLo, close)
+    // The retest must be OF THE LEVEL, not of the signal bar's close. With
+    // bounces on (default) or reversal mode, sweptHi/sweptLo are na, so this
+    // armed at `close` and then waited for price to return to an arbitrary
+    // price with no line on it - silently breaking the very option the
+    // tooltip tells you to switch on when you are being faked out.
+    armLvl := nz(setupLvl(goLong ? 1 : -1), close)
     armBar := bar_index
     armExt := goLong ? high : low
 if armDir != 0
@@ -712,9 +778,15 @@ if canFire
     dir   = needRetest ? armDir : (goLong ? 1 : -1)
     // a bounce is invalidated if the level FAILS, so its stop sits just beyond
     // the wick that tested it — normally much tighter than a break stop
+    // The stop sits beyond the extreme that would INVALIDATE the setup.
+    // Previously `ext` was a max-of-highs for a long and was then consumed by
+    // math.min(low, ext) - and since ext >= high >= low, that is always just
+    // `low`. The sweep extreme and the retest extreme could never move the
+    // stop at all, in any branch, despite the input being named for them.
     ext   = setupIsBounce ? (dir > 0 ? low : high)
              : needRetest ? armExt
-             : (dir > 0 ? math.max(high, nz(sweptHi, high)) : math.min(low, nz(sweptLo, low)))
+             : (dir > 0 ? math.min(low,  nz(sweptLo, low))
+                        : math.max(high, nz(sweptHi, high)))
     entry = close
     sl    = dir > 0 ? math.min(low, ext) - slBuf * atr : math.max(high, ext) + slBuf * atr
     risk  = math.abs(entry - sl)
@@ -788,20 +860,46 @@ if array.size(trDir) > 0
         risk = math.abs(en - sl)
         rNow = risk > 0 ? (close - en) * d / risk : 0
 
-        // ---- PEAK. The best this trade was EVER worth, in R. This is the
-        // execution number: the gap between it and the R actually banked is
-        // exactly "it went into profit and we did not close in that profit",
-        // and until it is measured per trade it can only be argued about.
-        favNow = ((d > 0 ? high : low) - en) * d
+        // ---- EXITS ARE TESTED AGAINST THE TRAIL AS IT STOOD BEFORE THIS BAR.
+        // The trail is derived from a bar's CLOSE. Testing it against that same
+        // bar's LOW asks whether a price was breached by a level that did not
+        // exist yet when the low printed - and it fires constantly on exactly
+        // the displacement bars this strategy enters on. The ratchet therefore
+        // runs AFTER the exit test, below.
+        trs = array.get(trTrs, k)
+
+        useTrl = useTrailExit and not na(trs)
+        eStop  = useTrl ? (d > 0 ? math.max(sl, trs) : math.min(sl, trs)) : sl
+        byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
+        hitStp = d > 0 ? low  <= eStop : high >= eStop
+        hitTp  = d > 0 ? high >= tp    : low  <= tp
+        hitFlp = useFlipExit and (d > 0 ? firedShort : firedLong)
+        hitTim = useTimeExit and held >= maxHoldBars
+
+        // ---- A GAP IS FILLED AT THE GAP, NOT AT THE STOP. If the bar OPENS
+        // beyond the stop, the broker fills there. Booking it at the stop
+        // understates precisely the losses that matter, and one-sidedly: a gap
+        // through the target is still booked at the target.
+        stopFill = d > 0 ? math.min(eStop, open) : math.max(eStop, open)
+        exPx  = hitStp ? stopFill : hitTp ? tp : close
+        exWhy = hitStp ? (byTrl ? "TRL" : "SL") : hitTp ? "TP" : hitFlp ? "FLIP" : "TIME"
+        gone  = hitStp or hitTp or hitFlp or hitTim
+
+        // ---- PEAK, capped at the exit on the bar the trade dies. Without the
+        // cap, a long stopped out at a bar's low that then rallied was credited
+        // with the whole rally - money it could never have taken, because it
+        // was already flat - and that fiction was priced and shown as "left
+        // behind".
+        favBar = ((d > 0 ? high : low) - en) * d
+        favNow = gone ? math.min(favBar, (exPx - en) * d) : favBar
         mfe    = math.max(array.get(trMfe, k), favNow)
         array.set(trMfe, k, mfe)
         peakR  = risk > 0 ? mfe / risk : 0.0
 
-        // ---- TRAIL. Arms only once the trade has EARNED it (moving a stop up
-        // early measured as the worst exit rule on all four markets tested),
-        // and once armed it RATCHETS - it never gives ground back.
-        trs = array.get(trTrs, k)
-        if rNow >= trailArm
+        // ---- TRAIL RATCHET, after the exit test. Arms only once the trade has
+        // EARNED it (early break-even measured worst on all four markets), and
+        // once armed it never gives ground back.
+        if rNow >= trailArm and not gone
             cand = d > 0 ? close - trailAtr * atr : close + trailAtr * atr
             trs := na(trs) ? cand : (d > 0 ? math.max(trs, cand) : math.min(trs, cand))
             array.set(trTrs, k, trs)
@@ -825,23 +923,6 @@ if array.size(trDir) > 0
                  style = label.style_label_left,
                  color = color.new(color.white, 100),
                  textcolor = moneyNow >= 0 ? accBull : accBear, size = size.small)
-
-        // ---- EXITS. Not every trade reaches TP and pretending otherwise is
-        // how a chart lies. The effective stop is whichever of the hard stop
-        // and the trail price would be reached FIRST, so there is no ambiguity
-        // about which one fired on a bar that touched both.
-        useTrl = useTrailExit and not na(trs)
-        eStop  = useTrl ? (d > 0 ? math.max(sl, trs) : math.min(sl, trs)) : sl
-        byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
-        hitStp = d > 0 ? low  <= eStop : high >= eStop
-        hitTp  = d > 0 ? high >= tp    : low  <= tp
-        hitFlp = useFlipExit and (d > 0 ? firedShort : firedLong)
-        hitTim = useTimeExit and held >= maxHoldBars
-
-        // ties lose: the stop is checked before the target
-        exPx  = hitStp ? eStop : hitTp ? tp : close
-        exWhy = hitStp ? (byTrl ? "TRL" : "SL") : hitTp ? "TP" : hitFlp ? "FLIP" : "TIME"
-        gone  = hitStp or hitTp or hitFlp or hitTim
 
         if barstate.isconfirmed and gone
             lastExit := exWhy
@@ -905,9 +986,9 @@ drawZoneLabels(array<float> px, array<bool> dead, bool isHigh) =>
         for i = 0 to array.size(px) - 1
             if not array.get(dead, i)
                 p = array.get(px, i)
-                t = zoneText(p)
+                t = zoneText(p, isHigh)
                 if t != ""
-                    hp = zoneHold(p)
+                    hp = zoneHold(p, isHigh)
                     col = hp < 0 ? color.new(chart.fg_color, 45)
                          : hp >= 60 ? accBull : hp <= 40 ? accBear
                          : color.new(#FFB300, 0)
@@ -966,10 +1047,11 @@ if showPanel and barstate.islast
     // The nearest zone's own record, so you know what price did here before.
     nearHi = nextLiq(true)
     nearLo = nextLiq(false)
-    nearP  = na(nearHi) ? nearLo : na(nearLo) ? nearHi
-             : (math.abs(nearHi - close) < math.abs(close - nearLo) ? nearHi : nearLo)
-    zt = na(nearP) ? "" : zoneText(nearP)
-    zh = na(nearP) ? -1.0 : zoneHold(nearP)
+    pickHi = na(nearLo) or (not na(nearHi)
+             and math.abs(nearHi - close) < math.abs(close - nearLo))
+    nearP  = pickHi ? nearHi : nearLo
+    zt = na(nearP) ? "" : zoneText(nearP, pickHi)
+    zh = na(nearP) ? -1.0 : zoneHold(nearP, pickHi)
     cell(7, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
          zt == "" ? "no record yet" : zt,
          zh < 0 ? dim : zh >= 60 ? okc : zh <= 40 ? bad : color.new(#FFB300, 0))
@@ -1016,11 +1098,15 @@ if showTable and barstate.islast and array.size(hDir) > 0
         pk_ = array.get(hMfe, j)
         totPk += pk_
         totLeft += (pk_ - rr_) * array.get(hRsk, j) * ccyPerPt * (lotSize / 0.01)
-        wentGreen += pk_ > 0 ? 1 : 0
+        // "hit 1R", not "was ever green": a fill at a bar's OPEN with peak read
+        // from that bar's high/low makes peak > 0 on any bar with range, so
+        // "% green" would read ~100% regardless of whether the strategy works.
+        wentGreen += pk_ >= 1.0 ? 1 : 0
         totR += rr_
         totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
                 * ccyPerPt * (lotSize / 0.01)
-        wins += rr_ > 0 ? 1 : 0
+        // >= 0 to match the colour the chart already gives a break-even trade
+        wins += rr_ >= 0 ? 1 : 0
         nTp  += wy_ == "TP" ? 1 : 0
         nSl  += wy_ == "SL" ? 1 : 0
         nErl += (wy_ == "TRL" or wy_ == "TIME" or wy_ == "FLIP") ? 1 : 0
@@ -1042,7 +1128,9 @@ if showTable and barstate.islast and array.size(hDir) > 0
         recCell(4, k + 1, (m_ >= 0 ? "+" : "") + str.tostring(m_, "#.##"), col, false)
         recCell(5, k + 1, array.get(hWhy, j), col, false)
     totRow = shown + 1
-    recCell(0, totRow, "TOTAL " + str.tostring(n), chart.fg_color, true)
+    // "LAST n", not "TOTAL": the history holds the most recent 30 trades and
+    // older ones are shifted out, so every aggregate here is a rolling window.
+    recCell(0, totRow, "LAST " + str.tostring(n), chart.fg_color, true)
     recCell(1, totRow, str.tostring(math.round(100.0 * wins / n)) + "%", chart.fg_color, true)
     recCell(2, totRow, str.tostring(totR, "#.#"), totR >= 0 ? accBull : accBear, false)
     recCell(3, totRow, str.tostring(totPk, "#.#"), color.new(chart.fg_color, 45), false)
@@ -1068,7 +1156,7 @@ if showTable and barstate.islast and array.size(hDir) > 0
     exRow = mixRow + 1
     capture = totPk > 0 ? 100.0 * totR / totPk : 0.0
     recCell(0, exRow, "EXECUTION", chart.fg_color, true)
-    recCell(1, exRow, str.tostring(math.round(100.0 * wentGreen / n)) + "% green",
+    recCell(1, exRow, str.tostring(math.round(100.0 * wentGreen / n)) + "% hit 1R",
          wentGreen > n / 2 ? accBull : color.new(chart.fg_color, 45), false)
     recCell(2, exRow, "kept " + str.tostring(capture, "#") + "%",
          capture >= 50 ? accBull : capture >= 25 ? color.new(#FFB300, 0) : accBear, false)

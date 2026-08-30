@@ -298,26 +298,54 @@ if array.size(trDir) > 0
         risk = math.abs(en - sl)
         rNow = risk > 0 ? (close - en) * d / risk : 0.0
 
-        // ---- PEAK. The best this trade was EVER worth, in R.
-        // This is the execution number. "A majority of trades go into profit,
-        // we just do not close in that profit" is exactly the gap between this
-        // and the R actually banked, and until it is measured per trade it
-        // cannot be fixed - only argued about.
-        favNow = ((d > 0 ? high : low) - en) * d
-        mfe    = math.max(array.get(trMfe, k), favNow)
-        array.set(trMfe, k, mfe)
-        peakR  = risk > 0 ? mfe / risk : 0.0
-
         // ---- BREAK-EVEN. Off by default because it measured worst on all four
         // markets. Applied to the hard stop so its damage is visible if used.
         if useBE and rNow >= beAtR
             sl := d > 0 ? math.max(sl, en) : math.min(sl, en)
             array.set(trSl, k, sl)
 
-        // ---- TRAIL. Wide on purpose, and it RATCHETS: once moved it never
-        // gives ground back, so it cannot walk away from you on a pullback.
+        // ---- EXITS ARE TESTED AGAINST THE TRAIL AS IT STOOD BEFORE THIS BAR.
+        // The trail is computed from a bar's CLOSE. Testing it against that
+        // same bar's LOW asks whether a price was breached by a level that did
+        // not exist yet when the low printed, and it fires constantly on the
+        // displacement bars this strategy enters on. The ratchet therefore
+        // happens AFTER the exit test, further down, not before it.
         trs = array.get(trTrs, k)
-        if useTrail and rNow >= trailArm
+
+        useTrl = useTrail and not na(trs)
+        eStop  = useTrl ? (d > 0 ? math.max(sl, trs) : math.min(sl, trs)) : sl
+        byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
+        hitStp = d > 0 ? low  <= eStop : high >= eStop
+        hitTp  = d > 0 ? high >= tp    : low  <= tp
+        hitTim = useTime and held >= maxHold
+
+        // ---- GAPS ARE FILLED AT THE GAP, NOT AT THE STOP.
+        // If the bar OPENS beyond the stop - a rollover, a Sunday reopen, an
+        // NFP print - the broker fills there, not at the stop price. Booking it
+        // at the stop understates exactly the losses that matter most, and does
+        // so one-sidedly, because a gap through the target is still booked at
+        // the target.
+        stopFill = d > 0 ? math.min(eStop, open) : math.max(eStop, open)
+        exPx  = hitStp ? stopFill : hitTp ? tp : close
+        exWhy = hitStp ? (byTrl ? "TRL" : (useBE and eStop == en ? "BE" : "SL"))
+                 : hitTp ? "TP" : "TIME"
+        gone  = hitStp or hitTp or hitTim
+
+        // ---- PEAK. The best this trade was ever worth, in R.
+        // Capped at the exit on the bar it dies. Without that cap a long that
+        // stopped out at the low of a bar that then rallied was credited with
+        // the whole rally - profit it could never have taken, because it was
+        // already flat - and that fiction was then priced in money and shown
+        // as "left behind".
+        favBar = ((d > 0 ? high : low) - en) * d
+        favNow = gone ? math.min(favBar, (exPx - en) * d) : favBar
+        mfe    = math.max(array.get(trMfe, k), favNow)
+        array.set(trMfe, k, mfe)
+        peakR  = risk > 0 ? mfe / risk : 0.0
+
+        // ---- TRAIL RATCHET, now that the exit test is done. Once moved it
+        // never gives ground back, so it cannot walk away on a pullback.
+        if useTrail and rNow >= trailArm and not gone
             cand = d > 0 ? close - trailAtr * atr : close + trailAtr * atr
             trs := na(trs) ? cand : (d > 0 ? math.max(trs, cand) : math.min(trs, cand))
             array.set(trTrs, k, trs)
@@ -342,22 +370,6 @@ if array.size(trDir) > 0
                  style = label.style_label_left,
                  color = color.new(color.white, 100),
                  textcolor = liveM >= 0 ? accBull : accBear, size = size.small)
-
-        // ---- EXITS. Not every trade reaches TP. The effective stop is whichever
-        // of the hard stop and the trail price would be reached FIRST, so a bar
-        // that touches both is not ambiguous about which one fired.
-        useTrl = useTrail and not na(trs)
-        eStop  = useTrl ? (d > 0 ? math.max(sl, trs) : math.min(sl, trs)) : sl
-        byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
-        hitStp = d > 0 ? low  <= eStop : high >= eStop
-        hitTp  = d > 0 ? high >= tp    : low  <= tp
-        hitTim = useTime and held >= maxHold
-
-        // ties lose: the stop is checked before the target
-        exPx  = hitStp ? eStop : hitTp ? tp : close
-        exWhy = hitStp ? (byTrl ? "TRL" : (useBE and eStop == en ? "BE" : "SL"))
-                 : hitTp ? "TP" : "TIME"
-        gone  = hitStp or hitTp or hitTim
 
         if barstate.isconfirmed and gone
             lastExit := exWhy
@@ -505,11 +517,16 @@ if showTable and barstate.islast and array.size(hDir) > 0
         totPk += pk_
         // what the give-back is worth in real money at the user's lot size
         totLeft += (pk_ - r_) * array.get(hRsk, j) * ccyPerPt * (lotSize / 0.01)
-        wentGreen += pk_ > 0 ? 1 : 0
+        // "hit 1R", not "was ever green". A trade is filled at a bar's OPEN and
+        // peak is measured from that bar's high/low, so ANY bar with range makes
+        // peak > 0 - "% green" would read ~100% for every strategy, good or bad,
+        // and could never disconfirm the claim it exists to test.
+        wentGreen += pk_ >= 1.0 ? 1 : 0
         totR += r_
         totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
                 * ccyPerPt * (lotSize / 0.01)
-        wins += r_ > 0 ? 1 : 0
+        // >= 0 to match the colour the chart already gives a break-even trade
+        wins += r_ >= 0 ? 1 : 0
         nTp  += wy_ == "TP" ? 1 : 0
         nSl  += wy_ == "SL" ? 1 : 0
         nErl += (wy_ == "TRL" or wy_ == "TIME" or wy_ == "BE") ? 1 : 0
@@ -531,7 +548,10 @@ if showTable and barstate.islast and array.size(hDir) > 0
         recCell(4, k + 1, (m_ >= 0 ? "+" : "") + str.tostring(m_, "#.##"), col, false)
         recCell(5, k + 1, array.get(hWhy, j), col, false)
     totRow = shown + 1
-    recCell(0, totRow, "TOTAL " + str.tostring(n), chart.fg_color, true)
+    // "LAST n", not "TOTAL": the history arrays hold the most recent 40 trades
+    // and older ones are shifted out, so every aggregate here is a rolling
+    // window. Calling it a total let a bad morning quietly stop being counted.
+    recCell(0, totRow, "LAST " + str.tostring(n), chart.fg_color, true)
     recCell(1, totRow, str.tostring(math.round(100.0 * wins / n)) + "%", chart.fg_color, true)
     recCell(2, totRow, str.tostring(totR, "#.#"), totR >= 0 ? accBull : accBear, false)
     recCell(3, totRow, str.tostring(totPk, "#.#"), color.new(chart.fg_color, 45), false)
@@ -556,7 +576,7 @@ if showTable and barstate.islast and array.size(hDir) > 0
     exRow = mixRow + 1
     capture = totPk > 0 ? 100.0 * totR / totPk : 0.0
     recCell(0, exRow, "EXECUTION", chart.fg_color, true)
-    recCell(1, exRow, str.tostring(math.round(100.0 * wentGreen / n)) + "% went green",
+    recCell(1, exRow, str.tostring(math.round(100.0 * wentGreen / n)) + "% hit 1R",
          wentGreen > n / 2 ? accBull : color.new(chart.fg_color, 45), false)
     recCell(2, exRow, "kept " + str.tostring(capture, "#") + "%",
          capture >= 50 ? accBull : capture >= 25 ? color.new(#FFB300, 0) : accBear, false)
@@ -567,9 +587,14 @@ if showTable and barstate.islast and array.size(hDir) > 0
     recCell(5, exRow, "left behind", chart.fg_color, true)
 
 // ───────────────────────────────── ALERTS ───────────────────────────────────
-alertcondition(goLong,  "SuperTrend Sniper BUY",
-     "STSniper BUY {{ticker}} {{interval}} at {{close}}")
-alertcondition(goShort, "SuperTrend Sniper SELL",
-     "STSniper SELL {{ticker}} {{interval}} at {{close}}")
-alertcondition(goLong or goShort, "SuperTrend Sniper ANY",
-     "STSniper signal {{ticker}} {{interval}} at {{close}}")
+// Alerts fire on the CONFIRMED signal, never on the raw condition. goLong is
+// live on a forming bar, and SuperTrend(7, 1.2) flips intrabar constantly on
+// M1 - so alerting on it sends a BUY that has vanished by the time the bar
+// closes and the chart shows no label. Wired to a webhook that opens a
+// position the indicator disowns.
+alertcondition(firedLong,  "SuperTrend Sniper BUY",
+     "STSniper BUY {{ticker}} {{interval}} signal {{close}} - fill at next bar open")
+alertcondition(firedShort, "SuperTrend Sniper SELL",
+     "STSniper SELL {{ticker}} {{interval}} signal {{close}} - fill at next bar open")
+alertcondition(firedLong or firedShort, "SuperTrend Sniper ANY",
+     "STSniper signal {{ticker}} {{interval}} {{close}} - fill at next bar open")
