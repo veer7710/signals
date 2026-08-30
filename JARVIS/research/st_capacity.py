@@ -117,7 +117,8 @@ def main():
     rows = []
     print("\n1. FREQUENCY  (full series, warmup %d bars, one position at a time)" % WARMUP)
     print(f"  {'market':<12}{'bars':>7}{'sess.days':>10}{'raw sigs':>10}"
-          f"{'entries':>9}{'ent/sess.day':>14}{'ent/cal.day':>13}{'med bars held':>15}")
+          f"{'entries':>9}{'ent/sess.day':>14}{'ent/cal.day':>13}{'med bars held':>15}"
+          f"{'full-sample exp':>17}{'t':>7}")
     for m, tf in MARKETS:
         s = engine.load(m, tf)
         costs = study.COSTS.get(m, engine.Costs())
@@ -129,8 +130,10 @@ def main():
         tr = run_slice(s, costs)
         held = statistics.median([t["bars"] for t in tr]) if tr else 0
         rows.append((m, tf, s, costs, tr, sd_, cd, raw))
+        dfull = describe([t["r"] for t in tr])
         print(f"  {m+' '+tf:<12}{len(s):>7}{sd_:>10}{raw:>10}{len(tr):>9}"
-              f"{len(tr)/sd_:>14.3f}{len(tr)/max(cd,1):>13.3f}{held:>15.0f}")
+              f"{len(tr)/sd_:>14.3f}{len(tr)/max(cd,1):>13.3f}{held:>15.0f}"
+              f"{dfull['exp']:>+17.3f}{dfull['t']:>+7.2f}")
 
     print("\n2. EXPECTANCY  chronological split, in-sample = first %d%%, "
           "OOS = last %d%%" % (IS_FRAC * 100, (1 - IS_FRAC) * 100))
@@ -261,6 +264,111 @@ def main():
     for k in ("median_dd", "dd_95", "median_end", "end_05", "end_95",
               "p_dd_over_30pct", "p_dd_over_50pct", "p_losing_overall"):
         print(f"   {k:<18}{mc[k]:+.4f}")
+
+
+
+    print("\n6. FOCUS on the only positive OOS series with a t above 2: GOLD 1h")
+    s = engine.load("GOLD", "1h")
+    costs = study.COSTS["GOLD"]
+    k = int(len(s) * IS_FRAC)
+    b = sub(s, k, len(s))
+    d0 = dt.datetime.fromtimestamp(b.ts[WARMUP], dt.timezone.utc).date()
+    d1 = dt.datetime.fromtimestamp(b.ts[-1], dt.timezone.utc).date()
+    print(f"   OOS window traded: {d0} -> {d1}   "
+          f"gold close {b.c[WARMUP]:.1f} -> {b.c[-1]:.1f} "
+          f"({100*(b.c[-1]/b.c[WARMUP]-1):+.1f}%)")
+    tb = run_slice(b, costs)
+    for lab, sel in (("long", 1), ("short", -1)):
+        d = describe([t["r"] for t in tb if t["side"] == sel])
+        if d["n"]:
+            print(f"   OOS {lab:<6} n {d['n']:>4}  win {100*d['win']:>5.1f}%  "
+                  f"exp {d['exp']:+.3f}R  SE {d['se']:.3f}  t {d['t']:+.2f}")
+    print("   exit reasons (OOS):", end=" ")
+    rc = {}
+    for t in tb:
+        rc[t["reason"]] = rc.get(t["reason"], 0) + 1
+    print("  ".join(f"{k_}:{v}" for k_, v in sorted(rc.items())))
+
+    print("\n   WALK-FORWARD, GOLD 1h, 6 non-overlapping folds, EA exits:")
+    step = len(s) // 6
+    pos_folds = 0
+    for f_ in range(6):
+        lo, hi = f_ * step, (f_ + 1) * step if f_ < 5 else len(s)
+        sf = sub(s, lo, hi)
+        tf_ = run_slice(sf, costs)
+        d = describe([t["r"] for t in tf_])
+        a0 = dt.datetime.fromtimestamp(sf.ts[0], dt.timezone.utc).date()
+        a1 = dt.datetime.fromtimestamp(sf.ts[-1], dt.timezone.utc).date()
+        if d["n"] == 0:
+            print(f"     fold {f_+1} {a0}->{a1}  no trades")
+            continue
+        pos_folds += 1 if d["exp"] > 0 else 0
+        print(f"     fold {f_+1} {a0}->{a1}  n {d['n']:>4}  "
+              f"exp {d['exp']:+.3f}R  totalR {d['total']:+.1f}  t {d['t']:+.2f}")
+    print(f"     folds with positive expectancy: {pos_folds}/6")
+
+    print("\n   COST SENSITIVITY, GOLD 1h OOS (spread multiplier):")
+    for mult_ in (0.5, 1.0, 1.5, 2.0):
+        c2 = engine.Costs(spread=costs.spread * mult_,
+                          slippage=costs.slippage * mult_,
+                          commission_per_lot=costs.commission_per_lot,
+                          value_per_point_per_lot=costs.value_per_point_per_lot)
+        d = describe([t["r"] for t in run_slice(b, c2)])
+        print(f"     x{mult_:<4} spread {c2.spread:.3f}  n {d['n']:>4}  "
+              f"exp {d['exp']:+.3f}R  t {d['t']:+.2f}")
+
+    print("\n   GOLD 1h ALONE at 0.5% risk: what account makes GBP60/day, "
+          "and how often is a month negative?")
+    dfull = oos_by[("GOLD", "1h")]
+    db, odays, rs, _t, _bb = dfull
+    tpd = db["n"] / max(odays, 1)
+    rpd = tpd * db["exp"]
+    risk = TARGET_GBP_DAY / rpd
+    print(f"     entries/day {tpd:.3f} x expectancy {db['exp']:+.3f}R "
+          f"= {rpd:+.4f} R/day")
+    print(f"     GBP risked per trade = 60 / {rpd:.4f} = GBP {risk:,.0f}")
+    print(f"     account at 0.50% risk = {risk:,.0f} / 0.005 = GBP {risk/RISK_PCT:,.0f}")
+    print(f"     one losing trade costs GBP {risk:,.0f}; the OOS worst losing "
+          f"streak is {max_streak(rs)} trades = GBP {risk*max_streak(rs):,.0f}")
+    day_stats()
+
+
+def day_stats():
+    """What a DAY looks like — because 'GBP60/day' is a claim about days."""
+    print("\n7. DAY-LEVEL DISTRIBUTION (OOS slices only). 'GBP60/day' is a claim")
+    print("   about days, so measure days, not averages of trades.")
+    print(f"  {'market':<12}{'OOS days':>10}{'days w/ 0 trades':>18}"
+          f"{'median day R':>14}{'days R>0':>10}{'days R<0':>10}")
+    for m, tf in MARKETS:
+        s = engine.load(m, tf)
+        costs = study.COSTS.get(m, engine.Costs())
+        k = int(len(s) * IS_FRAC)
+        b = sub(s, k, len(s))
+        tb = run_slice(b, costs)
+        days = sorted(set(dt.datetime.fromtimestamp(t, dt.timezone.utc).date()
+                          for t in b.ts[WARMUP:]))
+        per = {d: 0.0 for d in days}
+        cnt = {d: 0 for d in days}
+        for t in tb:
+            d = dt.datetime.fromtimestamp(b.ts[t["i_in"]], dt.timezone.utc).date()
+            if d in per:
+                per[d] += t["r"]; cnt[d] += 1
+        vals = [per[d] for d in days]
+        zero = sum(1 for d in days if cnt[d] == 0)
+        vals_s = sorted(vals)
+        med = vals_s[len(vals_s) // 2] if vals_s else 0.0
+        pos = sum(1 for v in vals if v > 0); neg = sum(1 for v in vals if v < 0)
+        print(f"  {m+' '+tf:<12}{len(days):>10}{100*zero/max(len(days),1):>17.1f}%"
+              f"{med:>+14.2f}{100*pos/max(len(days),1):>9.1f}%"
+              f"{100*neg/max(len(days),1):>9.1f}%")
+
+
+def max_streak(rs):
+    w = c = 0
+    for r in rs:
+        c = c + 1 if r <= 0 else 0
+        w = max(w, c)
+    return w
 
 
 if __name__ == "__main__":

@@ -103,7 +103,7 @@ def simulate(s: Series, signal_fn, exit_policy, costs: Costs,
                     "r": r, "reason": reason, "side": side,
                     "mfe_r": pos["mfe"] / pos["risk"],
                     "mae_r": pos["mae"] / pos["risk"],
-                    "bars": pos["bars"],
+                    "bars": pos["bars"], "i_in": pos["i_in"],
                 })
                 pos = None
             else:
