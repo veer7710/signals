@@ -103,6 +103,20 @@ bounceWick = input.float(0.30, "   bounce needs rejection wick ≥ (of bar range
      tooltip = "How decisively price must reject the level. 0 accepts any touch-and-close; 0.5 demands a long tail.")
 bounceTol  = input.float(0.25, "   how close counts as a test (× ATR)", minval = 0.05, step = 0.05, group = gB)
 
+useReclaim = input.bool(true, "RETEST setups (level breaks, price comes back to it)", group = gB,
+     tooltip = "The classic one that was missing as a setup of its own. A level gets taken out, price returns to it, and it now holds from the other side - old resistance acting as new support. Very frequent, and it gives a much tighter stop than chasing the break.")
+reclaimWin = input.int(30, "   look back this many bars for broken levels", minval = 5, maxval = 200, group = gB)
+
+usePullEma = input.bool(true, "TREND PULLBACK setups (pull back to the trend line)", group = gB,
+     tooltip = "In a trend, price does not come back to a pivot every time - it comes back to the moving average and goes again. Without this, most continuation entries in a clean trend are simply never offered. This is usually the single biggest source of extra setups on M1.")
+emaLen     = input.int(50, "   trend line length", minval = 5, maxval = 400, group = gB)
+emaTol     = input.float(0.30, "   how close to it counts (× ATR)", minval = 0.05, step = 0.05, group = gB)
+
+useBreakout = input.bool(true, "BREAKOUT setups (quiet range, then it goes)", group = gB,
+     tooltip = "Price compresses into a tight range and then leaves it. Catches the start of a move rather than a level being hit, so it fires in places the level-based setups have nothing to say about.")
+boxLen      = input.int(20, "   range length (bars)", minval = 5, maxval = 100, group = gB)
+boxTight    = input.float(1.2, "   range must be tighter than (× ATR)", minval = 0.3, step = 0.1, group = gB)
+
 gS = "SWEEP + ENTRY"
 mode      = input.string("Continuation (tested)", "Trade direction",
      options = ["Continuation (tested)", "Reversal (classic)"], group = gS,
@@ -127,6 +141,8 @@ preset = input.string("Balanced", "Preset",
      tooltip = "This is a genuine trade-off, not a free lunch. Sniper uses the gates that MEASURED best (ADX<=20, ATR<=1.0x median) and will sit out most of the day. Scalper opens the gates wide and WILL take setups that measured worse. Balanced sits between. Manual uses your own values below.")
 
 gF = "EXPANSION FILTER  (the 'is this move going to be big?' test)"
+gateAll = input.bool(false, "Apply this filter to EVERY setup type", group = gF,
+     tooltip = "OFF is the honest default. The filter was measured on BREAK setups - sweeps of liquidity - and that is the only place the evidence covers. Applying it to retests, pullbacks and breakouts as well would throttle them on the strength of a result that was never about them. Turn it on if you want fewer, more selective signals across the board.")
 useSqueeze = input.bool(true, "Only trade compressed volatility", group = gF,
      tooltip = "MEASURED: ATR at or below its median precedes 3+ ATR moves ~90% of the time. ATR at 2x its median precedes them 25% of the time.")
 maxSqueeze = input.float(1.15, "   max ATR / median ATR", minval = 0.5, step = 0.05, group = gF)
@@ -147,16 +163,16 @@ maxRiskAtr= input.float(2.5, "Reject setup if stop wider than (× ATR)", minval 
 gT = "LIVE TRADING (manual)"
 lotSize    = input.float(0.01, "Your lot size", minval = 0.01, step = 0.01, group = gT,
      tooltip = "Used only to convert points into money on the panel. Change it and every P/L figure rescales.")
-ccyPerPt   = input.float(1.00, "Account currency per 1.0 price move, per 0.01 lot", minval = 0.01, step = 0.01, group = gT,
+ccyPerPt   = input.float(1.00, "Money per 1.0 of price, at 0.01 lots", minval = 0.01, step = 0.01, group = gT,
      tooltip = "XAUUSD at 0.01 lots is normally 1.00 of account currency per 1.00 of price (a 100 oz contract at 0.01 = 1 oz). Check your broker's contract size and adjust if it differs.")
-maxChase   = input.float(0.50, "Skip if price already ran this far (× risk)", minval = 0.1, step = 0.1, group = gT,
+maxChase   = input.float(0.50, "MISSED IT if price already ran this far ahead", minval = 0.1, step = 0.1, group = gT,
      tooltip = "THE SLOW-CHART PROTECTION. TradingView can be late, the alert can arrive after the move, you can be looking away. If price has already travelled this much of your risk in the signal's direction before you are filled, it is no longer the trade you were shown - same stop, less reward. It is marked MISSED instead of taken.")
-entryDelay = input.int(1, "Bars between signal and your actual entry", minval = 0, maxval = 10, group = gT,
+entryDelay = input.int(1, "How many bars until I actually click", minval = 0, maxval = 10, group = gT,
      tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you enter. Set this to how many bars that realistically takes you. Everything tracked - entry price, P/L, the whole record - uses THAT price, not the signal price. At 0 the numbers flatter you.")
-trackFrom  = input.string("My real entry", "Track profit from", options = ["My real entry", "Signal price"], group = gT)
-showHist   = input.int(15, "Completed trades to keep on chart", minval = 0, maxval = 20, group = gT,
+trackFrom  = input.string("My real entry", "Measure profit from", options = ["My real entry", "Signal price"], group = gT)
+showHist   = input.int(15, "How many finished trades to keep on the chart", minval = 0, maxval = 20, group = gT,
      tooltip = "Past position boxes stay on the chart, drained of colour, so you can see how the last N setups actually played out instead of only the live one. The record table below shows up to 11 of them.")
-showTable  = input.bool(true, "Show trade record table", group = gT)
+showTable  = input.bool(true, "Show my results table", group = gT)
 
 gE = "CLOSING EARLY  (not every trade reaches TP)"
 useTrailExit = input.bool(true, "Close when the ATR trail is hit", group = gE,
@@ -168,9 +184,9 @@ useFlipExit  = input.bool(false, "Close on an opposite signal", group = gE,
      tooltip = "If a fresh signal fires the other way, the reason you are in the trade has gone. Off by default: on a choppy chart this closes good trades early. Marked FLIP.")
 
 gV = "CLOSE ON A REVERSAL"
-useRevExit = input.bool(true, "Close when the trend turns against the trade", group = gV,
+useRevExit = input.bool(true, "Close early if the trend turns against me", group = gV,
      tooltip = "You asked for this: take the profit when a reversal shows up rather than riding it back to the stop. A trade is closed the moment the signal that justified it flips the other way. Marked REV.")
-revMinR    = input.float(0.0, "   only once the trade is this far in profit (R)", step = 0.1, group = gV,
+revMinR    = input.float(0.0, "   only when the trade is this far in profit (R)", step = 0.1, group = gV,
      tooltip = "0 closes on any reversal while not losing. Set it NEGATIVE (e.g. -0.5) to also cut a losing trade early when the trend turns - that stops you paying the full stop on a trade that is already wrong.")
 
 gD = "DISPLAY"
@@ -201,6 +217,8 @@ HIDDEN  = color.new(color.gray, 100)
 cTp     = color.new(accBull, 88)
 cSl     = color.new(accBear, 88)
 showPanel = input.bool(true, "Show status panel", group = gD)
+showWhy   = input.bool(true, "Label each signal with which setup it was", group = gD)
+showEma   = input.bool(true, "Draw the trend line", group = gD)
 
 // ──────────────────────────────── FOUNDATIONS ───────────────────────────────
 atr    = ta.atr(14)
@@ -687,6 +705,69 @@ if useBounce and barstate.isconfirmed and array.size(hiPx) > 0
             if tested and held and reject and (na(bounceDnLvl) or p < bounceDnLvl)
                 bounceDnLvl := p
 
+// ─────────────────────── RETEST / RECLAIM SETUPS ────────────────────────────
+// A level that has been taken out is not finished - it is the next level, from
+// the other side. Old resistance becomes support. Previously this only existed
+// as a GATE on break entries; as a setup of its own it fires far more often and
+// gives a much tighter stop than chasing the break candle.
+var array<float> rcPx  = array.new_float()
+var array<int>   rcBar = array.new_int()
+var array<int>   rcDir = array.new_int()      // +1 broken upward, -1 downward
+
+pushReclaim(float p, int dir) =>
+    array.push(rcPx, p)
+    array.push(rcBar, bar_index)
+    array.push(rcDir, dir)
+    while array.size(rcPx) > 40
+        array.shift(rcPx)
+        array.shift(rcBar)
+        array.shift(rcDir)
+    0
+
+if not na(sweptHi)
+    pushReclaim(sweptHi, 1)
+if not na(sweptLo)
+    pushReclaim(sweptLo, -1)
+
+float rcLong  = na
+float rcShort = na
+if useReclaim and barstate.isconfirmed and array.size(rcPx) > 0
+    tolR = bounceTol * atr
+    for i = array.size(rcPx) - 1 to 0
+        p   = array.get(rcPx, i)
+        age = bar_index - array.get(rcBar, i)
+        dr  = array.get(rcDir, i)
+        if age >= 1 and age <= reclaimWin
+            // came back to it and held on the side it broke to
+            back = low <= p + tolR and high >= p - tolR
+            if back and dr > 0 and close > p and na(rcLong)
+                rcLong := p
+            if back and dr < 0 and close < p and na(rcShort)
+                rcShort := p
+
+// ─────────────────────── TREND PULLBACK SETUPS ──────────────────────────────
+// In a clean trend price does not return to a pivot - it returns to the moving
+// average and goes again. Without this, most continuation entries in a trend
+// are never offered at all.
+emaT   = ta.ema(close, emaLen)
+emaUp  = emaT > emaT[2]
+emaDn  = emaT < emaT[2]
+tolE   = emaTol * atr
+pbLong  = usePullEma and barstate.isconfirmed and emaUp
+          and low <= emaT + tolE and close > emaT and close > open
+pbShort = usePullEma and barstate.isconfirmed and emaDn
+          and high >= emaT - tolE and close < emaT and close < open
+
+// ─────────────────────────── BREAKOUT SETUPS ────────────────────────────────
+// A quiet range that ends. This fires where the level-based setups have
+// nothing to say, which is most of a consolidation.
+boxHi   = ta.highest(high, boxLen)[1]
+boxLo   = ta.lowest(low, boxLen)[1]
+boxWide = boxHi - boxLo
+tightOk = boxWide > 0 and boxWide <= boxTight * atr
+boLong  = useBreakout and barstate.isconfirmed and tightOk and close > boxHi
+boShort = useBreakout and barstate.isconfirmed and tightOk and close < boxLo
+
 // direction: continuation follows the break, reversal fades it
 isCont   = mode == "Continuation (tested)"
 rawLong  = not na(sweptHi)      // took out sell-side liquidity above
@@ -706,15 +787,29 @@ bncShort = useBounce and not na(bounceDnLvl)
 // through either way - absence of history is not evidence against the trade.
 // A setup is a BOUNCE when only the bounce side fired. Declared here, above
 // the two helpers that read it, because Pine is single-pass.
-setupIsBounce = (bncLong or bncShort) and not (brkLong or brkShort)
+// Everything except a raw break invalidates at the SIGNAL BAR's extreme, which
+// is a much tighter stop than the swept extreme a break needs. Grouping them
+// here keeps the stop rule in one place instead of four.
+newLong  = not na(rcLong)  or pbLong  or boLong
+newShort = not na(rcShort) or pbShort or boShort
+setupIsBounce = (bncLong or bncShort or newLong or newShort)
+                 and not (brkLong or brkShort)
 
 // THE LEVEL A SETUP IS ABOUT. A continuation long comes from a swept HIGH; a
 // reversal long comes from a swept LOW; a bounce long comes from the support
 // that held. Assuming "long implies sweptHi" was only true in continuation
 // mode, and na everywhere else - which fell back to `close`, i.e. no level.
 setupLvl(int dir) =>
-    dir > 0 ? (setupIsBounce ? bounceUpLvl : (isCont ? sweptHi : sweptLo))
-            : (setupIsBounce ? bounceDnLvl : (isCont ? sweptLo : sweptHi))
+    float lv = na
+    if dir > 0
+        lv := not na(rcLong) ? rcLong : bncLong ? bounceUpLvl
+              : pbLong ? emaT : boLong ? boxHi
+              : (isCont ? sweptHi : sweptLo)
+    else
+        lv := not na(rcShort) ? rcShort : bncShort ? bounceDnLvl
+              : pbShort ? emaT : boShort ? boxLo
+              : (isCont ? sweptLo : sweptHi)
+    lv
 
 // Which SIDE of the book the setup's level lives on: a long bounces off a
 // support (a low), a short bounces off a resistance (a high); a continuation
@@ -734,11 +829,22 @@ brkOk    = not useZoneFilter or brkHold < 0 or brkHold <  50.0
 // silently resolved that to LONG every time, printing a BUY on a bar that
 // closed down. The bar's own close breaks the tie: it is the only evidence on
 // that bar about which side actually gave way.
-bothWays = (brkLong and brkShort) or (bncLong and bncShort)
+anyLong  = (brkLong  and brkOk) or (bncLong  and bncOk) or newLong
+anyShort = (brkShort and brkOk) or (bncShort and bncOk) or newShort
+
+bothWays = anyLong and anyShort
 tieLong  = close >= open
 
-goLong   = ((brkLong  and brkOk) or (bncLong  and bncOk)) and (not bothWays or tieLong)
-goShort  = ((brkShort and brkOk) or (bncShort and bncOk)) and (not bothWays or not tieLong)
+goLong   = anyLong  and (not bothWays or tieLong)
+goShort  = anyShort and (not bothWays or not tieLong)
+
+// Which setup it was, so the chart says WHY it fired rather than just that it
+// did. Read in priority order, most specific first.
+setupName = not na(rcLong) or not na(rcShort) ? "RETEST"
+     : (pbLong or pbShort)   ? "PULLBACK"
+     : (boLong or boShort)   ? "BREAKOUT"
+     : (bncLong or bncShort) ? "BOUNCE"
+     : "BREAK"
 
 // ─────────────────────────── TARGET: NEXT LIQUIDITY ─────────────────────────
 nextLiq(bool up) =>
@@ -847,8 +953,13 @@ var float armExt  = na
 
 // Displacement is a BREAK requirement. Demanding an expansion candle on a
 // bounce would reject the very thing a bounce is: a rejection wick.
-breakNow = barstate.isconfirmed and expansionOk and (goLong or goShort) and
-     (setupIsBounce ? true : dispOk)
+// A break must expand; a bounce is a rejection wick and demanding expansion on
+// it would reject the very thing it is. The expansion gate applies to breaks
+// unless you explicitly extend it to everything.
+isBreakSetup = (brkLong or brkShort) and not setupIsBounce
+gateOk   = gateAll ? expansionOk : (isBreakSetup ? expansionOk : true)
+breakNow = barstate.isconfirmed and gateOk and (goLong or goShort) and
+     (isBreakSetup ? dispOk : true)
 
 if needRetest and breakNow
     armDir := goLong ? 1 : -1
@@ -1097,6 +1208,14 @@ plotshape(firedLong  and not firedBounce, "BUY break",  shape.labelup,
      location.belowbar, cBull, text = "BUY",  textcolor = color.white, size = size.small)
 plotshape(firedShort and not firedBounce, "SELL break", shape.labeldown,
      location.abovebar, cBear, text = "SELL", textcolor = color.white, size = size.small)
+
+// WHY it fired, not just that it did. Knowing which setup type is paying and
+// which is not is the only way to decide what to switch off.
+if (firedLong or firedShort) and showWhy
+    label.new(bar_index, firedLong ? low : high, setupName,
+         style = firedLong ? label.style_label_up : label.style_label_down,
+         color = color.new(color.white, 100), size = size.tiny,
+         textcolor = color.new(firedLong ? accBull : accBear, 25))
 // Bounce setups get their own mark. They are a different trade with a
 // different invalidation, and blending them into one label would hide which
 // kind is actually working for you.
@@ -1183,7 +1302,12 @@ if showPanel and barstate.islast
     cell(7, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
          zt == "" ? "no record yet" : zt,
          zh < 0 ? dim : zh >= 60 ? okc : zh <= 40 ? bad : color.new(#FFB300, 0))
-    cell(8, "Missed (too late)", nMissed == 0 ? "none"
+    // Whether it is firing often enough is a question with an answer, and one
+    // screen is not it.
+    cell(10, "Signals", str.tostring(nSigDay) + " today"
+         + (na(perDay) ? "" : "   " + str.tostring(perDay, "#.#") + "/day avg"),
+         nSigDay > 0 ? okc : dim)
+    cell(8, "MISSED ENTRIES", nMissed == 0 ? "none"
          : str.tostring(nMissed) + (na(lastMiss) ? ""
            : "   last ran " + str.tostring(lastMiss, "#.##")),
          nMissed == 0 ? okc : color.new(#FFB300, 0))
