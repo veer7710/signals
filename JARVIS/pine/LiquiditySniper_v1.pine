@@ -46,13 +46,12 @@
 //  bar that can later vanish.
 // ============================================================================
 
+// max_bars_back is declared because the order-block walk-back reads close[j]
+// with a LOOP VARIABLE offset. Pine cannot always infer the buffer that needs,
+// and throws "cannot determine the referencing length" at runtime - on the
+// user's chart, after the script has apparently loaded fine.
 indicator("Liquidity Sniper v1", "LiqSniper", overlay = true,
      max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500,
-     // The order-block walk-back reads close[j] with a LOOP VARIABLE offset.
-     // Pine cannot always infer the buffer that needs and throws "cannot
-     // determine the referencing length" at runtime, on the user's chart,
-     // after the script has apparently loaded fine. Declaring it removes the
-     // guesswork.
      max_bars_back = 500)
 
 // ─────────────────────────────────── INPUTS ─────────────────────────────────
@@ -88,6 +87,8 @@ biasFilter = input.bool(false, "Only trade WITH the structure", group = gM,
 useDiscount = input.bool(true, "Show where price sits in the range (premium / discount)", group = gM,
      tooltip = "Cheap or expensive relative to the recent swing. Buying in the lower half and selling in the upper half is the whole idea - on a day that has opened very low, this is what tells you price is in discount rather than you guessing.")
 rangeLen  = input.int(100, "   range length (bars)", minval = 20, maxval = 500, group = gM)
+biasLife  = input.int(200, "   structure goes stale after (bars)", minval = 20, maxval = 2000, group = gM,
+     tooltip = "A break of structure two days ago does not describe today. Without this the Structure row stays green through days of range, and the 'only trade WITH the structure' filter keeps refusing shorts on the strength of it.")
 
 gI = "IMBALANCES AND ORDER BLOCKS"
 useFvg = input.bool(true, "Fair value gaps (unfilled imbalance)", group = gI,
@@ -159,6 +160,8 @@ needRetest = input.bool(false, "Wait for a retest of the broken level", group = 
 retestBars = input.int(8,   "   retest must happen within (bars)", minval = 1, maxval = 30, group = gS)
 
 gP = "SIGNAL FREQUENCY"
+entryCool = input.int(3, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
+     tooltip = "A setup condition that stays true for four bars in a row is ONE idea, not four. Without this the indicator queued a fresh entry on each of those bars and you ended up with three positions on the same trade, three stops under the same swing, and three times the risk you thought you had.")
 maxTrades = input.int(3, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
      tooltip = "The single biggest limiter on how many entries you see. At 1 the indicator sits idle through every setup that appears while a trade is already open - which on a trending day is most of them.")
 preset = input.string("Balanced", "Preset",
@@ -193,7 +196,7 @@ ccyPerPt   = input.float(1.00, "Money per 1.0 of price, at 0.01 lots", minval = 
      tooltip = "XAUUSD at 0.01 lots is normally 1.00 of account currency per 1.00 of price (a 100 oz contract at 0.01 = 1 oz). Check your broker's contract size and adjust if it differs.")
 maxChase   = input.float(0.50, "MISSED IT if price already ran this far ahead", minval = 0.1, step = 0.1, group = gT,
      tooltip = "THE SLOW-CHART PROTECTION. TradingView can be late, the alert can arrive after the move, you can be looking away. If price has already travelled this much of your risk in the signal's direction before you are filled, it is no longer the trade you were shown - same stop, less reward. It is marked MISSED instead of taken.")
-entryDelay = input.int(1, "How many bars until I actually click", minval = 0, maxval = 10, group = gT,
+entryDelay = input.int(1, "How many bars until I actually click", minval = 1, maxval = 10, group = gT,
      tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you enter. Set this to how many bars that realistically takes you. Everything tracked - entry price, P/L, the whole record - uses THAT price, not the signal price. At 0 the numbers flatter you.")
 trackFrom  = input.string("My real entry", "Measure profit from", options = ["My real entry", "Signal price"], group = gT)
 showHist   = input.int(15, "How many finished trades to keep on the chart", minval = 0, maxval = 20, group = gT,
@@ -403,9 +406,20 @@ touchScan(array<float> px, array<bool> dead, bool isHigh) =>
 addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
          array<line> lns, array<box> bxs, array<bool> stk,
          float p, int b, bool isHigh, bool sticky) =>
+    bool merged = false
     // merge into an existing near-equal level: equal highs/lows hold MORE
     // resting orders than a lone extreme, so they are strengthened not doubled
-    merged = false
+    // A level is only LIQUIDITY if it is on the side of price where stops
+    // would rest: highs above, lows below. Higher-timeframe pivots, the weekly
+    // extremes and session extremes are all delivered LATE - an M15 pivot high
+    // arrives about 90 minutes after it formed, by which time an uptrend is
+    // already above it. Registered anyway, minLvlAge then made it eligible and
+    // the next close "swept" a level price had cleared an hour earlier,
+    // manufacturing a BREAK long against it and filing it for RETESTs after
+    // that. Wrong-side levels are simply not registered.
+    if (isHigh and p <= close) or (not isHigh and p >= close)
+        merged := true          // swallow it: nothing is drawn, nothing fires
+
     tol = eqTol * atr
     if array.size(px) > 0
         for i = 0 to array.size(px) - 1
@@ -755,10 +769,18 @@ bosDn   = useStruct and not na(swLo) and barstate.isconfirmed and close < swLo a
 chochUp = bosUp and bias <= 0      // was bearish or undecided, now broke up
 chochDn = bosDn and bias >= 0
 
+var int lastBosBar = 0
 if bosUp
     bias := 1
+    lastBosBar := bar_index
 if bosDn
     bias := -1
+    lastBosBar := bar_index
+// A break of structure two days ago is not a description of today. Without a
+// decay the Structure row stayed green through days of range, and with the
+// bias filter on it kept refusing every short on the strength of it.
+if bias != 0 and bar_index - lastBosBar > biasLife
+    bias := 0
 
 structTxt = bias > 0 ? "BULLISH" : bias < 0 ? "BEARISH" : "undecided"
 
@@ -825,9 +847,14 @@ if array.size(fvTop) > 0
                 fvShort := t
                 took := true
             if took
+                // DELETE it. Greying it and dropping the handle leaked the box:
+                // unreachable, never reclaimed, and on M1 gold enough gaps form
+                // to reach max_boxes_count within a session - at which point
+                // TradingView evicts the OLDEST boxes, which are the liquidity
+                // zones, while extend() keeps writing to their dead handles.
                 bx0 = array.get(fvBx, i)
                 if not na(bx0)
-                    box.set_bgcolor(bx0, color.new(color.gray, 94))
+                    box.delete(bx0)
                 array.remove(fvTop, i)
                 array.remove(fvBot, i)
                 array.remove(fvDir, i)
@@ -844,6 +871,9 @@ var float obDnBot = na
 var int   obUpBar = 0
 var int   obDnBar = 0
 
+var box obUpBox = na
+var box obDnBox = na
+
 if useOb and bosUp
     // walk back for the most recent bearish candle before this impulse
     for j = 1 to 20
@@ -851,6 +881,12 @@ if useOb and bosUp
             obUpTop := high[j]
             obUpBot := low[j]
             obUpBar := bar_index
+            if showSmc
+                if not na(obUpBox)
+                    box.delete(obUpBox)
+                obUpBox := box.new(bar_index - j, high[j], bar_index + 10, low[j],
+                     border_color = color.new(accBull, 55),
+                     bgcolor = color.new(accBull, 85))
             break
 if useOb and bosDn
     for j = 1 to 20
@@ -858,6 +894,12 @@ if useOb and bosDn
             obDnTop := high[j]
             obDnBot := low[j]
             obDnBar := bar_index
+            if showSmc
+                if not na(obDnBox)
+                    box.delete(obDnBox)
+                obDnBox := box.new(bar_index - j, high[j], bar_index + 10, low[j],
+                     border_color = color.new(accBear, 55),
+                     bgcolor = color.new(accBear, 85))
             break
 
 // A return INTO the block, not merely near it: the bar must trade inside the
@@ -877,13 +919,8 @@ obShort = obDnLive and barstate.isconfirmed
 float obLvlL = obLong  ? obUpBot : na
 float obLvlS = obShort ? obDnTop : na
 
-// used once, so one block cannot supply the same entry all afternoon
-if obLong
-    obUpTop := na
-    obUpBot := na
-if obShort
-    obDnTop := na
-    obDnBot := na
+// Blocks are spent where the trade is actually QUEUED, further down - not
+// here, where the setup has merely been detected and may still be refused.
 
 // ─────────────────────── RETEST / RECLAIM SETUPS ────────────────────────────
 // A level that has been taken out is not finished - it is the next level, from
@@ -1028,13 +1065,21 @@ goShort  = anyShort and (not bothWays or not tieLong)
 
 // Which setup it was, so the chart says WHY it fired rather than just that it
 // did. Read in priority order, most specific first.
-setupName = (obLong or obShort)               ? "ORDER BLOCK"
-     : not na(fvLong) or not na(fvShort)        ? "GAP FILL"
-     : not na(rcLong) or not na(rcShort)        ? "RETEST"
-     : (pbLong or pbShort)                      ? "PULLBACK"
-     : (boLong or boShort)                      ? "BREAKOUT"
-     : (bncLong or bncShort)                    ? "BOUNCE"
-     : "BREAK"
+// Named PER DIRECTION and in the SAME priority order setupLvl uses. The old
+// version ORed the two sides, so a BUY could be labelled "GAP FILL" from a
+// bearish gap on the other side of price, and its priority was OB-before-FVG
+// while setupLvl used FVG-before-OB - the label named one zone while the stop
+// was anchored to a different one.
+nameFor(int dir) =>
+    dir > 0
+         ? (not na(fvLong) ? "GAP FILL" : obLong ? "ORDER BLOCK"
+            : not na(rcLong) ? "RETEST" : pbLong ? "PULLBACK"
+            : boLong ? "BREAKOUT" : bncLong ? "BOUNCE" : "BREAK")
+         : (not na(fvShort) ? "GAP FILL" : obShort ? "ORDER BLOCK"
+            : not na(rcShort) ? "RETEST" : pbShort ? "PULLBACK"
+            : boShort ? "BREAKOUT" : bncShort ? "BOUNCE" : "BREAK")
+
+setupName = goLong ? nameFor(1) : goShort ? nameFor(-1) : "BREAK"
 
 // ─────────────────────────── TARGET: NEXT LIQUIDITY ─────────────────────────
 nextLiq(bool up) =>
@@ -1202,17 +1247,34 @@ if canFire
     rr    = risk > 0 ? math.abs(tp - entry) / risk : 0
     if risk > 0 and risk <= maxRiskAtr * atr and rr >= minR
         // The signal is real now; the FILL is not. Queue it and let the fill
-        // happen at a price this bar cannot know. At entryDelay 0 it opens
-        // immediately, which is the flattering case, not the realistic one.
+        // happen at a price this bar cannot know. The minimum delay is 1 bar
+        // and that is not a preference: at 0 the fill used this bar's OPEN, a
+        // price that occurred BEFORE the bar closed and before the signal
+        // existed, and the same bar's high and low then resolved the target.
+        // Signal bars are displacement or rejection candles by construction,
+        // so that manufactured same-bar wins. It was look-ahead, not optimism.
         array.push(pdDir,  dir)
         array.push(pdBar,  bar_index)
         array.push(pdRisk, risk)
         array.push(pdRR,   rr)
         array.push(pdSig,  entry)
+        lastFireBar := bar_index
         firedLong   := dir > 0
         firedShort  := dir < 0
         firedBounce := setupIsBounce
         armDir := 0
+
+        // ---- D-3: a zone is spent only when a trade ACTUALLY queues.
+        // These used to be cleared where the condition was evaluated, so a bar
+        // refused by the expansion gate, the both-ways tie-break, the risk cap
+        // or the R:R floor still destroyed the zone - the best zone on the
+        // chart went quiet after a bar that did nothing.
+        if obLong
+            obUpTop := na
+            obUpBot := na
+        if obShort
+            obDnTop := na
+            obDnBot := na
 
 // ---- fill anything whose delay has elapsed, at THIS bar's open
 var float lastSlip = na
@@ -1307,7 +1369,10 @@ if array.size(trDir) > 0
         byTrl  = useTrl and (d > 0 ? trs > sl : trs < sl)
         hitStp = d > 0 ? low  <= eStop : high >= eStop
         hitTp  = d > 0 ? high >= tp    : low  <= tp
-        hitFlp = useFlipExit and (d > 0 ? firedShort : firedLong)
+        // held > 0 for the same reason as hitRev: the fire block and the fill
+        // loop both run BEFORE this one, so without it an opposite signal on
+        // the fill bar closed the trade on the bar it opened.
+        hitFlp = useFlipExit and held > 0 and (d > 0 ? firedShort : firedLong)
         hitTim = useTimeExit and held >= maxHoldBars
         // ---- REVERSAL. Price closing back through the level the setup was
         // built on means the reason for the trade is gone. Riding that back to
@@ -1413,9 +1478,14 @@ if array.size(trDir) > 0
             array.remove(trTrs, k)
             array.remove(trMfe, k)
 
-plotshape(firedLong  and not firedBounce, "BUY break",  shape.labelup,
+// EVERY signal gets the full BUY/SELL marker. Previously `setupIsBounce` was
+// true for order block, gap fill, retest, pullback and breakout - five of the
+// seven types - which routed them all to a tiny unlabelled triangle while the
+// alert for the same bar said "BUY". The setup-name label below says which
+// type it was, so the triangle carried no information anyway.
+plotshape(firedLong,  "BUY",  shape.labelup,
      location.belowbar, cBull, text = "BUY",  textcolor = color.white, size = size.small)
-plotshape(firedShort and not firedBounce, "SELL break", shape.labeldown,
+plotshape(firedShort, "SELL", shape.labeldown,
      location.abovebar, cBear, text = "SELL", textcolor = color.white, size = size.small)
 
 // WHY it fired, not just that it did. Knowing which setup type is paying and
@@ -1429,6 +1499,15 @@ if (firedLong or firedShort) and showWhy
 // different invalidation, and blending them into one label would hide which
 // kind is actually working for you.
 plot(showEma and usePullEma ? emaT : na, "Trend line", color.new(color.gray, 30), 1)
+
+// CHoCH was computed and only ever shown in a panel cell guarded by
+// barstate.islast, so it was visible for one tick and then gone forever. It is
+// the earliest warning the side you are trading has stopped working, which
+// makes it worth a mark on the bar it happened.
+plotshape(chochUp,  "CHoCH up",   shape.diamond, location.belowbar,
+     color.new(accBull, 20), size = size.tiny)
+plotshape(chochDn,  "CHoCH down", shape.diamond, location.abovebar,
+     color.new(accBear, 20), size = size.tiny)
 
 // ---- HOW OFTEN IS THIS ACTUALLY FIRING?
 // Whether the settings are too tight is not judgeable from one screen. This
@@ -1450,10 +1529,7 @@ if firedLong or firedShort
 spanDays = (time - tFirst) / 86400000.0
 perDay   = spanDays > 0.5 ? nSigAll / spanDays : na
 
-plotshape(firedLong  and firedBounce, "BUY bounce",  shape.triangleup,
-     location.belowbar, cBull, size = size.tiny)
-plotshape(firedShort and firedBounce, "SELL bounce", shape.triangledown,
-     location.abovebar, cBear, size = size.tiny)
+
 
 // ──────────────── ZONE RECORD LABELS — the history, on the chart ────────────
 // Drawn only on the last bar so they cost one label per level, not one per bar.
@@ -1529,9 +1605,17 @@ if showPanel and barstate.islast
     cell(5, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(adxGate, "#.#")
          + (adxV <= adxGate ? "  ok" : "  too high"), adxV <= adxGate ? okc : bad)
     cell(6, "Session " + str.tostring(hourNow) + ":00 UTC", inSess ? "ok" : "outside", inSess ? okc : bad)
-    cell(7, "Setups on", (useBreak ? "break " : "") + (useBounce ? "bounce" : "") +
-         (useBreak or useBounce ? "" : "NONE"), (useBreak or useBounce) ? okc : bad)
-    cell(8, "Setups allowed", expansionOk ? "YES" : "NO — waiting", expansionOk ? okc : bad)
+    // count every enabled type, not just the two that existed first
+    nOn = (useBreak ? 1 : 0) + (useBounce ? 1 : 0) + (useReclaim ? 1 : 0)
+         + (usePullEma ? 1 : 0) + (useBreakout ? 1 : 0) + (useFvg ? 1 : 0)
+         + (useOb ? 1 : 0)
+    cell(7, "Setups on", str.tostring(nOn) + " of 7", nOn > 0 ? okc : bad)
+    // The expansion gate applies to BREAK setups only unless gateAll is on.
+    // Reporting it as global printed "NO - waiting" in red on bars that were
+    // firing order-block and pullback entries.
+    cell(8, gateAll ? "All setups allowed" : "Breaks allowed",
+         expansionOk ? "YES" : (gateAll ? "NO — waiting" : "no (others still on)"),
+         expansionOk ? okc : gateAll ? bad : dim)
     nOpen = array.size(trDir)
     nPend = array.size(pdDir)
     cell(9, "Trades", nOpen > 0 ? (str.tostring(nOpen) + "/" + str.tostring(maxTrades) + " open")
@@ -1610,8 +1694,12 @@ if showTable and barstate.islast and array.size(hDir) > 0
         // "% green" would read ~100% regardless of whether the strategy works.
         wentGreen += pk_ >= 1.0 ? 1 : 0
         totR += rr_
-        totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
-                * ccyPerPt * (lotSize / 0.01)
+        // Split across two statements, not one wrapped line. A wrapped line
+        // must NOT be indented by a multiple of 4 - Pine reads that as a new
+        // block and raises "end of line without line continuation". At 16
+        // spaces this refused to compile, in both files, for five commits.
+        mj = (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
+        totM += mj * ccyPerPt * (lotSize / 0.01)
         // >= 0 to match the colour the chart already gives a break-even trade
         wins += rr_ >= 0 ? 1 : 0
         nTp  += wy_ == "TP" ? 1 : 0

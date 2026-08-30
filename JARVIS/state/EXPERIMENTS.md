@@ -738,3 +738,42 @@ using it. All three now do.
 
 The GOLD rows were unaffected (the default IS gold), so the stop/target sweep
 conclusion in E-030 stands: DID NOT HOLD on any of the 8 pairs, on correct costs.
+
+## E-034 — Adversarial Pine audit (post-1770c6f): both indicators fail to compile
+Audited `LiquiditySniper_v1.pine` (1687 lines) and `SuperTrendSniper_v1.pine`
+(709 lines) at commit 1770c6f. `check_pine.py` reports CLEAN on both; the
+checker does not model Pine's line-wrapping rule and misses the blocker.
+
+**BLOCKER.** `LiquiditySniper_v1.pine:1614` and `SuperTrendSniper_v1.pine:635`
+wrap `totM += ...` onto a continuation line indented 16 spaces with all
+brackets closed on the previous line. Pine requires wrapped lines to be
+indented by a number of spaces that is NOT a multiple of four; 16 is read as a
+new local block and the parser raises "end of line without line continuation".
+Introduced in 892c12f. Neither file can have been loaded on TradingView since
+then, so every "shipped and working" claim about them is unverified.
+
+**Highest-value non-compile findings.**
+- Order blocks and FVGs are CONSUMED at signal time (LiqSniper:825-834, 881-886)
+  but the entry can still be rejected afterwards by gateOk, minR, maxRiskAtr or
+  the maxTrades cap. Valid zones are destroyed by bars that produce no trade.
+- No dedup on the pending queue (LiqSniper:1175): `pbLong`/`rcLong`/`bncLong`
+  stay true on consecutive bars, so one idea queues up to maxTrades+1 entries
+  at nearly the same price. 3x intended risk on a single setup.
+- Panel row 8 "Setups allowed" reports `expansionOk`, but `gateOk`
+  (LiqSniper:1150) only applies it to BREAK setups while gateAll is false
+  (default). The panel says "NO - waiting" while five setup types fire.
+- Consumed FVG boxes are dropped from `fvBx` without `box.delete`
+  (LiqSniper:834) - unbounded leak against max_boxes_count = 500.
+- Order blocks are never drawn at all; `showSmc` ("Draw gaps and order blocks")
+  only reaches the FVG box at LiqSniper:794.
+- `armExt` is inert (LiqSniper:1194/1198): `math.min(low, armExt)` where
+  armExt is a running max of highs is always `low`. The comment above it claims
+  this exact bug was already fixed.
+- `bias` (LiqSniper:759/761) never decays, so the Structure row keeps asserting
+  BULLISH indefinitely after one break.
+- `entryDelay = 0` (minval 0, both files) fills at the SIGNAL BAR's own open and
+  then resolves TP/SL against that same bar's range. Look-ahead of the F-001
+  class, reachable from the settings dialog.
+
+Status: both files UNPROVEN and currently UNLOADABLE. Full defect list with
+triggers in the review transcript.

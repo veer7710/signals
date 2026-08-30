@@ -84,3 +84,48 @@ and the regression test that now guards it.
   2. Any `str.replace` used to edit code must `assert` its anchor was found.
      A silent no-op that reports success is worse than a crash.
 - **Lesson:** generalised in LESSONS_LEARNED L-008.
+
+## F-006 — Shipped a Pine file that could not compile, for five commits
+An adversarial review found this construct in BOTH indicators:
+
+```pine
+        totM += (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
+                * ccyPerPt * (lotSize / 0.01)
+```
+
+The first line closes every bracket it opens, so the second is an explicit
+wrapped line - and it is indented 16 spaces. Pine requires a wrapped line to be
+indented by a number of spaces that is NOT a multiple of four, because those
+boundaries delimit blocks. At 16 the parser raises `end of line without line
+continuation`.
+
+Introduced in `892c12f` and present in five subsequent commits. Every one of
+those was sent to Veer described as ready to paste and trade. **The files had
+not compiled since.**
+
+WHY THE CHECKER MISSED IT. `check_pine.py` gained a continuation check earlier
+the same session - and it matched only lines beginning `and`, `or`, `?` or `:`.
+This line begins with `*`. The check was written against the failure I had in
+mind rather than against the rule, so it passed a file that violated the rule
+it was written to enforce.
+
+This is F-005 repeating with a different mechanism: a tool built after shipping
+a non-compiling file, which then failed to catch the next non-compiling file.
+
+FIXES
+1. Both files corrected - the expression is now two statements, no wrap.
+2. The continuation check now matches ANY operator that can start a wrapped
+   line (`* / + - % == != <= >= < >` as well as and/or/?/:), and is
+   regression-tested against a file containing the exact original defect.
+3. LESSON L-009 below.
+
+## L-009 — A check written from the example, not the rule, only catches the example
+The continuation check was built from one remembered failure shape and matched
+four operators. The rule it was enforcing - "a wrapped line must not be indented
+by a multiple of four" - says nothing about which operator starts the line. Any
+check that encodes an instance instead of the rule will pass the next instance.
+
+Corollary that cost the most here: a static checker reporting CLEAN was treated
+as evidence the file compiled. It is not. It is evidence that the specific
+things the checker models are absent. Nothing in this repo can compile Pine, so
+"CLEAN" must always be reported as "passes static checks", never as "compiles".

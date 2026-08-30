@@ -47,8 +47,13 @@ def check_continuation(src):
     depth = 0
     for i, l in enumerate(src, 1):
         code = re.sub(r'"(\\.|[^"\\])*"', '""', l.split("//")[0])
-        if depth == 0:
-            m = re.match(r'^(\s+)(and|or|\?|:)\s', code)
+        if depth == 0 and code.strip():
+            # ANY operator can start a wrapped line, not just and/or. The
+            # version of this check that only looked for and/or/?/: let a
+            # `* ccyPerPt` continuation through, and both indicators failed to
+            # compile for five commits because of it.
+            m = re.match(r'^(\s+)([-+*/%]|and\b|or\b|\?|:|==|!=|<=|>=|<|>|\band\b)\s',
+                         code)
             if m and len(m.group(1)) % 4 == 0:
                 out.append((i, "CONTINUATION indented by a multiple of 4 "
                                "(reads as a new block, not a continuation)",
