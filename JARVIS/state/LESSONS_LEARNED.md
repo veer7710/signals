@@ -52,3 +52,16 @@ order of 15x a chat interaction in tokens. Launch in batches of 2-3, and always
 checkpoint verified work to disk before spawning anything.
 Corollary from the architecture research: parallelise READS (research, sweeps,
 log analysis), never WRITES (two agents editing the same code).
+
+## L-008 — A silent no-op is worse than a crash
+A `str.replace` whose anchor does not match returns the input unchanged and
+looks like it worked. That shipped a non-compiling file to the user (F-005).
+Two rules now:
+- Every programmatic edit asserts its anchor was found before writing.
+- Every generated artifact gets a checker that verifies the property that
+  actually matters. The audit that passed the broken file checked declaration
+  ORDER; the bug was declaration EXISTENCE. Auditing the wrong property is
+  indistinguishable from not auditing at all.
+Both checkers in `JARVIS/tools/` are regression-tested against the real bug
+they were written for — a checker that has never been shown to fail on known-
+bad input is not evidence of anything.

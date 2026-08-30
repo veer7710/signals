@@ -63,3 +63,24 @@ and the regression test that now guards it.
 - **Fix:** recommendation retracted in RESEARCH_QUEUE R-001.
 - **Lesson:** L-006 — verify the canonical source and what a tool actually does
   before recommending an install.
+
+---
+## F-005 — shipped a Pine file that could not compile
+- **Class:** CODE / PROCESS
+- **Symptom:** `LiquiditySniper_v1.pine` v1.2 was sent to Veer using
+  `needRetest` and `retestBars` in seven places while declaring neither. It
+  would have failed on paste.
+- **Root cause:** a Python string replacement meant to add those two inputs did
+  not match — the anchor had `minLvlAge  = ` (two spaces), the file had
+  `minLvlAge = ` (one). `str.replace` returns the string unchanged when the
+  anchor is absent, so it FAILED SILENTLY and reported success.
+- **Why my own audit missed it:** the audit I ran checked declaration ORDER
+  (nothing used before it is defined) but never declaration EXISTENCE. It
+  passed a file with two names that were never defined at all.
+- **Fixes:**
+  1. `JARVIS/tools/check_pine.py` — a real static checker that verifies every
+     identifier used is declared somewhere. Regression-tested against the exact
+     broken file: it reports both names and exits 1.
+  2. Any `str.replace` used to edit code must `assert` its anchor was found.
+     A silent no-op that reports success is worse than a crash.
+- **Lesson:** generalised in LESSONS_LEARNED L-008.

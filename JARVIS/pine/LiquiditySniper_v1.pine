@@ -78,6 +78,9 @@ needClose = input.bool(true, "Require close beyond the level", group = gS,
      tooltip = "A wick through is not a break. Demanding a close removes most fakeouts.")
 minLvlAge = input.int(5,    "Level must be this many bars old", minval = 0, group = gS,
      tooltip = "A level formed moments ago has no resting orders behind it yet.")
+needRetest = input.bool(false, "Wait for a retest of the broken level", group = gS,
+     tooltip = "THE FAKEOUT FIX. Instead of entering on the break candle, wait for price to come back and HOLD the level it just broke. Far fewer fakeouts and a much better entry price - but you will miss the breaks that never look back. Turn this on if you are being faked out.")
+retestBars = input.int(8,   "   retest must happen within (bars)", minval = 1, maxval = 30, group = gS)
 
 gP = "SIGNAL FREQUENCY"
 maxTrades = input.int(3, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",

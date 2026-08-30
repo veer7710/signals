@@ -10,7 +10,11 @@ is cited to the file that produced it.
 **Supersedes:** nothing. Replaces `JARVIS/ea/inbox/XAUUSD_QUAD_v19_18.mq5`
 (20,695 lines, 748 inputs, REJECTED — `JARVIS/ea/AUDIT_v19_18.md`, E-006).
 **Mirrors:** `JARVIS/pine/LiquiditySniper_v1.pine`
-**Target files:** `JARVIS/ea/src/*.mqh` + `JARVIS/ea/LiquiditySniper.mq5`
+**Skeletons written:** `JARVIS/ea/src/*.mqh` (15 files) +
+`JARVIS/ea/LiquiditySniper.mq5` — **declarations and doc comments only, no
+bodies.** MQL5 requires a body for every declared method, so that tree does
+not compile and is not meant to yet; the interfaces are being reviewed
+before anything is built.
 
 ---
 
@@ -80,8 +84,18 @@ Veer, in a session, explicitly.
         |                   |                              |
         +--- StatisticsEngine.mqh                   TargetEngine.mqh
                             |                              |
+                            |                    LiquiditySniperSignal.mqh
+                            |                     implements ISignalProvider
+                            |                              |
                             +---------- LiquiditySniper.mq5 (orchestrator only)
 ```
+
+`ISignalProvider.mqh` is a leaf alongside `Types.mqh`: it includes nothing
+but `Types.mqh` and forward-declares `CLogger`. The money modules
+(`RiskEngine`, `PropFirmEngine`, `ExecutionEngine`, `TradeManagement`) do
+not include it, and the signal side does not include them. **The
+restriction is enforced by the include graph, not by discipline** — a
+signal module cannot reach `ACCOUNT_EQUITY` through any type it can see.
 
 Arrows point from dependency to dependent. There is no arrow from any money
 module back into any signal module. `LiquiditySniper.mq5` contains **no
@@ -97,12 +111,13 @@ enum ENUM_LOG_LEVEL     { LOG_SILENT, LOG_ERROR, LOG_TRADE, LOG_SIGNAL, LOG_VERB
 enum ENUM_LEVEL_SOURCE  { SRC_PIVOT, SRC_PREV_DAY, SRC_SESSION, SRC_ROUND };
 enum ENUM_LOCK          { LOCK_NONE, LOCK_DAILY_SOFT, LOCK_DAILY_HARD,
                           LOCK_DD_SOFT, LOCK_DD_HARD, LOCK_STREAK, LOCK_SPREAD,
-                          LOCK_NEWS, LOCK_FRIDAY, LOCK_MARGIN, LOCK_CONNECT,
-                          LOCK_SPECS, LOCK_DEMO };
-enum ENUM_REJECT_STAGE  { RJ_NO_SWEEP, RJ_REGIME_ATR, RJ_REGIME_ADX, RJ_SESSION,
-                          RJ_DISPLACEMENT, RJ_LEVEL_AGE, RJ_STOP_TOO_WIDE,
-                          RJ_RR_TOO_LOW, RJ_SPREAD, RJ_LOTS_BELOW_MIN,
-                          RJ_MAX_POSITIONS, RJ_PROPFIRM_LOCK, RJ_SEND_FAILED };
+                          LOCK_NEWS, LOCK_FRIDAY, LOCK_ROLLOVER, LOCK_MARGIN,
+                          LOCK_CONNECT, LOCK_SPECS, LOCK_DEMO };
+enum ENUM_REJECT_STAGE  { RJ_NONE, RJ_NO_SWEEP, RJ_REGIME_ATR, RJ_REGIME_ADX,
+                          RJ_SESSION, RJ_DISPLACEMENT, RJ_LEVEL_AGE,
+                          RJ_STOP_TOO_WIDE, RJ_STOP_TOO_TIGHT, RJ_RR_TOO_LOW,
+                          RJ_SPREAD, RJ_LOTS_BELOW_MIN, RJ_MAX_POSITIONS,
+                          RJ_OPPOSING, RJ_PROPFIRM_LOCK, RJ_SEND_FAILED };
 
 struct LiquidityLevel  { double price; datetime formed_time; int formed_bar;
                          int touch_count; bool swept; datetime swept_time;
@@ -111,19 +126,40 @@ struct LiquidityLevel  { double price; datetime formed_time; int formed_bar;
 struct SweepEvent      { bool valid; int direction; double level_price;
                          int level_touches; datetime level_formed;
                          double break_open, break_high, break_low, break_close;
-                         double displacement_atr; datetime bar_time; };
+                         double displacement_atr; int levels_killed;
+                         datetime bar_time; };
 
 struct RegimeState     { double atr, atr_median, atr_ratio, adx;
                          bool in_session, expansion_ok; ENUM_REJECT_STAGE reject; };
 
 struct TradePlan       { bool valid; int direction; double entry, stop, target;
-                         double risk_price, reward_risk, lots;
-                         ENUM_REJECT_STAGE reject; datetime signal_bar; };
+                         double risk_price, reward_risk, lots, atr_at_signal;
+                         ENUM_REJECT_STAGE reject; datetime signal_bar;
+                         string source_name; };
 
 struct PositionState   { ulong ticket; int direction; double entry, stop_initial,
-                         target, r_distance; datetime open_time; int bars_held;
-                         double peak_r, trough_r; bool stop_verified; };
+                         target, r_distance; bool r_approx; datetime open_time;
+                         int bars_held; double peak_r, trough_r;
+                         bool stop_verified; };
+
+struct SymbolSpecs     { bool valid; string why_invalid; double point; int digits;
+                         double tick_size, tick_value, contract_size;
+                         double volume_min, volume_max, volume_step;
+                         int stops_level_pts, freeze_level_pts;
+                         bool spread_float; long filling_modes, trade_mode;
+                         double money_per_lot_per_price; };
 ```
+
+`SymbolSpecs` collects every runtime-read value from §4.2 into one struct
+owned by one module. No literal from it (`100`, `0.01`, `10`) may appear
+anywhere else in the codebase.
+
+`RJ_NONE` is the zero value so that a zeroed `TradePlan` cannot masquerade
+as a specific rejection. `RJ_OPPOSING` is set by the orchestrator (the
+no-hedging rule) and `RJ_STOP_TOO_TIGHT` by `RiskEngine`
+(`SYMBOL_TRADE_STOPS_LEVEL`); every other value is set by a signal module.
+`TradePlan.source_name` carries `ISignalProvider::Name()` so no CSV row can
+be ambiguous about which strategy produced it.
 
 `direction` is `+1` long / `-1` short throughout. **`0` is never a valid
 direction** — it is the "no signal" sentinel and any function returning it
@@ -254,6 +290,49 @@ Donchian entries:
 **Adaptive targeting measured worse than a plain fixed 3R.** The gate is a
 boolean veto. It never touches the target. `TargetEngine` has no reference to
 `RegimeEngine` and cannot acquire one.
+
+#### E-021 corrects E-020, and this module must ship accordingly
+
+**The gate failed out-of-sample.** E-020's table above was **not** split
+in-sample/out-of-sample. `autosearch.py` then ran 672 tests (168 configs ×
+4 markets) with a chronological 70/30 split and the out-of-sample run
+executed **once**, on the top handful:
+
+| config | in-sample | out-of-sample |
+|---|---|---|
+| sweep_continuation **+ gate** adx25/1.15, rr3 | 4/4 markets, **+0.166R** | 1/4 markets, **−0.109R** |
+| sweep_continuation **+ gate** adx20/1.0, rr3 | 3/4, +0.185R | 1/2, −0.158R |
+| ma_cross, **gate = none**, rr3 | 3/4, +0.094R | 3/3, **+0.208R** |
+
+**The gated configs are the ones that collapsed, and the two best
+out-of-sample configs both had `gate = none`.** The gate's apparent
++0.108R in E-020 was substantially in-sample fitting. The luck bar at
+N=672 is t=3.61; the best out-of-sample t anywhere was +2.24.
+
+What survives and what does not:
+- **E-019 still stands.** That compressed volatility *precedes* larger
+  moves was a direct measurement of the price series, replicated on two
+  timeframes over different periods. It was never a fitted strategy and it
+  cannot overfit in the way E-021 caught.
+- **"Gating on it improves a traded system" does not stand.**
+
+**Consequences for this module, and they are binding:**
+
+1. **Do not hard-gate.** The gate must be cheap to turn off, and off must
+   be a supported configuration, not a code path nobody has exercised.
+   `InpMaxAtrRatio >= 3.00` together with `InpMaxAdx = 60` disables it in
+   practice with no code change.
+2. `InpMaxAtrRatio = 1.15` and `InpMaxAdx = 25` are the **Pine defaults**,
+   carried across for parity — they are *not* a validated setting, and
+   §5.5's parity run is a comparison of two implementations, not evidence
+   about either one's edge.
+3. Phase 2 must run the gated and ungated configurations through
+   walk-forward **as two separate hypotheses**, and ship whichever wins
+   out-of-sample. If neither wins, ship ungated: it is the simpler system
+   and it has one fewer thing to be wrong about.
+4. The `StatisticsEngine` reject histogram counts `RJ_REGIME_ATR` and
+   `RJ_REGIME_ADX` separately from every other refusal precisely so the
+   live cost of this gate is measurable rather than assumed.
 
 **State owned.** Indicator handles (`m_h_atr`, plus hand-rolled DMI buffers),
 a rolling 50-value ATR ring buffer for the median, cached closed-bar values,
@@ -392,6 +471,7 @@ void OnNewBar(const datetime bar_time, const double atr);
 void VerifyStopsOnTick();
 
 int    CountOpen()            const;
+int    CountOpen(const int direction) const;   // the no-hedging rule
 double TotalOpenRiskCash()    const;   // sum |entry-stop| * money_per_price * lots
 bool   GetState(const ulong ticket, PositionState &out) const;
 void   FlattenAll(const string reason);   // called by the orchestrator only
@@ -454,6 +534,8 @@ double MinStopDistancePrice() const;   // SYMBOL_TRADE_STOPS_LEVEL * SYMBOL_POIN
 double FreezeDistancePrice()  const;
 double NormalizePrice(const double p) const;     // to SYMBOL_DIGITS
 bool   MarginOkFor(const int direction, const double lots, const double price) const;
+bool   GetSpecs(SymbolSpecs &out) const;
+string SpecDump() const;   // printed at OnInit, LOG_ERROR — see 4.2
 ```
 
 **The sizing formula, in full:**
@@ -495,6 +577,7 @@ bool   MustFlatten(ENUM_LOCK &lock, string &reason) const;
 void   RegisterClosedTrade(const double profit_cash, const datetime close_time);
 
 double Equity()             const;
+double Balance()            const;
 double EffectiveAnchor()    const;
 double DailyFloorEquity()   const;
 double DailyLossCash()      const;
@@ -502,6 +585,7 @@ double DailyHeadroomPct()   const;
 double HighWaterMark()      const;
 double DrawdownFloorEquity()const;
 int    ConsecutiveLosses()  const;
+bool   DdHardLatched()      const;
 
 bool   Persist();    // GlobalVariables, prefixed LS_<magic>_
 bool   Restore();
@@ -538,12 +622,16 @@ bool   SpreadAcceptable(const double stop_distance_price,
 // Sends WITH sl and tp attached. Verifies POSITION_SL != 0 after the fill.
 bool  OpenPosition(const TradePlan &plan, ulong &ticket, string &err);
 
-bool  ClosePosition(const ulong ticket, const string reason);
+// unlimited_retries = true when the caller is a HARD LOCK: failing to close
+// under LOCK_DAILY_HARD is the one situation where giving up is not an option.
+bool  ClosePosition(const ulong ticket, const string reason,
+                    const bool unlimited_retries = false);
 bool  ModifyStop(const ulong ticket, const double new_sl, const double new_tp);
 
 // Retry state machine. Called from OnTick. Contains NO Sleep().
 void  ProcessPending();
 bool  HasPending() const;
+void  CancelPending(const string reason);
 ```
 
 **Must NOT know about:** why a trade is being taken, prop-firm limits (it is
@@ -577,8 +665,10 @@ void Exit  (const ulong ticket, const string tag, const double profit_cash,
 void Lock  (const ENUM_LOCK lock, const string reason, const double equity,
             const double floor_eq);
 void BarState(const datetime bar_time, const RegimeState &r,
-              const int live_hi, const int live_lo);   // parity CSV row
+              const int live_hi, const int live_lo,
+              const string provider_row);              // parity CSV row, §5.1
 void Flush();
+ENUM_LOG_LEVEL Level() const;
 ```
 
 `Init` prints `build_id` (a `#define EA_BUILD` string) at `OnInit`. This is
@@ -622,6 +712,111 @@ stops recording rather than corrupting a slot.
 
 **Must NOT:** influence any decision. It is read-only with respect to trading.
 If `StatisticsEngine` were deleted the EA's behaviour would be identical.
+
+---
+
+### 1.15 `ISignalProvider` — the swappable signal layer
+
+This is the response to measured finding 5, and it is the most important
+structural decision in the tree.
+
+**The finding.** Nothing in this repository has cleared the multiple-testing
+bar. E-012: with N configurations tried and no real edge, the best has an
+expected t-statistic of about `sqrt(2 ln N)`. This project has now run
+~100 variants, so the bar is **~3.0**. The best out-of-sample t observed
+anywhere is **+2.24** (E-021). Sweep-continuation is `PROMISING` and
+nothing stronger.
+
+**E-021 is the concrete reason for an abstraction rather than a
+preference.** Under a proper chronological 70/30 split, **7 of 8 in-sample
+winners failed out-of-sample**, and the single best in-sample configuration
+inverted completely:
+
+| config | in-sample | out-of-sample |
+|---|---|---|
+| sweep_continuation + gate adx25/1.15, rr3 | 4/4 markets, **+0.166R** | 1/4 markets, **−0.109R** |
+| ma_cross, no gate, rr3 | 3/4, +0.094R | 3/3, +0.208R |
+
+The strategy this EA implements is therefore a **replaceable part**, and
+the probability it is replaced is high. The durable asset is the money
+layer — `RiskEngine`, `PropFirmEngine`, `ExecutionEngine`,
+`TradeManagement` — and it must survive the strategy being deleted.
+Welding a strategy into an execution layer means cutting it out later, and
+that surgery is where 20,695-line EAs come from.
+
+**The contract.**
+
+```cpp
+class ISignalProvider
+  {
+public:
+   virtual          ~ISignalProvider(void) {}
+   virtual string    Name(void) const = 0;
+   virtual string    Version(void) const = 0;
+   virtual bool      Init(const string symbol, const ENUM_TIMEFRAMES tf,
+                          CLogger *log, string &why) = 0;
+   virtual int       WarmupBars(void) const = 0;
+   virtual bool      Evaluate(const datetime bar_time, TradePlan &plan) = 0;
+   virtual bool      OnNewBarObserve(const datetime bar_time) = 0;
+   virtual string    ParityRow(const datetime bar_time) const = 0;
+   virtual string    Diagnostics(void) const = 0;
+   virtual void      Reset(void) = 0;
+  };
+```
+
+Six rules, all enforceable by review:
+
+1. Called **once per closed bar**, never per tick.
+2. Reads **shift ≥ 1 only**. No shift-0 read may influence a plan.
+3. Returns a `TradePlan` **in price**. It never sees equity, lots, tick
+   value, spread, the account or a prop-firm lock — and it has no way to
+   acquire them, because none of those types are reachable through
+   `ISignalProvider.mqh`, which includes only `Types.mqh`.
+4. Never sends, modifies or closes an order.
+5. **Idempotent per bar.** Calling it twice for the same `bar_time`
+   produces the same plan and does not mutate registry state twice.
+6. Every refusal sets a specific `ENUM_REJECT_STAGE`. Returning `false`
+   with `RJ_NONE` is a bug.
+
+`OnNewBarObserve()` exists separately from `Evaluate()` because the
+registry must stay continuous even on bars the EA cannot trade (locked, at
+the position limit, spread too wide). Implementations that keep rolling
+state do that work in `OnNewBarObserve`, and the orchestrator calls it on
+**every** closed bar before deciding whether to call `Evaluate`. Without
+this split, a day spent under `LOCK_DAILY_SOFT` would leave a hole in the
+level registry and the parity CSV.
+
+**`CLiquiditySniperSignal`** is the one concrete implementation. It owns
+the five sub-engines by value and owns the call order, and it contains no
+strategy arithmetic of its own:
+
+```
+1. RegimeEngine::Update(bar_time)              shift-1 reads only
+2. LiquidityEngine::OnNewBar(bar_time, atr)    register new levels
+3. SweepEngine::DetectOnClosedBar(...)         MARK ALL BROKEN LEVELS SWEPT
+4. RegimeEngine::ExpansionOk(...)              the boolean veto
+5. SweepEngine::DisplacementOk(...)
+6. EntryEngine::Evaluate(...)                  direction, entry, stop
+7. TargetEngine::Resolve(plan)                 target, R:R    <- AFTER step 3
+```
+
+Steps 3 and 7 must not be reordered — that is `SweepEngine`'s ordering
+contract (§1.5) and parity test P-10. Steps 4 and 5 run before 6 because
+they are cheap and because the reject code recorded should be the *first*
+reason, which is what the `StatisticsEngine` ledger counts.
+
+**Swapping the strategy is:** write one new class implementing
+`ISignalProvider`, change one `new` in `LiquiditySniper.mq5`. No other file
+changes. Two strategies never run in one EA instance — that was v19.18's
+three-engine design, of which two engines were dead in the shipped
+defaults and the file said so itself at line 19169. A second strategy gets
+a second EA instance, a second magic number, and its own measurements.
+
+**Cost of the abstraction, stated honestly.** One virtual call per closed
+bar, which is free, plus one indirection that a reader has to follow to
+find the logic. That is the entire price, and it buys the ability to
+delete a `PROMISING` strategy without touching the code that keeps the
+account alive.
 
 ---
 
@@ -1544,6 +1739,7 @@ a measurement from this repository rather than on taste.
 | **Early break-even** | The headline finding. `06_exit_experiment.md`: −0.161R gold, −0.188R US500, −0.308R EURUSD, −0.293R GBPUSD. **Worst rule on 4/4 markets.** Win rate collapses to 15–20% because ordinary noise scratches the trade before the tail that pays for everything can develop. v19.18 armed it at 0.24R — earlier than the 0.5R that was tested. This is the single mechanism most responsible for the give-back. |
 | **Any trailing stop that arms below 1R** | Same mechanism, same evidence. The shipped `InpTrailArmR = 0.0` disables trailing entirely; if it is ever enabled the input's own validation refuses values in `(0.0, 1.0)`. |
 | **Adaptive / regime-scaled targets** | E-020, four markets, full costs: gate-only **+0.108R**, adaptive **+0.001R**, worse than a plain fixed 3R (+0.029R). The hypothesis was explicitly tested and explicitly lost. Use the regime as a gate; never as a target multiplier. |
+| **A hard-wired expansion gate** | E-021, 672 tests with a chronological 70/30 split: the gated sweep-continuation configs went from **4/4 markets +0.166R in-sample to 1/4 markets −0.109R out-of-sample**, and both of the best out-of-sample configs had **gate = none**. E-019's underlying measurement (compressed volatility precedes larger moves, replicated on two timeframes) stands; *gating a traded system on it* does not. Build the gate so it can be switched off without a code change, ship the ungated variant if walk-forward does not separate them, and count `RJ_REGIME_*` rejections separately so its live cost is measured. |
 | **Volatility-scaled thresholds (`PtsScale`)** | `05_ea_deep_audit.md`: scaling the threshold and the noise band together leaves the ratio — which is what decides whether a peak is bankable — unchanged. It solves nothing and adds a parameter. |
 | **Confidence scores / setup grading / A-B-C quality tiers** | v19.18 had six entry paths, a confluence multiplier, `SessionQuality`, `CoordBoost` and `LiveRisk`. **Not one of them was ever shown to correlate with outcome.** A score that has not been validated against realised R is a number that makes a discretionary decision feel systematic. If a grading is ever proposed, the entry bar is: bucket historical trades by the score and show monotonically increasing expectancy across buckets, out of sample. Until then, every valid setup is the same size. |
 | **Per-hour / per-session parameter tables** | 24 buckets × parameters is the textbook overfit, and v19.18's `T_HourLearning` was dead code behind `T_FixedLots` anyway. The one measured session effect (E-019: GOLD 15m, 04–12 UTC 89–93% vs 14–16 UTC 62%) is a **single boolean gate on one instrument** and ships **off** (`InpSessionUtc = ""`). |
@@ -1568,6 +1764,7 @@ JARVIS/ea/
     src/
         Types.mqh                    enums + structs, zero dependencies
         Config.mqh                   the 25 inputs + the compile-time constants
+        ISignalProvider.mqh          the swappable signal contract  (§1.15)
         Logger.mqh
         StatisticsEngine.mqh
         RiskEngine.mqh
@@ -1578,17 +1775,29 @@ JARVIS/ea/
         SweepEngine.mqh
         EntryEngine.mqh
         TargetEngine.mqh
+        LiquiditySniperSignal.mqh    the ONE ISignalProvider implementation
         TradeManagement.mqh
 JARVIS/specification/
     EA_ARCHITECTURE.md               this file
     parity/                          §5.1
 ```
 
+**Phase-1 status of these files.** All fifteen `.mqh` headers and the
+`.mq5` orchestrator now exist as **skeletons: declarations and doc comments
+only, no bodies**. MQL5 requires a body for every declared method, so the
+tree does **not** compile as it stands and is not expected to — the point
+is that the interfaces are reviewable before anything is built. Every file
+carries the same banner. There is no MetaEditor in the container they were
+authored in, so nothing here has been compiled or syntax-checked.
+
 **Implementation order for Phase 2** — deliberately money-first, so that if
 the work is interrupted the account is protected rather than the signal being
 clever:
 
-1. `Types.mqh`, `Config.mqh`, `Logger.mqh` — no logic, all plumbing.
+1. `Types.mqh`, `Config.mqh`, `ISignalProvider.mqh`, `Logger.mqh` — no
+   logic, all plumbing. The interface is written first, before any
+   strategy exists, so the strategy cannot quietly acquire a dependency on
+   the money layer.
 2. `RiskEngine.mqh` — and a `OnInit` spec dump. Run it on demo, read the real
    gold contract spec, and check §3.8's numbers against reality **before
    writing anything else**.
@@ -1599,7 +1808,8 @@ clever:
 5. `RegimeEngine.mqh` — validated against fixture B for ATR/median/ADX before
    any entry logic exists.
 6. `LiquidityEngine.mqh` → `SweepEngine.mqh` → `EntryEngine.mqh` →
-   `TargetEngine.mqh` — validated at each step against fixture A.
+   `TargetEngine.mqh` → `LiquiditySniperSignal.mqh` — validated at each
+   step against fixture A.
 7. `StatisticsEngine.mqh`.
 8. `LiquiditySniper.mq5` — wiring.
 
