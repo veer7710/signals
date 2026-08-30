@@ -481,3 +481,93 @@ def filtered(base_factory, **filt):
             return inner(ctx, i)
         return sig
     return make
+
+
+def supertrend_dir(s: Series, atr_len=7, mult=1.2):
+    """
+    SuperTrend direction per bar: -1 bullish, +1 bearish (Pine convention).
+
+    Implemented to match ta.supertrend(mult, atr_len) and the MQL5 rebuild, so
+    all three agree. The carry-forward rule on the final bands is what makes a
+    SuperTrend a SuperTrend rather than a plain band — without it the line
+    whipsaws on every bar.
+    """
+    from engine import atr as _atr
+    A = _atr(s, atr_len)
+    n = len(s)
+    fu = [None] * n
+    fl = [None] * n
+    d = [0] * n
+    for i in range(n):
+        a = A[i]
+        if a is None or a <= 0:
+            continue
+        mid = (s.h[i] + s.l[i]) / 2.0
+        bu, bl = mid + mult * a, mid - mult * a
+        if i == 0 or fu[i - 1] is None:
+            fu[i], fl[i] = bu, bl
+            d[i] = -1 if s.c[i] > bu else 1
+            continue
+        pu, pl_, pc = fu[i - 1], fl[i - 1], s.c[i - 1]
+        fu[i] = bu if (bu < pu or pc > pu) else pu
+        fl[i] = bl if (bl > pl_ or pc < pl_) else pl_
+        d[i] = d[i - 1]
+        if d[i - 1] == 1 and s.c[i] > fu[i]:
+            d[i] = -1
+        elif d[i - 1] == -1 and s.c[i] < fl[i]:
+            d[i] = 1
+    return d, fu, fl
+
+
+def dema(vals, n):
+    """DEMA = 2*EMA(n) - EMA(EMA(n)). Matches the Pine f_dema."""
+    e1 = ema(vals, n)
+    e2 = ema([v if v is not None else vals[0] for v in e1], n)
+    return [None if (a is None or b is None) else 2 * a - b for a, b in zip(e1, e2)]
+
+
+def supertrend_sniper(s: Series, atr_len=7, mult=1.2, dema_len=200,
+                      use_dema=True, stop_atr=1.5, rr=3.0):
+    """
+    THE ACTUAL STRATEGY THE EA IMPLEMENTS — SuperTrend(7, 1.2) + DEMA filter.
+
+    This had never been tested in this engine. Every prior experiment measured
+    something else (Donchian, MA cross, sweeps), so the EA was written on an
+    unmeasured signal. Correcting that is the point of this function.
+
+    Entry on the SuperTrend flip, optionally filtered by DEMA slope, exactly as
+    the Pine and the MQL5 do. Stop and target from ATR so it is comparable with
+    everything else already measured.
+    """
+    from engine import atr as _atr
+    d, fu, fl = supertrend_dir(s, atr_len, mult)
+    A = _atr(s, atr_len)
+    D = dema(s.c, dema_len) if use_dema else None
+
+    def sig(ctx, i):
+        if i < 3 or d[i] == 0 or d[i - 1] == 0:
+            return None
+        flip_up = d[i] == -1 and d[i - 1] == 1
+        flip_dn = d[i] == 1 and d[i - 1] == -1
+        if not (flip_up or flip_dn):
+            return None
+        a = A[i]
+        if a is None or a <= 0:
+            return None
+        if use_dema and D is not None:
+            dn, dp = D[i], D[i - 2]
+            if dn is None or dp is None:
+                return None
+            if flip_up and dn < dp:
+                return None
+            if flip_dn and dn > dp:
+                return None
+        side = 1 if flip_up else -1
+        px, dist = s.c[i], stop_atr * a
+        return {"side": side, "stop": px - side * dist,
+                "target": px + side * rr * dist,
+                "meta": {"atr": a, "rr": rr}}
+    return sig
+
+
+REGISTRY["supertrend_sniper"] = supertrend_sniper

@@ -26,6 +26,7 @@ a usage limit (see FAILURE_LOG F-003).
 | `code-reviewer` | Catch bugs, look-ahead, and false claims in new code | DEFINED |
 | `opportunity-scout` | Research income/business opportunities with evidence | DEFINED |
 | `memory-keeper` | Keep state files true and write the session handoff | DEFINED |
+| `orchestrator` | **Prompt master.** Writes the prompts that drive the other agents | DEFINED |
 
 DEFINED = written and available; none has been run in anger yet. First real
 use should be `adversarial-reviewer` against `donchian_trend` (A-001).
@@ -35,3 +36,29 @@ Most would duplicate these six with different labels, and each unused agent
 is context cost and maintenance burden for zero capability. More will be
 added when a real bottleneck demands one — the directive's own rule:
 "use the smallest effective team."
+
+
+---
+## How to use the office
+
+Say it in plain English and Claude spawns the right one:
+
+    Use the orchestrator agent to plan research on <topic>.
+    Use the adversarial-reviewer agent to attack <strategy>.
+    Use the quant-researcher agent to test <idea>.
+    Use the mql5-engineer agent to audit <file>.
+    Use the code-reviewer agent on the last change.
+    Use the opportunity-scout agent to research <business idea>.
+    Use the memory-keeper agent to checkpoint before I stop.
+
+**Start with the orchestrator when a job needs several specialists.** It reads
+the experiment log so it never briefs an agent to redo settled work, and it
+writes prompts with a disproof criterion — which is the difference between an
+agent that finds an answer and one that finds agreement.
+
+## What the office is NOT
+
+It is not autonomous. Agents run when asked, report back, and stop. Nothing
+here trades, spends money, or acts outside the repo. That is deliberate: an
+agent that can both read untrusted web content and move money is the single
+worst security shape available.
