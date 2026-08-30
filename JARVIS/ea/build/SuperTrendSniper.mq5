@@ -115,6 +115,7 @@ input group "=== SAFETY ==="
 input bool   InpDemoOnly      = true;   // refuse to run on a live account
 input long   InpMagic         = 770001; // magic number
 input bool   InpVerboseLog    = true;   // log every decision
+input bool   InpJournal       = true;   // write every signal and fill to a CSV
 
 //============================ STATE ================================
 datetime g_lastBarTime = 0;
@@ -306,20 +307,25 @@ void TryEntry()
 {
    if(HasPosition()) return;
 
-   string why = "";
-   if(!RiskAllowsEntry(why)) { Log("no entry: " + why); return; }
-
+   // The flip test comes FIRST so that every line logged below corresponds to
+   // a real signal. Testing the risk gates first logged a refusal on every
+   // single bar of a locked day, which buried the signals in noise.
    bool flipUp   = (g_stDir == -1 && g_stDirPrev == 1);
    bool flipDown = (g_stDir == 1  && g_stDirPrev == -1);
    if(!flipUp && !flipDown) return;
+
+   string sdir = flipUp ? "long" : "short";
+
+   string why = "";
+   if(!RiskAllowsEntry(why)) { SkipLog(sdir, why); return; }
 
    if(InpUseDemaFilter)
    {
       double dNow  = DEMA(InpDemaLen, 1);
       double dPrev = DEMA(InpDemaLen, 3);
       if(dNow <= 0 || dPrev <= 0) return;
-      if(flipUp   && dNow < dPrev) { Log("skip long: DEMA falling");  return; }
-      if(flipDown && dNow > dPrev) { Log("skip short: DEMA rising");  return; }
+      if(flipUp   && dNow < dPrev) { SkipLog(sdir, "DEMA falling"); return; }
+      if(flipDown && dNow > dPrev) { SkipLog(sdir, "DEMA rising");  return; }
    }
 
    // --- ADX ceiling. The losing bucket on this strategy is entries taken when
@@ -330,8 +336,8 @@ void TryEntry()
       double adx = ADXValue(1);
       if(adx > 0 && adx > InpMaxAdx)
       {
-         Log(StringFormat("skip: ADX %.1f > %.1f (trend already extended)",
-                          adx, InpMaxAdx));
+         SkipLog(sdir, StringFormat("ADX %.1f > %.1f, trend already extended",
+                                    adx, InpMaxAdx));
          return;
       }
    }
@@ -345,7 +351,7 @@ void TryEntry()
       bool inSess = (InpSessFromUTC <= InpSessToUTC)
                   ? (h >= InpSessFromUTC && h < InpSessToUTC)
                   : (h >= InpSessFromUTC || h < InpSessToUTC);
-      if(!inSess) { Log("skip: outside session"); return; }
+      if(!inSess) { SkipLog(sdir, "outside session"); return; }
    }
 
    double atr = ATR(1);
@@ -353,7 +359,7 @@ void TryEntry()
 
    double stopDist = InpStopAtrMult * atr;
    double lots = LotFor(stopDist);
-   if(lots <= 0) { Log("no entry: lot size zero"); return; }
+   if(lots <= 0) { SkipLog(sdir, "lot size rounded to zero"); return; }
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -368,6 +374,7 @@ void TryEntry()
       if(trade.Buy(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
+         Journal("ENTRY", "long", ask, lots, sl, tp, 0, "");
          Log(StringFormat("LONG %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
       }
@@ -380,11 +387,66 @@ void TryEntry()
       if(trade.Sell(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
+         Journal("ENTRY", "short", bid, lots, sl, tp, 0, "");
          Log(StringFormat("SHORT %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
       }
       else Log("Sell failed: " + IntegerToString(trade.ResultRetcode()));
    }
+}
+
+//==================== JOURNAL ======================================
+// This EA runs on a LIVE account, and the honest reason nobody can say WHY it
+// underperforms is that nobody has the data. The Experts tab is not data - it
+// scrolls away and cannot be analysed.
+//
+// So every signal, every refusal and every fill is written to
+//   MQL5/Files/STS_journal_<symbol>_<timeframe>.csv
+// with the market conditions at that moment attached. Send that file back and
+// the next fix is derived from your actual trades instead of from theory.
+//
+// The SKIP rows are the valuable ones: they are the signals the filters
+// refused. If those keep winning, a filter is costing you money, and that is
+// only knowable from this file.
+string JournalName()
+{
+   return StringFormat("STS_journal_%s_%s.csv", _Symbol,
+                       EnumToString((ENUM_TIMEFRAMES)_Period));
+}
+
+void Journal(string ev, string dir, double px, double lots,
+             double sl, double tp, double money, string note)
+{
+   if(!InpJournal) return;
+
+   int h = FileOpen(JournalName(),
+                    FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI|FILE_SHARE_READ, ',');
+   if(h == INVALID_HANDLE) return;
+
+   if(FileSize(h) == 0)
+      FileWrite(h, "utc_time", "event", "dir", "price", "lots", "sl", "tp",
+                   "money", "atr", "adx", "spread", "equity", "note");
+   FileSeek(h, 0, SEEK_END);
+
+   double atr = ATR(1);
+   double adx = ADXValue(1);
+   double sp  = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+              - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   FileWrite(h, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+             ev, dir, DoubleToString(px, _Digits), DoubleToString(lots, 2),
+             DoubleToString(sl, _Digits), DoubleToString(tp, _Digits),
+             DoubleToString(money, 2), DoubleToString(atr, _Digits),
+             DoubleToString(adx, 1), DoubleToString(sp, _Digits),
+             DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2), note);
+   FileClose(h);
+}
+
+// A signal the filters refused, recorded with the reason.
+void SkipLog(string dir, string why)
+{
+   Log("skip " + dir + ": " + why);
+   Journal("SKIP", dir, iClose(_Symbol, _Period, 1), 0, 0, 0, 0, why);
 }
 
 //==================== R MEASUREMENT ================================
@@ -470,8 +532,8 @@ void ManagePosition()
       int barsHeld = iBarShift(_Symbol, _Period, ot, false);
       if(InpMaxBars > 0 && barsHeld >= InpMaxBars)
       {
-         trade.PositionClose(tk);
-         Log(StringFormat("time exit after %d bars at %.2fR", barsHeld, rNow));
+         if(trade.PositionClose(tk))
+            Log(StringFormat("time exit after %d bars at %.2fR", barsHeld, rNow));
          continue;
       }
 
@@ -514,6 +576,46 @@ void ManagePosition()
          if(better) { trade.PositionModify(tk, t, tp); }
       }
    }
+}
+
+//==================== CLOSE RECORDING ==============================
+// Every fill is recorded here rather than where it was requested, because a
+// stop or a target is hit by the BROKER, not by this EA - those closes never
+// pass through any code above. DEAL_REASON is the broker's own statement of
+// why the position ended, so the journal records what actually happened
+// instead of what the EA intended.
+void OnTradeTransaction(const MqlTradeTransaction &trans,
+                        const MqlTradeRequest    &request,
+                        const MqlTradeResult     &result)
+{
+   if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+
+   ulong d = trans.deal;
+   if(d == 0 || !HistoryDealSelect(d)) return;
+   if(HistoryDealGetInteger(d, DEAL_MAGIC) != InpMagic)     return;
+   if(HistoryDealGetString(d, DEAL_SYMBOL) != _Symbol)      return;
+   if(HistoryDealGetInteger(d, DEAL_ENTRY) != DEAL_ENTRY_OUT) return;
+
+   double px    = HistoryDealGetDouble(d, DEAL_PRICE);
+   double vol   = HistoryDealGetDouble(d, DEAL_VOLUME);
+   double money = HistoryDealGetDouble(d, DEAL_PROFIT)
+                + HistoryDealGetDouble(d, DEAL_SWAP)
+                + HistoryDealGetDouble(d, DEAL_COMMISSION);
+   long   rsn   = HistoryDealGetInteger(d, DEAL_REASON);
+   long   type  = HistoryDealGetInteger(d, DEAL_TYPE);
+
+   // the closing deal is the OPPOSITE side of the position it closed
+   string dir = (type == DEAL_TYPE_SELL) ? "long" : "short";
+
+   string why = "other";
+   if(rsn == DEAL_REASON_SL)     why = "SL";
+   else if(rsn == DEAL_REASON_TP) why = "TP";
+   else if(rsn == DEAL_REASON_EXPERT) why = "EA (time cap or partial)";
+   else if(rsn == DEAL_REASON_SO) why = "STOP OUT - margin";
+
+   Journal("EXIT", dir, px, vol, 0, 0, money, why);
+   Log(StringFormat("closed %s %.2f at %s for %.2f (%s)",
+                    dir, vol, DoubleToString(px, _Digits), money, why));
 }
 
 //==================== LIFECYCLE ====================================
