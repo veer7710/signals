@@ -56,6 +56,12 @@ demaLen  = input.int(200,  "   DEMA length", minval = 10, maxval = 500, group = 
      tooltip = "200 on M5 and above. The EA uses 60 on M1 and 100 on M3 - match whichever you run.")
 showSt   = input.bool(true, "Draw the SuperTrend line", group = gS)
 
+gC = "CHOP GUARD  (the thing that costs the most money)"
+skipChop = input.bool(true, "Do not trade when the market is chopping", group = gC,
+     tooltip = "SuperTrend(7, 1.2) is deliberately tight, which is why it catches moves early - and it is also why it whipsaws when price is going nowhere. A run of flips in a short window is not a series of signals, it is one range being cut up. Every one of those trades pays the spread and most pay the stop. This counts the flips and refuses to trade while they are stacking up.")
+chopLen  = input.int(50, "   look back this many bars", minval = 10, maxval = 300, group = gC)
+chopMax  = input.int(3,  "   choppy if more than this many flips in that window", minval = 1, maxval = 15, group = gC)
+
 gFl = "FILTERS  (these held out-of-sample)"
 useAdx   = input.bool(true, "Skip entries when the trend is already extended", group = gFl,
      tooltip = "MEASURED: ADX >= 35 at entry gave -0.132R per trade. ADX < 20 gave +0.304R. This is the single filter that survived being tested on data it was not chosen on.")
@@ -150,13 +156,20 @@ inSess  = not useSess or (sessFrom <= sessTo ? (hourNow >= sessFrom and hourNow 
 flipUp   = stDir == -1 and stDir[1] ==  1
 flipDown = stDir ==  1 and stDir[1] == -1
 
+// ---- CHOP. A cluster of flips in a short window is one range being sliced,
+// not a run of setups. Counting them is the cheapest possible defence against
+// the losses that come from trading a market that is going nowhere.
+flipN   = math.sum(flipUp or flipDown ? 1 : 0, chopLen)
+isChop  = flipN > chopMax
+chopOk  = not skipChop or not isChop
+
 // The EA compares DEMA at shift 1 against shift 3 — two closed bars apart.
 demaUp   = dema > dema[2]
 demaDn   = dema < dema[2]
 adxOk    = not useAdx or adxV <= maxAdx
 
-goLong  = flipUp   and (not useDema or demaUp) and adxOk and inSess
-goShort = flipDown and (not useDema or demaDn) and adxOk and inSess
+goLong  = flipUp   and (not useDema or demaUp) and adxOk and inSess and chopOk
+goShort = flipDown and (not useDema or demaDn) and adxOk and inSess and chopOk
 
 plot(showSt ? stLine : na, "SuperTrend", stDir == -1 ? accBull : accBear,
      2, plot.style_linebr)
@@ -264,8 +277,11 @@ if barstate.isconfirmed and (goLong or goShort) and sigRisk > 0
 //   2. a signal price has already run away from is not the trade you were
 //      shown, so it is marked MISSED rather than quietly taken at a worse price
 var float lastSlip = na
-var int   nMissed  = 0
 var float lastMiss = na
+// Misses are only interesting while they are RECENT. A running total since the
+// chart loaded says nothing about whether you are late TODAY, which is the only
+// version of the question worth answering.
+var array<int> missBars = array.new_int()
 if array.size(pdDir) > 0
     for q = array.size(pdDir) - 1 to 0
         aged = bar_index - array.get(pdBar, q)
@@ -296,14 +312,29 @@ if array.size(pdDir) > 0
             array.remove(pdRisk, q)
             array.remove(pdSig, q)
         else if tooLate or aged > entryDelay + (usePull ? pullBars : 3)
-            nMissed  += 1
+            array.push(missBars, bar_index)
             lastMiss := chase
             array.remove(pdDir, q)
             array.remove(pdBar, q)
             array.remove(pdRisk, q)
             array.remove(pdSig, q)
 
+// keep only the misses from the recent past
+if array.size(missBars) > 0
+    while array.size(missBars) > 0 and bar_index - array.get(missBars, 0) > chopLen * 4
+        array.shift(missBars)
+nMissed = array.size(missBars)
+
 // ──────────────────────────────── MANAGE ────────────────────────────────────
+// TODAY'S MONEY. The one number worth looking at while trading, and the one
+// that was missing: the results table shows a rolling window of trades, not
+// where you actually stand right now.
+var float dayPnl = 0.0
+var int   dayMk  = 0
+if dayofmonth != dayMk
+    dayMk  := dayofmonth
+    dayPnl := 0.0
+
 var string lastExit = ""
 var float  liveR    = na
 var float  liveM    = na
@@ -419,6 +450,7 @@ if array.size(trDir) > 0
             // the money is on the mark itself, so every past position on the
             // chart shows what it actually made without opening the table
             exMoney = (exPx - en) * d * ccyPerPt * (lotSize / 0.01)
+            dayPnl += exMoney
             label.new(bar_index, exPx,
                  (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy) + "  "
                  + (exMoney >= 0 ? "+" : "") + str.tostring(exMoney, "#.##"),
@@ -473,7 +505,7 @@ plotshape(skipDown, "skipped SELL", shape.xcross, location.abovebar,
      color.new(color.gray, 35), size = size.tiny)
 
 // ───────────────────────────────── PANEL ────────────────────────────────────
-var table panel = table.new(position.top_right, 2, 9, frame_width = 1,
+var table panel = table.new(position.top_right, 2, 11, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -493,24 +525,38 @@ suggLots = riskMoney > 0 and sigRisk > 0 and ccyPerPt > 0
      ? riskMoney * 0.01 / (sigRisk * ccyPerPt) : na
 
 if showPanel and barstate.islast
-    cell(0, "SuperTrend " + str.tostring(stAtrLen) + "/" + str.tostring(stMult),
+    // Line one is the money, because that is what you actually want to see.
+    openM    = array.size(trDir) > 0 and not na(liveM) ? liveM : 0.0
+    totToday = dayPnl + openM
+    cell(0, "TODAY  at " + str.tostring(lotSize) + " lots",
+         (totToday >= 0 ? "+" : "") + str.tostring(totToday, "#.##")
+         + (openM != 0 ? "   (" + (openM >= 0 ? "+" : "")
+            + str.tostring(openM, "#.##") + " open)" : ""),
+         totToday > 0 ? okc : totToday < 0 ? bad : dim)
+    // Chop is the condition that costs the most money, so it sits second.
+    cell(1, "Market", isChop
+         ? ("CHOPPY - " + str.tostring(flipN) + " flips"
+            + (skipChop ? ", sitting out" : ""))
+         : ("trending - " + str.tostring(flipN) + " flips"),
+         isChop ? bad : okc)
+    cell(2, "SuperTrend " + str.tostring(stAtrLen) + "/" + str.tostring(stMult),
          stDir == -1 ? "BULLISH" : "BEARISH", stDir == -1 ? okc : bad)
-    cell(1, "DEMA " + str.tostring(demaLen),
+    cell(3, "DEMA " + str.tostring(demaLen),
          not useDema ? "off" : demaUp ? "rising" : "falling",
          not useDema ? dim : demaUp ? okc : bad)
-    cell(2, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(maxAdx, "#.#")
+    cell(4, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(maxAdx, "#.#")
          + (adxOk ? "  ok" : "  extended"), adxOk ? okc : bad)
-    cell(3, "Session " + str.tostring(hourNow) + ":00 UTC",
+    cell(5, "Session " + str.tostring(hourNow) + ":00 UTC",
          not useSess ? "any" : inSess ? "ok" : "outside",
          not useSess ? dim : inSess ? okc : bad)
-    cell(4, "Stop / target",
+    cell(6, "Stop / target",
          str.tostring(sigRisk, "#.##") + "  →  " + str.tostring(targetR, "#.#") + "R", dim)
-    cell(5, "Lots for " + str.tostring(riskMoney, "#.##") + " risk",
+    cell(7, "Lots for " + str.tostring(riskMoney, "#.##") + " risk",
          na(suggLots) ? "set a risk amount" : str.tostring(suggLots, "#.###"),
          na(suggLots) ? dim : okc)
     nOpen = array.size(trDir)
     nPend = array.size(pdDir)
-    cell(6, "Position", nOpen > 0
+    cell(8, "Position", nOpen > 0
          ? (str.tostring(liveR, "#.##") + "R  " + (liveM >= 0 ? "+" : "")
             + str.tostring(liveM, "#.##"))
          : nPend > 0 ? "ENTER NOW"
@@ -522,11 +568,11 @@ if showPanel and barstate.islast
     // Signals that were real but could not be taken at a price worth taking.
     // A rising count here means you are consistently seeing them late, which is
     // a workflow problem, not a strategy problem - and it is fixable.
-    cell(7, "MISSED ENTRIES", nMissed == 0 ? "none"
+    cell(9, "MISSED lately", nMissed == 0 ? "none"
          : str.tostring(nMissed) + (na(lastMiss) ? ""
            : "   last ran " + str.tostring(lastMiss, "#.##")),
          nMissed == 0 ? okc : color.new(#FFB300, 0))
-    cell(8, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+    cell(10, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
          na(lastSlip) ? "no fills yet"
          : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
          na(lastSlip) ? dim : lastSlip > 0 ? bad : okc)

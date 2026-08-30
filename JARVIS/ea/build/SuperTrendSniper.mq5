@@ -150,6 +150,53 @@ int DayStamp()
    return d.year * 1000 + d.day_of_year;
 }
 
+//---------------------------------------------------------------------------
+// PERSISTENT GUARD STATE
+// OnInit used to re-seed g_peakEq to the CURRENT equity and clear both locks.
+// MT5 calls OnInit on every terminal restart, reconnect-with-recompile,
+// timeframe change and parameter change - so the max-drawdown lock could be
+// cleared, and the drawdown baseline moved down to the already-drawn-down
+// equity, simply by restarting the terminal. A guard a restart removes is not
+// a guard. These values now live in terminal global variables, which survive
+// a restart, keyed by account login + magic so a different account or a
+// different EA never inherits them.
+//
+// Disabled in the tester so nothing can leak between optimisation passes.
+bool GuardsPersist()
+{
+   return !(bool)MQLInfoInteger(MQL_TESTER);
+}
+
+string GKey(string field)
+{
+   return "STS_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+        + "_" + IntegerToString(InpMagic) + "_" + field;
+}
+
+double GGet(string field, double def)
+{
+   if(!GuardsPersist()) return def;
+   string k = GKey(field);
+   if(!GlobalVariableCheck(k)) return def;
+   return GlobalVariableGet(k);
+}
+
+void GSet(string field, double v)
+{
+   if(!GuardsPersist()) return;
+   GlobalVariableSet(GKey(field), v);
+}
+
+void PersistGuards()
+{
+   GSet("peakEq",     g_peakEq);
+   GSet("dayStartEq", g_dayStartEq);
+   GSet("dayStamp",   (double)g_dayStamp);
+   GSet("tradesDay",  (double)g_tradesToday);
+   GSet("lockDay",    g_lockedDay  ? 1.0 : 0.0);
+   GSet("lockPerm",   g_lockedPerm ? 1.0 : 0.0);
+}
+
 double ATR(int shift)
 {
    double buf[];
@@ -184,41 +231,95 @@ double DEMA(int len, int shift)
 }
 
 //==================== SUPERTREND ===================================
-// Recomputed on each closed bar from the previous bar's state. This is the
-// standard formulation and it matches ta.supertrend(mult, len).
+// Recomputed FROM HISTORY on every closed bar. The recursion is unchanged and
+// still matches ta.supertrend(mult, len); what changed is where the previous
+// bar's state comes from.
+//
+// WHY IT NO LONGER CARRIES STATE IN MEMORY
+// The old version advanced g_finalUpper/g_finalLower/g_stDir once per new-bar
+// event and kept them between calls. That equals the chart's SuperTrend only
+// if this EA has observed EVERY bar of the series. It has not:
+//   * the first call seeded direction from a SINGLE bar (c > basicUpper),
+//     which is a guess, and the guess can survive for hundreds of bars and
+//     manufacture one flip that the indicator never had;
+//   * any bar that arrives with no tick, any disconnect, any weekend, any
+//     terminal restart, timeframe change or parameter change drops bars out
+//     of the recursion;
+//   * because the state is recursive, a single dropped bar desynchronises the
+//     EA from the chart PERMANENTLY, silently, with no error anywhere.
+// That is precisely the "the EA does not do what the chart shows" class of
+// defect. Recomputing over a fixed warm-up makes the value a pure function of
+// price history, so live, tester and chart agree and a restart changes
+// nothing. Cost is one CopyBuffer, one CopyRates and a few hundred
+// multiplications, once per closed bar.
+#define ST_WARMUP_BARS 400
+
 void UpdateSuperTrend()
 {
-   double atr = ATR(1);
-   if(atr <= 0) return;
+   g_stReady = false;
 
-   double h  = iHigh(_Symbol, _Period, 1);
-   double l  = iLow(_Symbol, _Period, 1);
-   double c  = iClose(_Symbol, _Period, 1);
-   double cp = iClose(_Symbol, _Period, 2);
-   double mid = (h + l) / 2.0;
+   int avail = Bars(_Symbol, _Period);
+   int warm  = MathMin(ST_WARMUP_BARS, avail - 2);
+   if(warm < InpStAtrLen + 3) return;
 
-   double basicUpper = mid + InpStMult * atr;
-   double basicLower = mid - InpStMult * atr;
+   double atrBuf[];
+   if(CopyBuffer(g_atrHandle, 0, 1, warm, atrBuf) != warm) return;
+   MqlRates r[];
+   if(CopyRates(_Symbol, _Period, 1, warm + 1, r) != warm + 1) return;
 
-   if(!g_stReady)
+   // Set AFTER the copy: that guarantees index 0 is the newest element no
+   // matter which direction the copy filled the array in.
+   ArraySetAsSeries(atrBuf, true);
+   ArraySetAsSeries(r, true);
+
+   double fUpper = 0.0, fLower = 0.0;
+   int    dir = 0, dirPrev = 0;
+   bool   seeded = false;
+
+   // s indexes atrBuf, so bar shift = s + 1. s = 0 is the last CLOSED bar;
+   // the forming bar (shift 0) is never read anywhere in this loop.
+   for(int s = warm - 1; s >= 0; s--)
    {
-      g_finalUpper = basicUpper;
-      g_finalLower = basicLower;
-      g_stDir = (c > basicUpper) ? -1 : 1;
-      g_stDirPrev = g_stDir;
-      g_stReady = true;
-      return;
+      double atr = atrBuf[s];
+      if(!MathIsValidNumber(atr) || atr <= 0.0) continue;
+
+      double h   = r[s].high;
+      double l   = r[s].low;
+      double c   = r[s].close;
+      double cp  = r[s + 1].close;
+      double mid = (h + l) / 2.0;
+
+      double basicUpper = mid + InpStMult * atr;
+      double basicLower = mid - InpStMult * atr;
+
+      if(!seeded)
+      {
+         fUpper  = basicUpper;
+         fLower  = basicLower;
+         dir     = (c > basicUpper) ? -1 : 1;
+         dirPrev = dir;
+         seeded  = true;
+         continue;
+      }
+
+      double prevUpper = fUpper;
+      double prevLower = fLower;
+
+      fUpper = (basicUpper < prevUpper || cp > prevUpper) ? basicUpper : prevUpper;
+      fLower = (basicLower > prevLower || cp < prevLower) ? basicLower : prevLower;
+
+      dirPrev = dir;
+      if(dir == 1 && c > fUpper)       dir = -1;   // flip bullish
+      else if(dir == -1 && c < fLower) dir = 1;    // flip bearish
    }
 
-   double prevUpper = g_finalUpper;
-   double prevLower = g_finalLower;
+   if(!seeded) return;
 
-   g_finalUpper = (basicUpper < prevUpper || cp > prevUpper) ? basicUpper : prevUpper;
-   g_finalLower = (basicLower > prevLower || cp < prevLower) ? basicLower : prevLower;
-
-   g_stDirPrev = g_stDir;
-   if(g_stDir == 1 && c > g_finalUpper)       g_stDir = -1;   // flip bullish
-   else if(g_stDir == -1 && c < g_finalLower) g_stDir = 1;    // flip bearish
+   g_finalUpper = fUpper;
+   g_finalLower = fLower;
+   g_stDir      = dir;
+   g_stDirPrev  = dirPrev;
+   g_stReady    = true;
 }
 
 //==================== RISK GATES ===================================
@@ -237,6 +338,7 @@ bool RiskAllowsEntry(string &why)
       if(dayLoss >= InpDailyLossPct)
       {
          g_lockedDay = true;
+         PersistGuards();
          why = StringFormat("daily loss %.2f%% >= %.2f%%", dayLoss, InpDailyLossPct);
          Log("LOCK: " + why);
          return false;
@@ -248,6 +350,7 @@ bool RiskAllowsEntry(string &why)
       if(dd >= InpMaxDDPct)
       {
          g_lockedPerm = true;
+         PersistGuards();
          why = StringFormat("max drawdown %.2f%% >= %.2f%%", dd, InpMaxDDPct);
          Log("LOCK: " + why);
          return false;

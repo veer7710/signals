@@ -74,6 +74,23 @@ useWeek = input.bool(true, "Previous week high / low", group = gH)
 stickyKeep = input.bool(true, "Never let micro-levels push these off the chart", group = gH,
      tooltip = "On M1 a 2-bar pivot arrives every few minutes. Without this they fill the level list and evict the daily, weekly and higher-timeframe levels within an hour or two - exactly the levels you most want to keep. With it on, an ordinary level is always discarded before a structural one.")
 
+gM = "MARKET STRUCTURE  (what a structure trader actually reads)"
+useStruct = input.bool(true, "Track structure: higher highs, lower lows, BOS, CHoCH", group = gM,
+     tooltip = "The context every other signal sits inside. Higher highs AND higher lows is an uptrend; the moment price takes out the last higher LOW instead, the trend has changed character. Trading a bounce with structure is a different bet from trading one against it, and without this the indicator cannot tell them apart.")
+biasFilter = input.bool(false, "Only trade WITH the structure", group = gM,
+     tooltip = "Longs only while structure is bullish, shorts only while bearish. It removes the counter-trend trades, which are the ones that turn into the big losses - and it also removes every early reversal entry. OFF by default because it is a real cut in signal count, not a free filter.")
+useDiscount = input.bool(true, "Show where price sits in the range (premium / discount)", group = gM,
+     tooltip = "Cheap or expensive relative to the recent swing. Buying in the lower half and selling in the upper half is the whole idea - on a day that has opened very low, this is what tells you price is in discount rather than you guessing.")
+rangeLen  = input.int(100, "   range length (bars)", minval = 20, maxval = 500, group = gM)
+
+gI = "IMBALANCES AND ORDER BLOCKS"
+useFvg = input.bool(true, "Fair value gaps (unfilled imbalance)", group = gI,
+     tooltip = "Three bars where the middle one moves so fast that the first bar's high never meets the third bar's low. Price returns to fill those gaps far more often than not, and the gap edge is a precise place to enter rather than a rough zone.")
+fvgMin = input.float(0.25, "   gap must be at least (× ATR)", minval = 0.05, step = 0.05, group = gI)
+useOb  = input.bool(true, "Order blocks (last candle before the move)", group = gI,
+     tooltip = "The last down candle before a move that breaks structure upward is where the buying actually came from. Price returning there is the highest quality retest available, and it is a much tighter stop than anything else on the chart.")
+showSmc = input.bool(true, "Draw gaps and order blocks", group = gI)
+
 gZ = "ZONE MEMORY  (what this level did the LAST times price came here)"
 useZoneMem = input.bool(true, "Remember how each zone behaved before", group = gZ,
      tooltip = "A level that has held three times is not the same trade as a level that has been sliced through twice, and without this the indicator treats them identically. Every time price visits a zone the reaction is recorded, so the next visit comes with a history.")
@@ -705,6 +722,123 @@ if useBounce and barstate.isconfirmed and array.size(hiPx) > 0
             if tested and held and reject and (na(bounceDnLvl) or p < bounceDnLvl)
                 bounceDnLvl := p
 
+// ════════════════════ MARKET STRUCTURE ═══════════════════════════════════════
+// The context everything else sits inside. Higher highs AND higher lows is an
+// uptrend. The moment price takes out the last higher LOW instead of the last
+// high, the trend has changed character - that is a CHoCH, and it is the
+// earliest honest warning that the side you are trading has stopped working.
+var float swHi  = na       // most recent confirmed swing high
+var float swHiP = na       // the one before it
+var float swLo  = na
+var float swLoP = na
+var int   bias  = 0        // +1 bullish structure, -1 bearish, 0 undecided
+
+if not na(ph)
+    swHiP := swHi
+    swHi  := ph
+if not na(pl)
+    swLoP := swLo
+    swLo  := pl
+
+// A break of STRUCTURE is a close beyond the last swing, not a wick through it.
+bosUp   = useStruct and not na(swHi) and barstate.isconfirmed and close > swHi and close[1] <= swHi
+bosDn   = useStruct and not na(swLo) and barstate.isconfirmed and close < swLo and close[1] >= swLo
+chochUp = bosUp and bias <= 0      // was bearish or undecided, now broke up
+chochDn = bosDn and bias >= 0
+
+if bosUp
+    bias := 1
+if bosDn
+    bias := -1
+
+structTxt = bias > 0 ? "BULLISH" : bias < 0 ? "BEARISH" : "undecided"
+
+// ---- PREMIUM / DISCOUNT. Cheap or expensive against the recent swing. On a
+// day that has opened very low this is what says price is in discount, rather
+// than it being a guess.
+rHi  = ta.highest(high, rangeLen)
+rLo  = ta.lowest(low, rangeLen)
+rMid = (rHi + rLo) / 2
+inDiscount = useDiscount and close < rMid
+inPremium  = useDiscount and close > rMid
+rangePos   = rHi > rLo ? (close - rLo) / (rHi - rLo) * 100.0 : 50.0
+
+// ════════════════════ FAIR VALUE GAPS ════════════════════════════════════════
+// Three bars where the middle one moves so fast the first bar's high never
+// meets the third bar's low. Price fills those far more often than not, and the
+// edge of the gap is a precise entry rather than a rough zone.
+fvgUp   = useFvg and barstate.isconfirmed and low > high[2]
+         and (low - high[2]) >= fvgMin * atr
+fvgDn   = useFvg and barstate.isconfirmed and high < low[2]
+         and (low[2] - high) >= fvgMin * atr
+
+var array<float> fvTop = array.new_float()
+var array<float> fvBot = array.new_float()
+var array<int>   fvDir = array.new_int()
+var array<box>   fvBx  = array.new_box()
+
+addFvg(float top, float bot, int dir) =>
+    array.push(fvTop, top)
+    array.push(fvBot, bot)
+    array.push(fvDir, dir)
+    array.push(fvBx, box.new(bar_index - 2, top, bar_index + 8, bot, border_color = na,
+         bgcolor = showSmc ? color.new(dir > 0 ? accBull : accBear, 90) : HIDDEN))
+    while array.size(fvTop) > 12
+        b0 = array.shift(fvBx)
+        if not na(b0)
+            box.delete(b0)
+        array.shift(fvTop)
+        array.shift(fvBot)
+        array.shift(fvDir)
+    0
+
+if fvgUp
+    addFvg(low, high[2], 1)
+if fvgDn
+    addFvg(low[2], high, -1)
+
+// an unfilled gap that price has now come back into is the entry
+float fvLong  = na
+float fvShort = na
+if array.size(fvTop) > 0
+    for i = array.size(fvTop) - 1 to 0
+        t = array.get(fvTop, i)
+        b = array.get(fvBot, i)
+        dr = array.get(fvDir, i)
+        if barstate.isconfirmed and low <= t and high >= b
+            if dr > 0 and close > b and na(fvLong)
+                fvLong := b
+            if dr < 0 and close < t and na(fvShort)
+                fvShort := t
+
+// ════════════════════ ORDER BLOCKS ═══════════════════════════════════════════
+// The last DOWN candle before a move that breaks structure upward is where the
+// buying actually came from. Returning there is the tightest honest retest on
+// the chart.
+var float obUpTop = na
+var float obUpBot = na
+var float obDnTop = na
+var float obDnBot = na
+
+if useOb and bosUp
+    // walk back for the most recent bearish candle before this impulse
+    for j = 1 to 20
+        if close[j] < open[j]
+            obUpTop := high[j]
+            obUpBot := low[j]
+            break
+if useOb and bosDn
+    for j = 1 to 20
+        if close[j] > open[j]
+            obDnTop := high[j]
+            obDnBot := low[j]
+            break
+
+obLong  = useOb and not na(obUpBot) and barstate.isconfirmed
+          and low <= obUpTop and close > obUpBot
+obShort = useOb and not na(obDnTop) and barstate.isconfirmed
+          and high >= obDnBot and close < obDnTop
+
 // ─────────────────────── RETEST / RECLAIM SETUPS ────────────────────────────
 // A level that has been taken out is not finished - it is the next level, from
 // the other side. Old resistance becomes support. Previously this only existed
@@ -790,8 +924,8 @@ bncShort = useBounce and not na(bounceDnLvl)
 // Everything except a raw break invalidates at the SIGNAL BAR's extreme, which
 // is a much tighter stop than the swept extreme a break needs. Grouping them
 // here keeps the stop rule in one place instead of four.
-newLong  = not na(rcLong)  or pbLong  or boLong
-newShort = not na(rcShort) or pbShort or boShort
+newLong  = not na(rcLong)  or pbLong  or boLong  or not na(fvLong)  or obLong
+newShort = not na(rcShort) or pbShort or boShort or not na(fvShort) or obShort
 setupIsBounce = (bncLong or bncShort or newLong or newShort)
                  and not (brkLong or brkShort)
 
@@ -802,11 +936,13 @@ setupIsBounce = (bncLong or bncShort or newLong or newShort)
 setupLvl(int dir) =>
     float lv = na
     if dir > 0
-        lv := not na(rcLong) ? rcLong : bncLong ? bounceUpLvl
+        lv := not na(fvLong) ? fvLong : obLong ? obUpBot
+              : not na(rcLong) ? rcLong : bncLong ? bounceUpLvl
               : pbLong ? emaT : boLong ? boxHi
               : (isCont ? sweptHi : sweptLo)
     else
-        lv := not na(rcShort) ? rcShort : bncShort ? bounceDnLvl
+        lv := not na(fvShort) ? fvShort : obShort ? obDnTop
+              : not na(rcShort) ? rcShort : bncShort ? bounceDnLvl
               : pbShort ? emaT : boShort ? boxLo
               : (isCont ? sweptLo : sweptHi)
     lv
@@ -829,8 +965,14 @@ brkOk    = not useZoneFilter or brkHold < 0 or brkHold <  50.0
 // silently resolved that to LONG every time, printing a BUY on a bar that
 // closed down. The bar's own close breaks the tie: it is the only evidence on
 // that bar about which side actually gave way.
-anyLong  = (brkLong  and brkOk) or (bncLong  and bncOk) or newLong
-anyShort = (brkShort and brkOk) or (bncShort and bncOk) or newShort
+// Trading WITH structure is a different bet from trading against it. This is
+// the switch that refuses the counter-trend ones - the trades that turn into
+// the big losses - at the cost of every early reversal entry.
+biasLongOk  = not biasFilter or bias >= 0
+biasShortOk = not biasFilter or bias <= 0
+
+anyLong  = ((brkLong  and brkOk) or (bncLong  and bncOk) or newLong)  and biasLongOk
+anyShort = ((brkShort and brkOk) or (bncShort and bncOk) or newShort) and biasShortOk
 
 bothWays = anyLong and anyShort
 tieLong  = close >= open
@@ -840,10 +982,12 @@ goShort  = anyShort and (not bothWays or not tieLong)
 
 // Which setup it was, so the chart says WHY it fired rather than just that it
 // did. Read in priority order, most specific first.
-setupName = not na(rcLong) or not na(rcShort) ? "RETEST"
-     : (pbLong or pbShort)   ? "PULLBACK"
-     : (boLong or boShort)   ? "BREAKOUT"
-     : (bncLong or bncShort) ? "BOUNCE"
+setupName = (obLong or obShort)               ? "ORDER BLOCK"
+     : not na(fvLong) or not na(fvShort)        ? "GAP FILL"
+     : not na(rcLong) or not na(rcShort)        ? "RETEST"
+     : (pbLong or pbShort)                      ? "PULLBACK"
+     : (boLong or boShort)                      ? "BREAKOUT"
+     : (bncLong or bncShort)                    ? "BOUNCE"
      : "BREAK"
 
 // ─────────────────────────── TARGET: NEXT LIQUIDITY ─────────────────────────
@@ -1026,8 +1170,10 @@ if canFire
 
 // ---- fill anything whose delay has elapsed, at THIS bar's open
 var float lastSlip = na
-var int   nMissed  = 0
 var float lastMiss = na
+// A miss only matters while it is RECENT. A running total since the chart
+// loaded says nothing about whether you are late today.
+var array<int> missBars = array.new_int()
 if array.size(pdDir) > 0
     for q = array.size(pdDir) - 1 to 0
         aged = bar_index - array.get(pdBar, q)
@@ -1057,7 +1203,7 @@ if array.size(pdDir) > 0
             array.remove(pdRR, q)
             array.remove(pdSig, q)
         else if (tooLate and aged >= entryDelay) or aged > entryDelay + 3
-            nMissed  += 1
+            array.push(missBars, bar_index)
             lastMiss := chase
             array.remove(pdDir, q)
             array.remove(pdBar, q)
@@ -1066,6 +1212,19 @@ if array.size(pdDir) > 0
             array.remove(pdSig, q)
 
 // ---- manage every open trade. Iterating backwards so removals are safe.
+// TODAY'S MONEY - where you actually stand right now, which the results table
+// (a rolling window of trades) does not tell you.
+var float dayPnl = 0.0
+var int   dayMk  = 0
+if dayofmonth != dayMk
+    dayMk  := dayofmonth
+    dayPnl := 0.0
+
+if array.size(missBars) > 0
+    while array.size(missBars) > 0 and bar_index - array.get(missBars, 0) > 200
+        array.shift(missBars)
+nMissed = array.size(missBars)
+
 var string lastExit = ""
 if array.size(trDir) > 0
     for k = array.size(trDir) - 1 to 0
@@ -1166,6 +1325,7 @@ if array.size(trDir) > 0
             // money on the mark itself, so every past position shows what it
             // made without opening the table
             exMoney = (exPx - en) * d * ccyPerPt * (lotSize / 0.01)
+            dayPnl += exMoney
             label.new(bar_index, exPx,
                  (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy) + "  "
                  + (exMoney >= 0 ? "+" : "") + str.tostring(exMoney, "#.##"),
@@ -1276,7 +1436,7 @@ drawZoneLabels(hiPx, hiDead, true)
 drawZoneLabels(loPx, loDead, false)
 
 // ──────────────────────────────── STATUS PANEL ──────────────────────────────
-var table panel = table.new(position.top_right, 2, 11, frame_width = 1,
+var table panel = table.new(position.top_right, 2, 14, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -1291,21 +1451,41 @@ bad = accBear
 dim = color.new(chart.fg_color, 35)
 
 if showPanel and barstate.islast
-    cell(0, "Mode", (isCont ? "CONT" : "REV") + " · " +
+    // The money first, then the context a structure trader reads before
+    // deciding anything: which way structure is pointing, and whether price is
+    // cheap or expensive inside its own range.
+    openM = 0.0
+    if array.size(trDir) > 0
+        for k2 = 0 to array.size(trDir) - 1
+            openM += (close - array.get(trEnt, k2)) * array.get(trDir, k2)
+                     * ccyPerPt * (lotSize / 0.01)
+    totToday = dayPnl + openM
+    cell(0, "TODAY  at " + str.tostring(lotSize) + " lots",
+         (totToday >= 0 ? "+" : "") + str.tostring(totToday, "#.##")
+         + (openM != 0 ? "   (" + (openM >= 0 ? "+" : "")
+            + str.tostring(openM, "#.##") + " open)" : ""),
+         totToday > 0 ? okc : totToday < 0 ? bad : dim)
+    cell(1, "Structure", structTxt
+         + (chochUp ? "  CHoCH up" : chochDn ? "  CHoCH down" : ""),
+         bias > 0 ? okc : bias < 0 ? bad : dim)
+    cell(2, "Price is", (inDiscount ? "CHEAP - discount" : inPremium ? "expensive - premium" : "mid")
+         + "   " + str.tostring(rangePos, "#") + "% of range",
+         inDiscount ? okc : inPremium ? bad : dim)
+    cell(3, "Mode", (isCont ? "CONT" : "REV") + " · " +
          (preset == "Sniper (fewest, best measured)" ? "SNIPER"
         : preset == "Scalper (most signals)" ? "SCALPER"
         : preset == "Balanced" ? "BALANCED" : "MANUAL"), isCont ? okc : bad)
-    cell(1, "Squeeze  ATR/med", str.tostring(sqz, "#.##") + " / " + str.tostring(sqzGate, "#.##")
+    cell(4, "Squeeze  ATR/med", str.tostring(sqz, "#.##") + " / " + str.tostring(sqzGate, "#.##")
          + (sqz <= sqzGate ? "  ok" : "  too hot"), sqz <= sqzGate ? okc : bad)
-    cell(2, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(adxGate, "#.#")
+    cell(5, "ADX", str.tostring(adxV, "#.#") + " / " + str.tostring(adxGate, "#.#")
          + (adxV <= adxGate ? "  ok" : "  too high"), adxV <= adxGate ? okc : bad)
-    cell(3, "Session " + str.tostring(hourNow) + ":00 UTC", inSess ? "ok" : "outside", inSess ? okc : bad)
-    cell(4, "Setups on", (useBreak ? "break " : "") + (useBounce ? "bounce" : "") +
+    cell(6, "Session " + str.tostring(hourNow) + ":00 UTC", inSess ? "ok" : "outside", inSess ? okc : bad)
+    cell(7, "Setups on", (useBreak ? "break " : "") + (useBounce ? "bounce" : "") +
          (useBreak or useBounce ? "" : "NONE"), (useBreak or useBounce) ? okc : bad)
-    cell(5, "Setups allowed", expansionOk ? "YES" : "NO — waiting", expansionOk ? okc : bad)
+    cell(8, "Setups allowed", expansionOk ? "YES" : "NO — waiting", expansionOk ? okc : bad)
     nOpen = array.size(trDir)
     nPend = array.size(pdDir)
-    cell(6, "Trades", nOpen > 0 ? (str.tostring(nOpen) + "/" + str.tostring(maxTrades) + " open")
+    cell(9, "Trades", nOpen > 0 ? (str.tostring(nOpen) + "/" + str.tostring(maxTrades) + " open")
          : nPend > 0 ? ("ENTER NOW × " + str.tostring(nPend))
          : armDir != 0 ? ("ARMED " + str.tostring(bar_index - armBar) + "/" + str.tostring(retestBars))
          : ("flat" + (lastExit == "" ? "" : "  last " + lastExit)),
@@ -1321,19 +1501,19 @@ if showPanel and barstate.islast
     nearP  = pickHi ? nearHi : nearLo
     zt = na(nearP) ? "" : zoneText(nearP, pickHi)
     zh = na(nearP) ? -1.0 : zoneHold(nearP, pickHi)
-    cell(7, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
+    cell(10, "Nearest zone " + (na(nearP) ? "" : str.tostring(nearP, format.mintick)),
          zt == "" ? "no record yet" : zt,
          zh < 0 ? dim : zh >= 60 ? okc : zh <= 40 ? bad : color.new(#FFB300, 0))
     // Whether it is firing often enough is a question with an answer, and one
     // screen is not it.
-    cell(10, "Signals", str.tostring(nSigDay) + " today"
+    cell(13, "Signals", str.tostring(nSigDay) + " today"
          + (na(perDay) ? "" : "   " + str.tostring(perDay, "#.#") + "/day avg"),
          nSigDay > 0 ? okc : dim)
-    cell(8, "MISSED ENTRIES", nMissed == 0 ? "none"
+    cell(11, "MISSED lately", nMissed == 0 ? "none"
          : str.tostring(nMissed) + (na(lastMiss) ? ""
            : "   last ran " + str.tostring(lastMiss, "#.##")),
          nMissed == 0 ? okc : color.new(#FFB300, 0))
-    cell(9, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
+    cell(12, "Delay " + str.tostring(entryDelay) + " bar" + (entryDelay == 1 ? "" : "s"),
          na(lastSlip) ? "no fills yet"
          : ((lastSlip >= 0 ? "cost " : "gained ") + str.tostring(math.abs(lastSlip), "#.##")),
          na(lastSlip) ? color.new(chart.fg_color, 30) : lastSlip > 0 ? bad : okc)
