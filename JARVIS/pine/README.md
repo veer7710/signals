@@ -1,160 +1,133 @@
-# The two charts — how to actually take a trade
+# The two charts — everything on them, in plain words
 
-You have a live account. Read this part first, then the detail below.
-
-## Install (2 minutes each)
+## Install
 
 TradingView → **Pine Editor** → paste the whole file → **Save** → **Add to chart**.
+Separate charts for the two scripts. They are different systems.
 
-- `SuperTrendSniper_v1.pine` — the same strategy the MT5 EA trades.
-- `LiquiditySniper_v1.pine` — the liquidity/sweep strategy, manual only.
+## Set these three first, or every money figure is wrong
 
-Run them on separate charts. They are different systems and blending their
-signals gives you a third system nobody has tested.
+**LIVE TRADING (manual)** group:
 
-## Set these three before anything else
+| Setting | Set it to |
+|---|---|
+| Your lot size | `0.01` |
+| Money per 1.0 of price, at 0.01 lots | `1.00` for XAUUSD on most brokers — check your contract size |
+| How many bars until I actually click | `1` (minimum — 0 would be look-ahead and is blocked) |
 
-Both scripts, **LIVE TRADING (manual)** group. If these are wrong, every money
-figure on the chart is wrong.
+---
 
-| Setting | Set it to | Why |
-|---|---|---|
-| Your lot size | `0.01` | What you are actually clicking |
-| Account currency per 1.0 price move, per 0.01 lot | `1.00` for XAUUSD on most brokers | 0.01 lot of a 100 oz contract = 1 oz, so $1 of price = $1. **Check your broker's contract size.** |
-| Bars between signal and your actual entry | `1` | See below. Do not set it to 0. |
+# LIQUIDITY SNIPER — what everything on the chart means
 
-### Why "bars between signal and your actual entry" exists
-
-A signal is only real when the bar closes. Then you have to see it, and then
-you have to click. That is not free, and the price has moved by the time you
-are filled.
-
-Every other indicator hides this by pretending you were filled at the signal
-price. These do not. Set the delay to how long you realistically take, and
-the entry line, stop, target, P/L and the whole record are all computed from
-the price you would actually have got. The panel tells you what the delay
-cost, in price, on the last fill.
-
-**At 0 the numbers flatter you and the chart stops being a record of trades
-you could have taken.**
-
-## Reading a live trade
+## The levels
 
 | On the chart | Meaning |
 |---|---|
-| **BUY** / **SELL** label | Signal fired at that bar's close |
-| Solid coloured line | **Your actual fill price.** It extends as the trade runs |
-| Green box | Fill → take profit |
-| Red box | Fill → stop loss |
-| Dashed line | Where the trail stop currently sits |
-| Faded grey boxes | The last 10 completed trades, so you can see how they went |
-| ✓ | Closed at target |
-| ✕ | Closed at stop |
-| TRL / TIME / FLIP / BE | **Closed early** — trail hit, stalled out, opposite signal, break-even |
-| Label at the right edge | Live R and live money at your lot size |
-| Grey ✕ (SuperTrend chart) | A flip a filter refused. Watch these — if the ones it skips keep running, the filter is costing you |
+| **SSL** label | Sell-side liquidity — resting stops **above** price. A rally runs into these |
+| **BSL** label | Buy-side liquidity — resting stops **below** price. A selloff runs into these |
+| Next to the label: `3 held / 1 broke ~14.2pt` | What price did the last times it was here, and how far it moved after |
+| Green label | This zone tends to **hold** |
+| Red label | This zone tends to **break** |
+| Line thickness | How many times it has been retested |
+| Faded grey line | Already taken out — still useful as a flip zone |
+| **SWEEP** mark | A level was just taken. This is the event the whole strategy is built on |
 
-### The panel, top right
+Levels come from: swing pivots at three sizes, previous day high/low, previous
+**week** high/low, session highs/lows, and pivots from three higher timeframes.
+The structural ones are **sticky** — micro-levels can never push them off the chart.
 
-Tells you why it is or is not trading right now. `ENTER NOW` means a signal has
-fired and its fill bar has arrived.
+## The order book — top left
 
-On the SuperTrend chart, set **"Size positions for this much risk"** to what you
-are willing to lose on one trade and the panel gives you the lot size for the
-current stop distance — so you are not on a calculator while the entry runs away.
+Four orders you can place right now, off the nearest live level each side:
 
-### The record table, bottom right
+| order | what it bets |
+|---|---|
+| **BUY LIMIT** at support | the level holds |
+| **SELL LIMIT** at resistance | the level holds |
+| **BUY STOP** above resistance | the level breaks |
+| **SELL STOP** below support | the level breaks |
 
-The last trades in R and in money at your lot size, then two summary rows:
+Each row gives entry, stop, target, **R:R**, and that zone's record. R:R shows
+red under 1. Stops sit slightly beyond the level so the wick that tests it does
+not trigger them. The four prices are drawn as dotted lines on the chart.
 
-- **TOTAL** — count, win %, total R, total money, average R
-- **how they ended** — TP / early / SL
+The limits and stops are deliberately opposite bets on the same two prices —
+whichever way it resolves, your order is already worked out.
 
-That last row is the one to watch. If **early** dominates, your target is too
-far away for this market. If **SL** dominates, your stop is too close to it.
+## The eight setup types
+
+Every signal is labelled with which one fired:
+
+| setup | what it is |
+|---|---|
+| **BREAK** | a level is taken out and price continues |
+| **BOUNCE** | price tests a level and it holds |
+| **RETEST** | a broken level is revisited and holds from the other side |
+| **PULLBACK** | in a trend, price returns to the moving average and goes again |
+| **BREAKOUT** | a quiet range ends |
+| **GAP FILL** | price returns into an unfilled 3-bar imbalance |
+| **INVERSE GAP** | a gap **failed** — price closed through it, so it now works from the other side |
+| **ORDER BLOCK** | the last opposite candle before a move that broke structure |
+
+## The panel — top right
+
+1. **TODAY** — your money, realised + open, at your lot size
+2. **Structure** — bullish / bearish, and CHoCH when it turns
+3. **Price is** — cheap (discount) or expensive (premium), with % of range
+4. …then the filters, open trades, missed entries, and signals per day
+
+## The scoreboard — bottom left
+
+**This is the one that answers "which setups should I take".**
+
+Every finished trade is filed under the setup that produced it: how many taken,
+win rate, total R, total money. **Green = keep taking it. Red = switch it off.**
+
+History cannot rank these setups — a confluence score built from every measured
+factor separated winners in only 5 of 8 markets and ran backwards on gold 15m.
+So the ranking comes from your results, in your money.
+
+## The record — bottom right
+
+Last trades with **got / peak / money / exit**, then two summary rows. The one
+to watch is **EXECUTION**: what % you kept of what the trades were worth at
+their best. Low "kept" with lots of green = your exits are the problem, not
+your entries.
 
 ---
 
-# SuperTrend Sniper
+# SUPERTREND SNIPER
 
-Every default matches `JARVIS/ea/build/SuperTrendSniper.mq5`. The chart and the
-EA are one strategy. Change a setting in one and change it in the other, or you
-are running two systems and will not know which is working.
+Same signal as the MT5 EA — SuperTrend(7, 1.2) flip with DEMA(200) agreement.
 
-**Signal:** SuperTrend(ATR 7, mult 1.2) flips, DEMA(200) sloping the same way.
-That entry was left alone deliberately — it was not the problem.
+**CHOP GUARD is on by default.** SuperTrend is tight, which is why it catches
+moves early and also why it whipsaws when price goes nowhere. It counts flips
+and sits out when they stack up. Panel says `CHOPPY - 5 flips, sitting out`.
 
-**What was actually wrong was the exits.** Measured on GOLD, US500, EURUSD and
-GBPUSD with next-bar fills, first-touch resolution and ties counted as losses:
-
-| Exit rule | Result |
-|---|---|
-| Early break-even | **Worst rule on all four markets** (−0.161R to −0.308R) |
-| Tight trail | Second worst |
-| Wide 3-ATR trail, armed immediately | Best on these entries |
-| 50-bar time cap | Beat a 20-bar cap |
-
-Break-even is in the settings so you can switch it on and watch it lose, rather
-than wonder. Leave it off.
-
-**The one filter that survived a hold-out:** ADX ≥ 35 at entry measured −0.132R.
-ADX < 20 measured +0.304R. Entering when the trend is already extended is the
-losing bucket, and refusing those held up on data it was not chosen on.
-
-The session filter (NY 13–20 UTC) measured best on gold but is **off by default** —
-it was measured on one instrument and it cuts your trade count hard.
+**Measured, on GOLD 1h:**
+- **71.7% of signals close back through the entry within 3 bars.** That is the fakeout rate.
+- Of signals that reached +1R, the median first went **0.35R against you**; 10% went 0.85R against. A stop tighter than ~0.9R removes one winner in ten.
+- Waiting 0.30 ATR for a better price: **+0.451R** out-of-sample vs **+0.321R** for a market entry — but 23% never fill. Off by default because you want signal count.
 
 ---
 
-# Liquidity Sniper
+## Honest status
 
-**The setting that matters most: Trade direction — `Continuation (tested)`.**
+Nothing here has cleared the significance bar. ~780 configurations tested; the
+luck threshold is around t = 3.65 and the best out-of-sample result is +2.47.
 
-This is the opposite of what most liquidity indicators do, and it is the central
-research finding. Over 10,000+ sweeps, first-touch resolution, ties lose:
+More importantly: **at 15m and 1h these markets test as random walks** — 40
+variance-ratio tests, not one significant. No entry pattern can extract a
+directional edge from that. It does **not** cover M1, which is genuinely
+different and untested, and it does not cover discretionary reading of context.
 
-| | GOLD 15m |
-|---|---|
-| Fade the sweep (the usual assumption) | 44.5% |
-| Coin flip at the same bars | 49.2% |
-| **Follow the sweep** | **54.1%** |
-
-Follow beat fade on 5 of 5 markets. Fading was worse than random. The mechanism
-is Osler's stop-cascade research: a stop-loss to sell **is** a market sell order,
-so a cluster of stops beyond a level is fuel in the direction of the break, not
-a spring that reverses it.
-
-`Reversal (classic)` is kept only so you can flip it and see the difference on
-your own charts. It is the weaker mode.
-
-**The expansion filter** will often say "NO — waiting". That is the point:
-
-| Condition | Chance of a 3+ ATR move in the next 40 bars |
-|---|---|
-| ADX 0–15 | **90–91%** |
-| ADX ≥ 40 | 66–68% |
-| ATR ≥ 2× its own median | **25%** |
-
-Volatility contraction precedes expansion. Want more signals? Raise the ATR and
-ADX ceilings — but you are then taking the setups that measured worse.
-
-**Timeframe:** M5 or M15 to judge it. M1 on gold has the worst signal-to-spread
-ratio of anything tested.
-
----
-
-## Honest status — read this before it sees money
-
-Roughly 780 configurations have now been tested against this data. At that
-count, the best of a set of **worthless** strategies would be expected to score
-about **t = 3.65** on luck alone. The best out-of-sample result measured here is
-**t = +2.09**.
-
-That is encouraging. It is **not** proof, and nothing in this repo has cleared
-that bar. Both scripts are research instruments to forward-test, not money
-machines. Forward-test on demo before either touches a funded account.
+Trade small, use the scoreboard to find what *you* convert, and treat every
+number here as a measurement rather than a promise.
 
 ## If it does not compile
 
-These were written without access to a Pine compiler. Paste the exact error
-text back and it gets fixed immediately.
+These are written without access to a Pine compiler. `check_pine.py` catches
+undeclared names, use-before-declaration, arity, table bounds, drawings in
+ternaries, illegal line wrapping and nested function declarations — but passing
+it means those specific faults are absent, **not** that the file compiles.
+Paste the exact error text back and it gets fixed immediately.
