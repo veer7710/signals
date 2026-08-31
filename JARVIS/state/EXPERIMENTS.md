@@ -1065,3 +1065,51 @@ below. What remains open is unchanged and is stated in MISSION.md: conditional
 edges (currently under test), volatility-based sizing and payoff structure
 (E-038 is CONFIRMED and is the only confirmed finding in the project), and M1
 microstructure (blocked on data).
+
+## E-050 — THE MISSING CONTROL. A random entry scores +0.202R on GOLD 1h.
+(Numbered 050 to leave room for agents writing E-042..E-046 concurrently.)
+
+`python3 JARVIS/research/inversion.py`. Three arms on identical bars with
+identical exits and costs: the signal as built, the signal inverted, and a
+RANDOM coin-flip direction repeated 20 times with different seeds.
+
+**This project has never had a random-entry control. That is a serious method
+failure and it invalidates a headline number.**
+
+GOLD 1h, out-of-sample:
+
+| arm | with cost |
+|---|---|
+| SuperTrend as signalled | **+0.321R** (t +2.05) |
+| **random direction, 20 seeds** | **+0.202R** (5th +0.003, 95th +0.424) |
+
+**+0.321 sits inside the random band.** A coin flip on the same bars, with the
+same 3R target, 1R stop and 50-bar cap, produces a median +0.202R and reaches
++0.424R at the 95th percentile. The signal is not distinguishable from noise.
+
+### What was wrong and why it looked right
+An asymmetric payoff (3R target, 1R stop, time cap) has mechanically non-zero
+expectancy on a random walk with drift — the target is far and rarely hit, the
+stop is near and often hit, and the time exit closes the rest at whatever the
+drift has done. That structure, not the signal, produced the positive number.
+Every prior comparison here was signal-versus-zero. **The correct comparison is
+signal-versus-random-on-the-same-payoff, and nobody ran it.**
+
+**RETRACTION.** +0.321R OOS on GOLD 1h has been reported repeatedly in this
+project and to Veer as the best result achieved and as evidence the pullback
+entry helped. It is not evidence of anything. E-035's pullback comparison
+(+0.451R at 0.30 ATR versus +0.321R market) is also uncontrolled and its
+conclusion does not survive: both figures need re-testing against a random arm
+matched for entry timing before either can be believed.
+
+### Worthless, not wrong
+Positive OOS with costs: as-signalled 3 of 7, inverted 4 of 7 — both at coin
+flip. No-cost expectancy is not clearly below the random band anywhere, so the
+signal is not carrying information pointed the wrong way. There is nothing to
+invert. **The SuperTrend entry is empty, not backwards.**
+
+### The standing rule this creates
+Every future strategy claim in this project must be reported against a
+random-entry arm with the SAME payoff structure, the same bars and the same
+costs, or it is not a claim about a signal — it is a claim about a payoff
+structure wearing a signal's name.
