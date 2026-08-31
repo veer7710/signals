@@ -822,3 +822,45 @@ pairs every entry style is negative, so this is a gold result, not a general one
 The Pine default stays OFF (Veer prioritises signal count) with the measured
 numbers written into the tooltip so the trade-off is visible at the point of
 decision. pullAtr default set to the measured best, 0.30.
+
+## E-036 — A confluence score does NOT separate winners. Only one filter does.
+`python3 JARVIS/research/setup_score.py` and `--components`.
+
+Veer's problem is selection, not generation: "idk what setups to take". The
+obvious fix is a confluence score, so one was built from factors this repo had
+already measured (ADX, ATR vs median, trend agreement, room to run, session),
+summed unweighted so nothing was fitted, and then tested.
+
+**The sum failed.** Out-of-sample, high-score (>=5) minus low-score (<=3):
+separated in 5 of 8 markets, best gap t +2.70, and on GOLD 15m it ran
+BACKWARDS (-0.422R - high scores did worse). 5 of 8 is barely distinguishable
+from the 4 of 8 a coin flip produces. **Shipping this as a grade would have put
+an authoritative-looking letter on the chart with nothing behind it.**
+
+Testing each factor alone shows why - adding them together buried the one that
+works:
+
+| factor | markets helped | median gap |
+|---|---|---|
+| **ADX < 35** | **4 / 5** | **+0.324R** |
+| DEMA agrees | 5 / 8 | +0.143R |
+| ATR <= 1.3x median | 3 / 6 | +0.094R |
+| ATR <= median | 5 / 8 | +0.074R |
+| long vs short | 4 / 8 | +0.068R |
+| ADX < 20 | 5 / 8 | +0.056R |
+| session 04-12 / 13-20 | 5 / 8 | +0.056R |
+| **room >= 2R** | **3 / 8** | **-0.097R** |
+
+`long vs short` at 4/8 is the control: a factor with no edge should land there,
+and it does, which is evidence the method is not manufacturing separation.
+
+**CONCLUSIONS**
+1. The only factor with real separation is ADX < 35 - and it is already the
+   default in both the Pine and the EA. There is no undiscovered confluence
+   filter sitting in this data.
+2. `room >= 2R` measured NEGATIVE in 5 of 8 markets. The Pine's `minR` input
+   (reject a setup if R:R is below 1.2) encodes the same intuition and should
+   be treated with suspicion rather than raised.
+3. Because history cannot rank these setups, the ranking has to come from
+   Veer's OWN results. That is what the per-setup-type breakdown added to the
+   liquidity indicator is for.
