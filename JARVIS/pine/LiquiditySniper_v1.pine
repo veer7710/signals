@@ -161,16 +161,19 @@ needDisp  = input.bool(true, "Require displacement candle", group = gS,
 dispAtr   = input.float(1.0, "   displacement ≥ (× ATR)", minval = 0.3, step = 0.1, group = gS)
 needClose = input.bool(true, "Require close beyond the level", group = gS,
      tooltip = "A wick through is not a break. Demanding a close removes most fakeouts.")
-minLvlAge = input.int(3,    "Level must be this many bars old", minval = 0, group = gS,
+minLvlAge = input.int(8,    "Level must be this many bars old", minval = 0, group = gS,
      tooltip = "A level formed moments ago has no resting orders behind it yet.")
 needRetest = input.bool(false, "Wait for a retest of the broken level", group = gS,
      tooltip = "THE FAKEOUT FIX. Instead of entering on the break candle, wait for price to come back and HOLD the level it just broke. Far fewer fakeouts and a much better entry price - but you will miss the breaks that never look back. Turn this on if you are being faked out.")
 retestBars = input.int(8,   "   retest must happen within (bars)", minval = 1, maxval = 30, group = gS)
 
 gP = "SIGNAL FREQUENCY"
-entryCool = input.int(1, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
+entryCool = input.int(8, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
      tooltip = "A setup condition that stays true for four bars in a row is ONE idea, not four. Without this the indicator queued a fresh entry on each of those bars and you ended up with three positions on the same trade, three stops under the same swing, and three times the risk you thought you had.")
-maxTrades = input.int(4, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
+maxPerDay = input.int(12, "HARD CAP - signals per day", minval = 1, maxval = 200,
+     group = "SIGNAL FREQUENCY",
+     tooltip = "The backstop. Every other control is a gate, and gates interact - loosening six of them for six good reasons produced 120 signals a day and a chart nobody could read. A count cannot be argued with. If this is being hit every day the settings are too loose, and that is information rather than a limit to raise.")
+maxTrades = input.int(2, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
      tooltip = "The single biggest limiter on how many entries you see. At 1 the indicator sits idle through every setup that appears while a trade is already open - which on a trending day is most of them.")
 preset = input.string("Balanced", "Preset",
      options = ["Sniper (fewest, best measured)", "Balanced", "Scalper (most signals)", "Manual"],
@@ -178,7 +181,7 @@ preset = input.string("Balanced", "Preset",
      tooltip = "This is a genuine trade-off, not a free lunch. Sniper uses the gates that MEASURED best (ADX<=20, ATR<=1.0x median) and will sit out most of the day. Scalper opens the gates wide and WILL take setups that measured worse. Balanced sits between. Manual uses your own values below.")
 
 gF = "EXPANSION FILTER  (the 'is this move going to be big?' test)"
-gateAll = input.bool(false, "Apply this filter to EVERY setup type", group = gF,
+gateAll = input.bool(true, "Apply this filter to EVERY setup type", group = gF,
      tooltip = "OFF is the honest default. The filter was measured on BREAK setups - sweeps of liquidity - and that is the only place the evidence covers. Applying it to retests, pullbacks and breakouts as well would throttle them on the strength of a result that was never about them. Turn it on if you want fewer, more selective signals across the board.")
 useSqueeze = input.bool(true, "Only trade compressed volatility", group = gF,
      tooltip = "MEASURED: ATR at or below its median precedes 3+ ATR moves ~90% of the time. ATR at 2x its median precedes them 25% of the time.")
@@ -194,7 +197,7 @@ gR = "RISK"
 slBuf     = input.float(0.30, "Stop beyond sweep extreme (× ATR)", minval = 0, step = 0.05, group = gR)
 tpMode    = input.string("Next liquidity", "Target", options = ["Next liquidity", "Fixed R"], group = gR)
 tpR       = input.float(2.0, "   fixed R multiple", minval = 0.5, step = 0.25, group = gR)
-minR      = input.float(1.0, "Reject setup if R:R below", minval = 0.5, step = 0.1, group = gR,
+minR      = input.float(1.5, "Reject setup if R:R below", minval = 0.5, step = 0.1, group = gR,
      tooltip = "Lowered from 1.2, and the reason is measured rather than a preference: the 'needs room to run' idea was tested on its own across 8 markets and came out NEGATIVE in 5 of them (-0.097R median). Demanding a big R:R before entry was costing setups without buying quality, so the floor is lower and you judge the trade on the order book's R:R column instead.")
 maxRiskAtr= input.float(2.5, "Reject setup if stop wider than (× ATR)", minval = 0.5, step = 0.1, group = gR)
 
@@ -208,7 +211,7 @@ maxChase   = input.float(0.50, "MISSED IT if price already ran this far ahead", 
 entryDelay = input.int(1, "How many bars until I actually click", minval = 1, maxval = 10, group = gT,
      tooltip = "THE HONESTY SETTING. A signal prints at a bar close; you see it, then you enter. Set this to how many bars that realistically takes you. Everything tracked - entry price, P/L, the whole record - uses THAT price, not the signal price. At 0 the numbers flatter you.")
 trackFrom  = input.string("My real entry", "Measure profit from", options = ["My real entry", "Signal price"], group = gT)
-showHist   = input.int(15, "How many finished trades to keep on the chart", minval = 0, maxval = 20, group = gT,
+showHist   = input.int(5, "How many finished trades to keep on the chart", minval = 0, maxval = 20, group = gT,
      tooltip = "Past position boxes stay on the chart, drained of colour, so you can see how the last N setups actually played out instead of only the live one. The record table below shows up to 11 of them.")
 showTable  = input.bool(true, "Show my results table", group = gT)
 
@@ -1307,9 +1310,19 @@ retestHit = armDir != 0 and bar_index > armBar and barstate.isconfirmed and
 //
 // The cooldown is the other half: a condition true on consecutive bars is ONE
 // idea, not one per bar.
+// Declared HERE, above canFire, because the cap has to be readable at the
+// moment a signal is considered - not where the panel happens to display it.
+var int nSigDay  = 0
+var int nSigAll  = 0
+var int dayMark  = 0
+if dayofmonth != dayMark
+    dayMark := dayofmonth
+    nSigDay := 0
+
 var int lastFireBar = -1000
 cooledOk = bar_index - lastFireBar >= entryCool
 canFire = array.size(trDir) + array.size(pdDir) < maxTrades and cooledOk
+     and nSigDay < maxPerDay
      and (needRetest ? retestHit : breakNow)
 
 var bool firedLong   = false
@@ -1536,9 +1549,15 @@ if array.size(trDir) > 0
             // made without opening the table
             exMoney = (exPx - en) * d * ccyPerPt * (lotSize / 0.01)
             dayPnl += exMoney
+            // The money used to ride on every exit mark, and at a hundred
+            // trades a day that is a hundred price-tagged labels over the
+            // candles. The mark says WHAT happened; the record table says how
+            // much. Only a genuinely large result is worth the ink.
+            bigOne = math.abs(rFinal) >= 2.0
             label.new(bar_index, exPx,
-                 (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy) + "  "
-                 + (exMoney >= 0 ? "+" : "") + str.tostring(exMoney, "#.##"),
+                 (exWhy == "TP" ? "✓" : exWhy == "SL" ? "✕" : exWhy)
+                 + (bigOne ? "  " + (exMoney >= 0 ? "+" : "")
+                    + str.tostring(exMoney, "#.##") : ""),
                  style = d > 0 ? label.style_label_up : label.style_label_down,
                  color = color.new(color.white, 100),
                  textcolor = won ? accBull : accBear, size = size.small)
@@ -1611,15 +1630,9 @@ plotshape(chochDn,  "CHoCH down", shape.diamond, location.abovebar,
 // ---- HOW OFTEN IS THIS ACTUALLY FIRING?
 // Whether the settings are too tight is not judgeable from one screen. This
 // counts what fired so the question has an answer.
-var int   nSigAll = 0
-var int   nSigDay = 0
-var float tFirst  = na
-var int   dayMark = 0
+var float tFirst = na
 if na(tFirst)
     tFirst := time
-if dayofmonth != dayMark
-    dayMark := dayofmonth
-    nSigDay := 0
 if firedLong or firedShort
     nSigAll += 1
     nSigDay += 1
