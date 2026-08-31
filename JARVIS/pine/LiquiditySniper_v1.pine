@@ -1113,6 +1113,7 @@ var array<line>  trTrl = array.new_line()
 var array<line>  trEnl = array.new_line()   // the line from your real fill
 var array<float> trTrs = array.new_float()  // ratcheting trail stop, per trade
 var array<float> trMfe = array.new_float()  // best price the trade ever saw
+var array<string> trSet = array.new_string()  // which setup type produced it
 var array<box>   oldBoxes = array.new_box()
 var array<line>  oldLines = array.new_line()
 
@@ -1126,6 +1127,7 @@ var array<int>   pdBar  = array.new_int()
 var array<float> pdRisk = array.new_float()
 var array<float> pdRR   = array.new_float()
 var array<float> pdSig  = array.new_float()   // the signal price, for comparison
+var array<string> pdSet = array.new_string()  // which setup type produced it
 
 // ---- completed trade record, newest last
 var array<int>   hDir = array.new_int()
@@ -1134,6 +1136,7 @@ var array<float> hExt = array.new_float()
 var array<float> hR   = array.new_float()
 var array<float>  hMfe = array.new_float()   // the best it was EVER worth, in R
 var array<float>  hRsk = array.new_float()   // risk in price, to price the gap
+var array<string> hSet = array.new_string()   // which setup type produced it
 var array<string> hWhy = array.new_string()
 
 // Completed trades do not vanish. Their boxes stay, drained of colour, so the
@@ -1161,7 +1164,8 @@ pushOldLine(line l) =>
 
 // One place where a trade is opened, so a delayed fill and an immediate fill
 // cannot drift apart.
-openTrade(int d, float en, float sl, float tp) =>
+openTrade(int d, float en, float sl, float tp, string setup) =>
+    array.push(trSet, setup)
     array.push(trDir, d)
     array.push(trEnt, en)
     array.push(trSl,  sl)
@@ -1258,6 +1262,7 @@ if canFire
         array.push(pdRisk, risk)
         array.push(pdRR,   rr)
         array.push(pdSig,  entry)
+        array.push(pdSet,  setupName)
         lastFireBar := bar_index
         firedLong   := dir > 0
         firedShort  := dir < 0
@@ -1304,12 +1309,13 @@ if array.size(pdDir) > 0
             sl2  = fill - d2 * rk
             tp2  = fill + d2 * rrq * rk
             lastSlip := (sig - fill) * d2      // + means the delay cost you
-            openTrade(d2, fill, sl2, tp2)
+            openTrade(d2, fill, sl2, tp2, array.get(pdSet, q))
             array.remove(pdDir, q)
             array.remove(pdBar, q)
             array.remove(pdRisk, q)
             array.remove(pdRR, q)
             array.remove(pdSig, q)
+            array.remove(pdSet, q)
         else if (tooLate and aged >= entryDelay) or aged > entryDelay + 3
             array.push(missBars, bar_index)
             lastMiss := chase
@@ -1318,6 +1324,7 @@ if array.size(pdDir) > 0
             array.remove(pdRisk, q)
             array.remove(pdRR, q)
             array.remove(pdSig, q)
+            array.remove(pdSet, q)
 
 // ---- manage every open trade. Iterating backwards so removals are safe.
 // TODAY'S MONEY - where you actually stand right now, which the results table
@@ -1452,6 +1459,7 @@ if array.size(trDir) > 0
             array.push(hR,   rFinal)
             array.push(hMfe, peakR)
             array.push(hRsk, risk)
+            array.push(hSet, array.get(trSet, k))
             array.push(hWhy, exWhy)
             while array.size(hDir) > 30
                 array.shift(hDir)
@@ -1460,6 +1468,7 @@ if array.size(trDir) > 0
                 array.shift(hR)
                 array.shift(hMfe)
                 array.shift(hRsk)
+                array.shift(hSet)
                 array.shift(hWhy)
             pushOld(bt, won)
             pushOld(bs, won)
@@ -1477,6 +1486,7 @@ if array.size(trDir) > 0
             array.remove(trEnl, k)
             array.remove(trTrs, k)
             array.remove(trMfe, k)
+            array.remove(trSet, k)
 
 // EVERY signal gets the full BUY/SELL marker. Previously `setupIsBounce` was
 // true for order block, gap fill, retest, pullback and breakout - five of the
@@ -1760,6 +1770,70 @@ if showTable and barstate.islast and array.size(hDir) > 0
     recCell(4, exRow, "-" + str.tostring(totLeft, "#.##"),
          color.new(#FFB300, 0), false)
     recCell(5, exRow, "left behind", chart.fg_color, true)
+
+// ══════════════════ WHICH SETUP IS ACTUALLY PAYING YOU ══════════════════════
+// The question this answers is "I do not know which setups to take".
+//
+// It cannot be answered from history. A confluence score built from every
+// factor already measured in this repo separated winners from losers in only
+// 5 of 8 markets and ran BACKWARDS on gold 15m. The one factor with a real
+// edge, ADX < 35, is already on by default. There is no hidden ranking waiting
+// in the past to be found.
+//
+// So the ranking comes from YOUR results. Every completed trade is filed under
+// the setup that produced it, and this is the scoreboard. After a week of live
+// trading it says, in your own money, which types to keep taking and which to
+// switch off - the only version of the question that can actually be answered.
+showBoard = input.bool(true, "Show the setup scoreboard", group = gD)
+
+var table board = table.new(position.bottom_left, 5, 9, frame_width = 1,
+     frame_color = color.new(color.gray, 60), border_width = 1,
+     border_color = color.new(color.gray, 85))
+
+bCell(int c, int r, string txt, color col, bool head) =>
+    table.cell(board, c, r, txt, text_size = size.tiny,
+         text_halign = c == 0 ? text.align_left : text.align_right,
+         text_color = head ? color.new(chart.fg_color, 30) : col,
+         bgcolor = color.new(chart.bg_color, 5))
+
+kinds = array.from("BREAK", "BOUNCE", "RETEST", "PULLBACK", "BREAKOUT",
+     "GAP FILL", "ORDER BLOCK")
+
+if showBoard and barstate.islast and array.size(hSet) > 0
+    bCell(0, 0, "setup",  chart.fg_color, true)
+    bCell(1, 0, "taken",  chart.fg_color, true)
+    bCell(2, 0, "win",    chart.fg_color, true)
+    bCell(3, 0, "R",      chart.fg_color, true)
+    bCell(4, 0, str.tostring(lotSize) + " lot", chart.fg_color, true)
+    for ki = 0 to array.size(kinds) - 1
+        kd = array.get(kinds, ki)
+        int   cnt = 0
+        int   wn  = 0
+        float sr  = 0.0
+        float sm  = 0.0
+        for j = 0 to array.size(hSet) - 1
+            if array.get(hSet, j) == kd
+                cnt += 1
+                rj = array.get(hR, j)
+                sr += rj
+                wn += rj >= 0 ? 1 : 0
+                mj2 = (array.get(hExt, j) - array.get(hEnt, j)) * array.get(hDir, j)
+                sm += mj2 * ccyPerPt * (lotSize / 0.01)
+        dimc = color.new(chart.fg_color, 60)
+        col  = cnt == 0 ? dimc
+             : sm > 0 ? accBull : sm < 0 ? accBear : color.new(chart.fg_color, 45)
+        bCell(0, ki + 1, kd, cnt == 0 ? dimc : chart.fg_color, false)
+        bCell(1, ki + 1, cnt == 0 ? "-" : str.tostring(cnt), col, false)
+        bCell(2, ki + 1, cnt == 0 ? "-"
+             : str.tostring(math.round(100.0 * wn / cnt)) + "%", col, false)
+        bCell(3, ki + 1, cnt == 0 ? "-" : str.tostring(sr, "#.#"), col, false)
+        bCell(4, ki + 1, cnt == 0 ? "-"
+             : (sm >= 0 ? "+" : "") + str.tostring(sm, "#.##"), col, false)
+    bCell(0, 8, "keep the green ones", color.new(chart.fg_color, 30), true)
+    bCell(1, 8, "", chart.fg_color, true)
+    bCell(2, 8, "", chart.fg_color, true)
+    bCell(3, 8, "", chart.fg_color, true)
+    bCell(4, 8, "switch off red", color.new(chart.fg_color, 30), true)
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
 // Alerts fire on firedLong/firedShort - the direction actually TAKEN - not on
