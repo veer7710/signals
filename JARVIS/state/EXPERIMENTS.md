@@ -912,3 +912,57 @@ strategy.
 **Verdict: DISPROVEN that a simple directional entry pattern can work on this
 data at these timeframes.** Effort should move to M1 (untested, different in
 kind) rather than to configuration 782.
+
+## E-038 — VOLATILITY IS PREDICTABLE HERE. Direction is not.
+`python3 JARVIS/research/vol_predictability.py`, self-tested against synthetic
+random-walk and clustered-volatility series before reading any market.
+
+Autocorrelation at lag 1, signed returns vs absolute returns:
+
+| market | signed r | \|r\| (volatility) | 2 SE |
+|---|---|---|---|
+| GOLD 15m | -0.010 | **+0.198** | 0.030 |
+| GOLD 1h | -0.029 | **+0.279** | 0.017 |
+| US500 15m | +0.001 | **+0.346** | 0.030 |
+| US500 1h | -0.004 | **+0.285** | 0.017 |
+| EURUSD 15m | -0.033 | **+0.218** | 0.027 |
+| EURUSD 1h | -0.019 | **+0.206** | 0.015 |
+| GBPUSD 15m | -0.010 | **+0.213** | 0.027 |
+| GBPUSD 1h | -0.016 | **+0.198** | 0.015 |
+
+**8 of 8.** Every series. Absolute-return autocorrelation is 7 to 19 times two
+standard errors while signed returns sit at zero - the exact opposite of every
+directional test in this repo, all of which came back 4 or 5 of 8.
+
+Range prediction, one 20-bar window to the next: GOLD 1h **R² 0.523**
+(correlation +0.723), US500 1h 0.257, EURUSD 1h 0.096, GBPUSD 1h 0.043. On
+GOLD 1h the quietest quartile is followed by an average range of 37.3 and the
+loudest by 126.1, against an overall average of 74.1 - a **3.4x spread**, on a
+round-trip cost of 0.40.
+
+**Verdict: CONFIRMED.** This is the first genuinely predictable quantity found
+in this project, it is the standard finance result (volatility clustering), and
+it is present in every series tested. WHERE price goes is unknowable here.
+HOW FAR it travels is substantially knowable.
+
+## E-039 — Reachability as a trade filter: REJECTED, and the reason redirects
+Hypothesis: if range is predictable, then whether a target can PHYSICALLY be
+reached is predictable, so trades whose target the coming range cannot cover
+should be skipped. That would be a trade-selection edge needing no directional
+call.
+
+`python3 JARVIS/research/reachability.py`. Out-of-sample, split by quartile of
+predicted-travel / required-travel: the best quartile beat the worst in **2 of
+6 markets**, with no monotonic gradient anywhere. Rejected.
+
+**WHY it failed, which is the useful part.** The stop is `stop_atr x ATR` and
+the target is `rr x stop`, so required travel is proportional to ATR. Predicted
+travel is derived from recent range, which is also proportional to ATR. The
+ratio is therefore **near-constant by construction** and carries almost no
+information. At a cut of 1.0 the filter rejected 3 to 13 trades out of hundreds.
+
+**The redirect this implies:** volatility prediction can only inform a target
+that is NOT itself ATR-scaled. That means a target fixed in price terms - a
+money target, or a LEVEL-based target, where the distance to the next level is
+set by market structure rather than by current volatility. That is the next
+experiment and it is now the highest-value open question in the project.

@@ -68,7 +68,24 @@ any of 8 pairs).
 | `JARVIS/tools/check_pine.py` | 8 Pine compile-rule checks, all regression-tested |
 
 ## Next actions, highest value first
-1. Volatility predictability — is compression->expansion real where direction is not?
-2. Conditional/time-of-day expectancy on the existing data
-3. M1 data acquisition (blocked on Veer running the exporter)
-4. Rebuild both products around whatever survives; discard what does not
+1. **LEVEL-TARGET REACHABILITY.** E-038 confirmed volatility is predictable in
+   8 of 8 series. E-039 showed that cannot filter an ATR-scaled target, because
+   required travel and predicted travel are both proportional to ATR so the
+   ratio is constant by construction. It CAN inform a target fixed in price
+   terms. The liquidity indicator already computes exactly that - `nextLiq()`
+   returns the next level, whose distance is set by structure, not volatility.
+   Question: does expectancy rise when the predicted range comfortably covers
+   the distance to the next level, and fall when it does not? This is the only
+   place a confirmed finding meets an untested application.
+2. Conditional / time-of-day expectancy (a variance ratio tests UNCONDITIONAL
+   behaviour; this is untested here)
+3. Volatility-scaled position sizing - E-038 says predicted range beats trailing
+   ATR as a sizing input; measure whether it improves risk-adjusted return
+4. M1 data (blocked on Veer running `JARVIS/tools/export_mt5_data.py`)
+
+## What the products should do RIGHT NOW, given the evidence
+The live chart says the SuperTrend product loses -0.58R per trade with zero
+take-profits in twelve. Nothing in this repo has cleared the significance bar.
+Neither product should be traded at size. The scoreboard in the liquidity Pine
+exists to find out which setup types Veer personally converts, and that remains
+the only live question with a real chance of a positive answer.
