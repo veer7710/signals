@@ -50,3 +50,21 @@ Consequences that follow from this and are not to be re-argued:
    funded account. It is measured against the bar in EXPERIMENTS.md, not against
    whether the chart looks convincing. At ~780 configurations tested, that bar
    is roughly t = 3.65 and nothing has cleared it yet.
+
+## D-008 — Broker: PU Prime, 1:500 leverage (Veer, 2026-08-31)
+Recorded because it changes what is and is not a constraint.
+
+At 1:500 on XAUUSD, 0.01 lots is 1 oz. At roughly 3400 that is about 3,400 of
+notional, so the margin required is about **6.80**. On a small account leverage
+is therefore NOT the binding constraint - a 60 pound account can hold several
+0.01 positions on margin alone.
+
+**The binding constraint is the stop distance, and it always was.** One 0.01 lot
+with a 12-point stop risks 12.00 regardless of leverage. High leverage does not
+make a trade smaller, it only removes margin as the thing that stops you. Every
+sizing statement in this repo is therefore computed from stop distance and
+account currency per point, never from leverage, and that stays true.
+
+Practical consequence: 1:500 means the EA's `LotFor()` will essentially never be
+margin-blocked, so a lot-size-zero rejection points at the risk maths or the
+broker's minimum volume, not at leverage.

@@ -100,6 +100,21 @@ input bool   InpUseSession    = false;  // restrict to one session (see below)
 input int    InpSessFromUTC   = 13;     // NY open
 input int    InpSessToUTC     = 20;     // NY close
 
+input group "=== LEVELS (the EA can now see them) ==="
+input bool   InpUseLevels     = true;   // find levels and trade around them
+input int    InpPivotBars     = 5;      // swing size for a level
+input int    InpLevelLookback = 400;    // bars to scan for swings
+input bool   InpUseDayLevels  = true;   // previous day high / low
+input bool   InpUseWeekLevels = true;   // previous week high / low
+input bool   InpUseRound      = true;   // round numbers (gold clusters stops there)
+input double InpRoundStep     = 10.0;   // round number spacing
+input double InpNearAtr       = 0.60;   // "close to a level" = within this x ATR
+input double InpLevelBufAtr   = 0.25;   // park the target THIS far short of it
+input bool   InpTpAtLevel     = true;   // cap the target at the next level
+input bool   InpPartialAtLevel= true;   // bank half there, let the rest run
+input bool   InpSkipNoRoom    = true;   // refuse entries with a level in the way
+input double InpMinRoomR      = 1.0;    // need at least this much room, in R
+
 input group "=== RISK ==="
 input double InpRiskPct       = 0.50;   // % of equity risked per trade
 input double InpStopAtrMult   = 1.5;    // stop distance in ATR
@@ -322,6 +337,95 @@ void UpdateSuperTrend()
    g_stReady    = true;
 }
 
+//==================== LEVELS =======================================
+// Veer: "i need the ea to auto UNDERSTAND all these levels what they mean and
+// that we may get close to them and react not always hit them exactly".
+//
+// Price does not turn ON a level, it turns NEAR one. So every question here is
+// asked with a tolerance rather than an equality: is there a level within
+// InpNearAtr of this price, how far is the nearest one, is there room to the
+// next one. A target parked just short of a level fills; one sitting exactly on
+// it watches price stop a tick away and reverse.
+#define MAX_LEVELS 200
+double g_lvl[MAX_LEVELS];
+int    g_lvlCount = 0;
+
+void AddLevel(double p)
+{
+   if(p <= 0 || g_lvlCount >= MAX_LEVELS) return;
+   double atr = ATR(1);
+   double tol = (atr > 0 ? atr * 0.25 : _Point * 10);
+   for(int i = 0; i < g_lvlCount; i++)          // merge near-equal levels
+      if(MathAbs(g_lvl[i] - p) <= tol) return;
+   g_lvl[g_lvlCount++] = p;
+}
+
+// A swing high is a bar whose high is the highest of the InpPivotBars either
+// side of it. It is only KNOWN InpPivotBars later, and the scan respects that
+// by starting at that offset - reading it sooner would be reading the future.
+void BuildLevels()
+{
+   g_lvlCount = 0;
+   if(!InpUseLevels) return;
+
+   int n = MathMin(InpLevelLookback, Bars(_Symbol, _Period) - InpPivotBars - 2);
+   for(int i = InpPivotBars + 1; i < n; i++)
+   {
+      bool isHigh = true, isLow = true;
+      double h = iHigh(_Symbol, _Period, i);
+      double l = iLow(_Symbol, _Period, i);
+      for(int j = 1; j <= InpPivotBars; j++)
+      {
+         if(iHigh(_Symbol, _Period, i - j) > h || iHigh(_Symbol, _Period, i + j) > h) isHigh = false;
+         if(iLow(_Symbol, _Period, i - j)  < l || iLow(_Symbol, _Period, i + j)  < l) isLow  = false;
+         if(!isHigh && !isLow) break;
+      }
+      if(isHigh) AddLevel(h);
+      if(isLow)  AddLevel(l);
+   }
+
+   if(InpUseDayLevels)
+   {
+      AddLevel(iHigh(_Symbol, PERIOD_D1, 1));
+      AddLevel(iLow(_Symbol, PERIOD_D1, 1));
+   }
+   if(InpUseWeekLevels)
+   {
+      AddLevel(iHigh(_Symbol, PERIOD_W1, 1));
+      AddLevel(iLow(_Symbol, PERIOD_W1, 1));
+   }
+   if(InpUseRound && InpRoundStep > 0)
+   {
+      double px = iClose(_Symbol, _Period, 1);
+      for(int k = -3; k <= 3; k++)
+         AddLevel(MathRound(px / InpRoundStep + k) * InpRoundStep);
+   }
+}
+
+// Nearest level strictly above / below a price. 0 when there is none.
+double NearestLevel(double from, int dir)
+{
+   double best = 0.0;
+   for(int i = 0; i < g_lvlCount; i++)
+   {
+      double p = g_lvl[i];
+      if(dir > 0 && p > from && (best == 0.0 || p < best)) best = p;
+      if(dir < 0 && p < from && (best == 0.0 || p > best)) best = p;
+   }
+   return best;
+}
+
+// Is price sitting AT a level right now - within tolerance, not exactly on it?
+bool NearAnyLevel(double px, double &which)
+{
+   double atr = ATR(1);
+   if(atr <= 0) return false;
+   double tol = InpNearAtr * atr;
+   for(int i = 0; i < g_lvlCount; i++)
+      if(MathAbs(g_lvl[i] - px) <= tol) { which = g_lvl[i]; return true; }
+   return false;
+}
+
 //==================== RISK GATES ===================================
 // Every prop firm measures the daily limit on EQUITY including floating P/L,
 // so this uses AccountInfoDouble(ACCOUNT_EQUITY), never balance.
@@ -461,6 +565,26 @@ void TryEntry()
    if(atr <= 0) return;
 
    double stopDist = InpStopAtrMult * atr;
+
+   // NO ROOM, NO TRADE. A signal pointing straight into a level a few points
+   // away is not the same trade as one with open air ahead of it, and taking
+   // both at the same size is how the small ones pay for nothing.
+   if(InpUseLevels && InpSkipNoRoom)
+   {
+      double px   = iClose(_Symbol, _Period, 1);
+      double wall = NearestLevel(px, flipUp ? +1 : -1);
+      if(wall > 0)
+      {
+         double roomR = MathAbs(wall - px) / stopDist;
+         if(roomR < InpMinRoomR)
+         {
+            SkipLog(sdir, StringFormat("only %.2fR of room, level at %.*f",
+                                       roomR, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS), wall));
+            return;
+         }
+      }
+   }
+
    double lots = LotFor(stopDist);
    if(lots <= 0) { SkipLog(sdir, "lot size rounded to zero"); return; }
 
@@ -474,6 +598,23 @@ void TryEntry()
    {
       double sl = NormalizeDouble(ask - stopDist, dg);
       double tp = NormalizeDouble(ask + InpTargetR * stopDist, dg);
+      // A target sitting beyond the next level watches price stop just short of
+      // it and turn. Park it INSIDE the level instead, by InpLevelBufAtr, so it
+      // is reached rather than admired.
+      if(InpUseLevels && InpTpAtLevel)
+      {
+         double capLvl = NearestLevel(ask, +1);
+         if(capLvl > 0)
+         {
+            double capped = NormalizeDouble(capLvl - InpLevelBufAtr * atr, dg);
+            if(capped > ask && capped < tp)
+            {
+               Log(StringFormat("target pulled in from %.*f to %.*f, level at %.*f",
+                                dg, tp, dg, capped, dg, capLvl));
+               tp = capped;
+            }
+         }
+      }
       if(trade.Buy(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
@@ -487,6 +628,20 @@ void TryEntry()
    {
       double sl = NormalizeDouble(bid + stopDist, dg);
       double tp = NormalizeDouble(bid - InpTargetR * stopDist, dg);
+      if(InpUseLevels && InpTpAtLevel)
+      {
+         double capLvl = NearestLevel(bid, -1);
+         if(capLvl > 0)
+         {
+            double capped = NormalizeDouble(capLvl + InpLevelBufAtr * atr, dg);
+            if(capped < bid && capped > tp)
+            {
+               Log(StringFormat("target pulled in from %.*f to %.*f, level at %.*f",
+                                dg, tp, dg, capped, dg, capLvl));
+               tp = capped;
+            }
+         }
+      }
       if(trade.Sell(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
          g_tradesToday++;
@@ -582,6 +737,25 @@ double OriginalRisk(double openPx, double sl, string cmt)
 // the remaining volume on every single bar the trade spent above 1R, bleeding
 // a winner down to the minimum lot while it was still working.
 ulong g_partialed[];
+// A SECOND, separate register. The 1R partial and the level partial are
+// different events and can both happen on one trade; sharing one list would
+// let whichever fired first silently cancel the other.
+ulong g_lvlPartialed[];
+
+bool AlreadyLvlPartialed(ulong tk)
+{
+   for(int i = 0; i < ArraySize(g_lvlPartialed); i++)
+      if(g_lvlPartialed[i] == tk) return true;
+   return false;
+}
+
+void MarkLvlPartialed(ulong tk)
+{
+   int n = ArraySize(g_lvlPartialed);
+   ArrayResize(g_lvlPartialed, n + 1);
+   g_lvlPartialed[n] = tk;
+   if(n > 400) ArrayRemove(g_lvlPartialed, 0, 200);
+}
 
 bool AlreadyPartialed(ulong tk)
 {
@@ -638,6 +812,43 @@ void ManagePosition()
          if(trade.PositionClose(tk))
             Log(StringFormat("time exit after %d bars at %.2fR", barsHeld, rNow));
          continue;
+      }
+
+      // --- APPROACHING A LEVEL: bank half, let the rest run.
+      // This is the answer to wanting both the pennies and the big moves out of
+      // the same signal. Price arriving at a level does one of two things and
+      // nobody knows which in advance, so the trade does both: half is taken
+      // while the level is still in front of price, and the remainder rides the
+      // trail through it if it breaks. Note NearAnyLevel uses a TOLERANCE -
+      // price reacts near a level, not on it, and a partial that waits for an
+      // exact touch is a partial that often never happens.
+      if(InpUseLevels && InpPartialAtLevel && rNow > 0.3
+         && !AlreadyLvlPartialed(tk)
+         && vol > SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+      {
+         double hitLvl = 0.0;
+         if(NearAnyLevel(price, hitLvl))
+         {
+            // only a level the trade is running INTO, not one behind it
+            bool ahead = (dir > 0) ? (hitLvl >= open) : (hitLvl <= open);
+            if(ahead)
+            {
+               double half = NormalizeDouble(vol / 2.0, 2);
+               double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+               if(step > 0) half = MathFloor(half / step) * step;
+               if(half >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN)
+                  && trade.PositionClosePartial(tk, half))
+               {
+                  MarkLvlPartialed(tk);
+                  Log(StringFormat("banked %.2f of %.2f at level %.*f (%.2fR), "
+                                   "rest rides the trail", half, vol,
+                                   (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS),
+                                   hitLvl, rNow));
+                  Journal("PARTIAL", dir > 0 ? "long" : "short", price, half,
+                          0, 0, 0, StringFormat("at level %.2f", hitLvl));
+               }
+            }
+         }
       }
 
       // --- partial at 1R, optional
@@ -788,6 +999,7 @@ void OnTick()
    if(Bars(_Symbol, _Period) < InpDemaLen * 3 + 10) return;
 
    UpdateSuperTrend();
+   BuildLevels();          // before anything asks where the levels are
    ManagePosition();
    TryEntry();
 }
