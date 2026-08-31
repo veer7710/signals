@@ -864,3 +864,51 @@ and it does, which is evidence the method is not manufacturing separation.
 3. Because history cannot rank these setups, the ranking has to come from
    Veer's OWN results. That is what the per-setup-type breakdown added to the
    liquidity indicator is for.
+
+## E-037 — These markets are statistically random walks at 15m and 1h
+`python3 JARVIS/research/is_it_tradeable.py`. Lo-MacKinlay variance ratio with
+the heteroscedasticity-robust z, self-tested against synthetic series of known
+behaviour before any market data is read.
+
+**40 tests. Four markets, two timeframes, five horizons each (q = 2, 4, 8, 16,
+32). NOT ONE is significant.** The largest |z| across all forty is 1.79, against
+a 1.96 threshold that is not even corrected for multiple testing.
+
+| market | VR range across q | max abs z |
+|---|---|---|
+| GOLD 15m | 0.940 - 0.990 | 0.98 |
+| GOLD 1h | 0.957 - 1.077 | 1.56 |
+| US500 15m | 0.774 - 1.001 | 1.67 |
+| US500 1h | 0.924 - 1.044 | 0.58 |
+| EURUSD 15m | 0.949 - 1.015 | 1.24 |
+| EURUSD 1h | 0.960 - 0.981 | 1.79 |
+| GBPUSD 15m | 0.977 - 1.032 | 0.53 |
+| GBPUSD 1h | 0.938 - 0.984 | 1.59 |
+
+Autocorrelations: 80 tests (10 lags x 8 series), about 4 marginally exceed two
+standard errors. That is exactly the count chance produces.
+
+**THIS EXPLAINS THE WHOLE PROJECT.** Roughly 780 configurations have failed to
+clear the significance bar here, and it has been read as "the strategies are
+wrong". The likelier reading is that no entry pattern can extract a directional
+edge from a series that is indistinguishable from a random walk. The strategies
+were not the problem; the search was aimed at a property the data does not have.
+
+**WHAT THIS DOES NOT SAY**, and the distinction matters:
+1. It is 15m and 1h. **M1 is untested and is genuinely different in kind** -
+   bid-ask bounce and order-flow effects produce real autocorrelation at very
+   short horizons. This is now the strongest argument in the repo for getting M1
+   data, because it is the one place a directional edge could still be hiding.
+2. A variance ratio tests UNCONDITIONAL behaviour. A conditional edge - only at
+   certain hours, only after certain events - can exist inside a series that is
+   unconditionally a random walk. VR = 1 does not prove no edge exists.
+3. It says nothing about non-directional approaches.
+
+**ALSO FOUND:** round-trip cost as a share of a typical one-bar move is 0.46 on
+EURUSD 15m and 0.49 on GBPUSD 15m - the spread is about half a bar. That is a
+structural reason 15m FX was negative nearly everywhere here, independent of any
+strategy.
+
+**Verdict: DISPROVEN that a simple directional entry pattern can work on this
+data at these timeframes.** Effort should move to M1 (untested, different in
+kind) rather than to configuration 782.
