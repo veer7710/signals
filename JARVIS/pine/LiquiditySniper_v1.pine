@@ -161,7 +161,7 @@ needDisp  = input.bool(true, "Require displacement candle", group = gS,
 dispAtr   = input.float(1.0, "   displacement ≥ (× ATR)", minval = 0.3, step = 0.1, group = gS)
 needClose = input.bool(true, "Require close beyond the level", group = gS,
      tooltip = "A wick through is not a break. Demanding a close removes most fakeouts.")
-minLvlAge = input.int(5,    "Level must be this many bars old", minval = 0, group = gS,
+minLvlAge = input.int(3,    "Level must be this many bars old", minval = 0, group = gS,
      tooltip = "A level formed moments ago has no resting orders behind it yet.")
 needRetest = input.bool(false, "Wait for a retest of the broken level", group = gS,
      tooltip = "THE FAKEOUT FIX. Instead of entering on the break candle, wait for price to come back and HOLD the level it just broke. Far fewer fakeouts and a much better entry price - but you will miss the breaks that never look back. Turn this on if you are being faked out.")
@@ -1623,7 +1623,14 @@ keepSweep(label l) =>
             label.delete(l0)
     0
 
-drawZoneLabels(array<float> px, array<bool> dead, bool isHigh) =>
+// A level that has been touched more than once is an EQUAL HIGH or EQUAL LOW -
+// the strongest liquidity there is, because every one of those touches left
+// stops behind it. The merge logic already counts them; it just never said so.
+zoneName(bool isHigh, int hits) =>
+    hits >= 2 ? (isHigh ? "EQH x" + str.tostring(hits) : "EQL x" + str.tostring(hits))
+              : (isHigh ? "SSL" : "BSL")
+
+drawZoneLabels(array<float> px, array<bool> dead, array<int> hits, bool isHigh) =>
     if showZoneStats and not cleanMode and useZoneMem and barstate.islast and array.size(px) > 0
         for i = 0 to array.size(px) - 1
             if not array.get(dead, i) and math.abs(array.get(px, i) - close) <= labelNear * atr
@@ -1633,7 +1640,7 @@ drawZoneLabels(array<float> px, array<bool> dead, bool isHigh) =>
                 // ABOVE price (shorts' stops, which a rally runs into); buy-side
                 // is the stops BELOW. Naming them removes the guesswork of
                 // reading it off the colour.
-                tag = (isHigh ? "SSL" : "BSL") + (t == "" ? "" : "  " + t)
+                tag = zoneName(isHigh, array.get(hits, i)) + (t == "" ? "" : "  " + t)
                 if true
                     hp = zoneHold(p, isHigh)
                     col = hp < 0 ? color.new(chart.fg_color, 45)
@@ -1650,8 +1657,8 @@ if barstate.islast and array.size(zLabs) > 0
         l0 = array.shift(zLabs)
         if not na(l0)
             label.delete(l0)
-drawZoneLabels(hiPx, hiDead, true)
-drawZoneLabels(loPx, loDead, false)
+drawZoneLabels(hiPx, hiDead, hiHits, true)
+drawZoneLabels(loPx, loDead, loHits, false)
 
 // ──────────────────────────────── STATUS PANEL ──────────────────────────────
 var table panel = table.new(position.top_right, 2, 14, frame_width = 1,
@@ -1854,6 +1861,53 @@ if showTable and not cleanMode and barstate.islast and array.size(hDir) > 0
          color.new(#FFB300, 0), false)
     recCell(5, exRow, "left behind", chart.fg_color, true)
 
+// ═══════════════════ IS PRICE REACTING AT A ZONE RIGHT NOW? ═════════════════
+// A setup is a reaction that passed every filter. Most reactions never get
+// that far, and Veer trades those by eye - so the chart should say when price
+// is AT a level and showing a response, even when nothing fires.
+atZone      = false
+atZonePx    = 0.0
+atZoneIsHi  = false
+zoneTolNow  = zoneTol * atr
+rngNow      = math.max(high - low, syminfo.mintick)
+upWickNow   = high - math.max(open, close)
+dnWickNow   = math.min(open, close) - low
+
+scanAt(array<float> px, array<bool> dead, bool isHigh) =>
+    float found = na
+    if array.size(px) > 0
+        for i = 0 to array.size(px) - 1
+            if not array.get(dead, i) and na(found)
+                p = array.get(px, i)
+                if low <= p + zoneTolNow and high >= p - zoneTolNow
+                    found := p
+    found
+
+atHi = scanAt(hiPx, hiDead, true)
+atLo = scanAt(loPx, loDead, false)
+if not na(atHi)
+    atZone := true
+    atZonePx := atHi
+    atZoneIsHi := true
+else if not na(atLo)
+    atZone := true
+    atZonePx := atLo
+    atZoneIsHi := false
+
+// a rejection is a wick that goes into the zone and a close that comes back out
+rejecting = atZone and (atZoneIsHi ? (upWickNow / rngNow) >= 0.30 and close < atZonePx
+                                   : (dnWickNow / rngNow) >= 0.30 and close > atZonePx)
+
+// Every rejection at a level, whether or not it survives the filters. Veer
+// trades these by eye and the chart should not stay silent about them just
+// because the automated setup did not qualify. Declared here, after the
+// detector, because Pine is single-pass and a plot cannot read a value that is
+// defined further down the file.
+plotshape(rejecting and not atZoneIsHi, "reaction at support", shape.circle,
+     location.belowbar, color.new(accBull, 30), size = size.tiny)
+plotshape(rejecting and atZoneIsHi, "reaction at resistance", shape.circle,
+     location.abovebar, color.new(accBear, 30), size = size.tiny)
+
 // ═══════════════════ THE ORDER BOOK — where to actually place ═══════════════
 // "sell limits buy limits stops if it can produce that".
 //
@@ -1952,6 +2006,82 @@ if showOrders and barstate.islast
     oRow(4, "SELL STOP",  na(sup) ? na : sup - buf,
          na(sup) ? na : sup + slBuf * atr,
          na(res) or na(sup) ? na : sup - buf - (res - sup), accBear, sup, false)
+
+// ══════════════════════════ WHAT TO DO RIGHT NOW ════════════════════════════
+// One line, top centre, in words. Everything else on this chart is detail you
+// can ignore; this is the answer. It reads, in priority order:
+//   a signal firing now  ->  the trade, with entry, stop, target and size
+//   price at a zone      ->  which zone, its record, and what to watch for
+//   otherwise            ->  the nearest order and how far away it is
+showNow = input.bool(true, "Show the WHAT TO DO NOW line", group = gD)
+
+var table nowbox = table.new(position.top_center, 1, 2, frame_width = 2,
+     frame_color = color.new(color.gray, 45), border_width = 1,
+     border_color = color.new(color.gray, 80))
+
+if showNow and barstate.islast
+    string headline = ""
+    string detail   = ""
+    color  tone     = color.new(chart.fg_color, 25)
+
+    nPend2 = array.size(pdDir)
+    nOpen2 = array.size(trDir)
+
+    if nOpen2 > 0
+        d0 = array.get(trDir, 0)
+        e0 = array.get(trEnt, 0)
+        s0 = array.get(trSl, 0)
+        t0 = array.get(trTp, 0)
+        m0 = (close - e0) * d0 * ccyPerPt * (lotSize / 0.01)
+        headline := (d0 > 0 ? "IN A BUY" : "IN A SELL") + "   "
+             + (m0 >= 0 ? "+" : "") + str.tostring(m0, "#.##")
+        detail := "from " + str.tostring(e0, format.mintick)
+             + "   stop " + str.tostring(s0, format.mintick)
+             + "   target " + str.tostring(t0, format.mintick)
+        tone := m0 >= 0 ? accBull : accBear
+    else if nPend2 > 0
+        d1 = array.get(pdDir, 0)
+        r1 = array.get(pdRisk, 0)
+        g1 = array.get(pdSig, 0)
+        money1 = r1 * ccyPerPt * (lotSize / 0.01)
+        headline := d1 > 0 ? "BUY NOW" : "SELL NOW"
+        detail := array.get(pdSet, 0) + "   signal " + str.tostring(g1, format.mintick)
+             + "   stop " + str.tostring(d1 > 0 ? g1 - r1 : g1 + r1, format.mintick)
+             + "   risking " + str.tostring(money1, "#.##") + " at " + str.tostring(lotSize)
+        tone := d1 > 0 ? accBull : accBear
+    else if rejecting
+        headline := atZoneIsHi ? "REJECTING RESISTANCE" : "REJECTING SUPPORT"
+        zt3 = zoneText(atZonePx, atZoneIsHi)
+        detail := (atZoneIsHi ? "SSL " : "BSL ") + str.tostring(atZonePx, format.mintick)
+             + "   " + (zt3 == "" ? "no record here" : zt3)
+             + "   " + (atZoneIsHi ? "watch for a sell" : "watch for a buy")
+        tone := atZoneIsHi ? accBear : accBull
+    else if atZone
+        headline := "AT A ZONE - WAIT FOR THE REACTION"
+        zt4 = zoneText(atZonePx, atZoneIsHi)
+        detail := (atZoneIsHi ? "SSL " : "BSL ") + str.tostring(atZonePx, format.mintick)
+             + "   " + (zt4 == "" ? "no record here" : zt4)
+        tone := color.new(#FFB300, 0)
+    else
+        res2 = nextLiq(true)
+        sup2 = nextLiq(false)
+        dUp = na(res2) ? na : res2 - close
+        dDn = na(sup2) ? na : close - sup2
+        headline := "NOTHING YET - PRICE IS BETWEEN LEVELS"
+        detail := (na(res2) ? "no level above" :
+             "sell zone " + str.tostring(res2, format.mintick)
+             + " (" + str.tostring(dUp, "#.#") + " away)")
+             + "     " +
+             (na(sup2) ? "no level below" :
+             "buy zone " + str.tostring(sup2, format.mintick)
+             + " (" + str.tostring(dDn, "#.#") + " away)")
+        tone := color.new(chart.fg_color, 30)
+
+    table.cell(nowbox, 0, 0, headline, text_size = size.large,
+         text_color = tone, bgcolor = color.new(chart.bg_color, 5))
+    table.cell(nowbox, 0, 1, detail, text_size = size.small,
+         text_color = color.new(chart.fg_color, 25),
+         bgcolor = color.new(chart.bg_color, 5))
 
 // ══════════════════ WHICH SETUP IS ACTUALLY PAYING YOU ══════════════════════
 // The question this answers is "I do not know which setups to take".
