@@ -36,6 +36,24 @@ IDENT = re.compile(r'(?<![\w.])([a-zA-Z_]\w*)(?![\w(])')
 # ---------------------------------------------------------------- order
 
 # -------------------------------------------------- line continuations
+
+# ------------------------------------------------- functions inside blocks
+def check_nested_func(src):
+    """A Pine function must be declared at GLOBAL scope. Declaring one inside
+    an if/for body does not compile, and it is an easy mistake because the
+    function often only makes sense in that context."""
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        if not code.strip():
+            continue
+        m = re.match(r'^(\s+)([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>', code)
+        if m and len(m.group(1)) > 0:
+            out.append((i, f"FUNCTION '{m.group(2)}' DECLARED INSIDE A BLOCK "
+                           f"(Pine requires global scope)", l.strip()[:60]))
+    return out
+
+
 def check_continuation(src):
     """A continuation line indented by a multiple of 4 reads as a new block, so
     a multi-line boolean silently becomes a statement that does nothing.
@@ -269,6 +287,7 @@ def check(path):
                 continue
             problems.append((i, name, l.strip()[:70]))
 
+    problems += check_nested_func(src)
     problems += check_continuation(src)
     problems += check_var_offset(src)
     problems += check_order(src, declared)

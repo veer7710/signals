@@ -63,7 +63,8 @@ useMulti  = input.bool(true, "Also detect smaller swings (scalp levels)", group 
 pivMid    = input.int(4,    "   mid swing size", minval = 2, maxval = 20, group = gL)
 pivFast   = input.int(2,    "   fast swing size", minval = 1, maxval = 10, group = gL)
 eqTol     = input.float(0.20, "Equal high/low tolerance (× ATR)", minval = 0.02, step = 0.02, group = gL)
-maxLevels = input.int(20,   "Max live levels per side", minval = 2, maxval = 40, group = gL)
+maxLevels = input.int(30,   "Max live levels per side", minval = 2, maxval = 60, group = gL,
+     tooltip = "Raised because the ask was to mark out EVERY high and low. Structural levels are sticky and are never evicted while an ordinary one exists, so raising this adds detail without pushing the important levels off the chart.")
 lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, group = gL)
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
@@ -106,7 +107,7 @@ useZoneMem = input.bool(true, "Remember how each zone behaved before", group = g
 zoneTol    = input.float(0.25, "   counts as 'at the zone' within (× ATR)", minval = 0.05, step = 0.05, group = gZ)
 reactBars  = input.int(10, "   judge the reaction this many bars later", minval = 2, maxval = 60, group = gZ,
      tooltip = "How long to wait before deciding whether the zone HELD or BROKE. Too short and every touch looks like a hold; too long and the reaction has nothing to do with the level any more.")
-memMax     = input.int(60, "   zones to remember", minval = 10, maxval = 200, group = gZ,
+memMax     = input.int(120, "   zones to remember", minval = 10, maxval = 300, group = gZ,
      tooltip = "This memory outlives the drawn line on purpose. Lines are evicted to keep the chart readable, but the history of a price area should not vanish with its drawing - that is the whole point of remembering PREVIOUS zones.")
 showZoneStats = input.bool(true, "   label each zone with its record", group = gZ)
 useZoneFilter = input.bool(false, "   only trade zones with a matching history", group = gZ,
@@ -409,16 +410,18 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
     bool merged = false
     // merge into an existing near-equal level: equal highs/lows hold MORE
     // resting orders than a lone extreme, so they are strengthened not doubled
-    // A level is only LIQUIDITY if it is on the side of price where stops
-    // would rest: highs above, lows below. Higher-timeframe pivots, the weekly
-    // extremes and session extremes are all delivered LATE - an M15 pivot high
-    // arrives about 90 minutes after it formed, by which time an uptrend is
-    // already above it. Registered anyway, minLvlAge then made it eligible and
-    // the next close "swept" a level price had cleared an hour earlier,
-    // manufacturing a BREAK long against it and filing it for RETESTs after
-    // that. Wrong-side levels are simply not registered.
-    if (isHigh and p <= close) or (not isHigh and p >= close)
-        merged := true          // swallow it: nothing is drawn, nothing fires
+    // A level on the WRONG SIDE of price - a pivot high already below us,
+    // because higher-timeframe and weekly extremes arrive late - is still a
+    // real level worth SEEING. Broken resistance becomes support; that is half
+    // of structure trading. What it must not do is arm a sweep: it would be
+    // "broken" the moment it is registered, manufacturing a signal against a
+    // level price cleared an hour ago.
+    //
+    // So it is registered and drawn like any other, and marked dead on arrival.
+    // Dead levels are excluded from the sweep loops but still show on the chart
+    // and still work as retest and flip zones. Not drawing them at all was an
+    // over-correction that removed levels Veer wants to see.
+    bornDead = (isHigh and p <= close) or (not isHigh and p >= close)
 
     tol = eqTol * atr
     if array.size(px) > 0
@@ -431,7 +434,7 @@ addLevel(array<float> px, array<int> bar, array<int> hits, array<bool> dead,
         array.push(px, p)
         array.push(bar, b)
         array.push(hits, 1)
-        array.push(dead, false)
+        array.push(dead, bornDead)
         array.push(stk, sticky)
         ln = line.new(b, p, bar_index + 3, p, style = line.style_dotted, width = 1,
              color = showLvls ? (isHigh ? cBsl : cSsl) : HIDDEN)
@@ -1770,6 +1773,105 @@ if showTable and barstate.islast and array.size(hDir) > 0
     recCell(4, exRow, "-" + str.tostring(totLeft, "#.##"),
          color.new(#FFB300, 0), false)
     recCell(5, exRow, "left behind", chart.fg_color, true)
+
+// ═══════════════════ THE ORDER BOOK — where to actually place ═══════════════
+// "sell limits buy limits stops if it can produce that".
+//
+// Four orders, derived from the nearest LIVE level on each side of price:
+//   BUY LIMIT   at support        - buy the level, betting it holds
+//   SELL LIMIT  at resistance     - sell the level, betting it holds
+//   BUY STOP    above resistance  - buy the break, betting it does not
+//   SELL STOP   below support     - sell the break
+//
+// The limits and the stops are opposite bets on the same two prices, which is
+// the point: whichever way the level resolves, the order for it is already
+// worked out. Each row carries its stop, its target, the R:R that implies, and
+// what the zone did the last times price was there - so a row with a bad R:R
+// or a zone that has broken three times can be skipped on sight.
+showOrders = input.bool(true, "Show the order book (limits and stops)", group = gD)
+orderBuf   = input.float(0.15, "   place stops this far beyond the level (× ATR)",
+     minval = 0.02, step = 0.01, group = gD,
+     tooltip = "A buy stop sitting exactly on the level gets filled by the wick that tests it. This pushes it far enough beyond that only a real break triggers it.")
+
+var table obook = table.new(position.top_left, 6, 5, frame_width = 1,
+     frame_color = color.new(color.gray, 60), border_width = 1,
+     border_color = color.new(color.gray, 85))
+
+oCell(int c, int r, string txt, color col, bool head) =>
+    table.cell(obook, c, r, txt, text_size = size.tiny,
+         text_halign = c == 0 ? text.align_left : text.align_right,
+         text_color = head ? color.new(chart.fg_color, 30) : col,
+         bgcolor = color.new(chart.bg_color, 5))
+
+// Both the lines AND the labels are tracked. barstate.islast re-runs on every
+// tick of the forming bar, so anything drawn here without being deleted first
+// accumulates once per tick until the drawing cap evicts something else.
+var array<line>  oLines = array.new_line()
+var array<label> oLabs  = array.new_label()
+
+clearOrders() =>
+    while array.size(oLines) > 0
+        l9 = array.shift(oLines)
+        if not na(l9)
+            line.delete(l9)
+    while array.size(oLabs) > 0
+        b9 = array.shift(oLabs)
+        if not na(b9)
+            label.delete(b9)
+    0
+
+drawOrder(float px, string txt, color col) =>
+    array.push(oLines, line.new(bar_index, px, bar_index + 12, px,
+         color = col, style = line.style_dotted, width = 1))
+    array.push(oLabs, label.new(bar_index + 12, px, txt,
+         style = label.style_label_left, color = color.new(color.white, 100),
+         textcolor = col, size = size.tiny))
+    0
+
+// A Pine function CANNOT be declared inside an if block - it must live at
+// global scope. Defining this one inside the `if showOrders` body would not
+// have compiled.
+oRow(int r, string nm, float en, float sl2, float tp2, color col,
+     float zp, bool zhi) =>
+    if na(en) or na(sl2) or na(tp2)
+        oCell(0, r, nm, color.new(chart.fg_color, 65), false)
+        for cc = 1 to 5
+            oCell(cc, r, "-", color.new(chart.fg_color, 65), false)
+    else
+        rk2 = math.abs(en - sl2)
+        rr2 = rk2 > 0 ? math.abs(tp2 - en) / rk2 : 0.0
+        zt2 = zoneText(zp, zhi)
+        oCell(0, r, nm, col, false)
+        oCell(1, r, str.tostring(en, format.mintick), col, false)
+        oCell(2, r, str.tostring(sl2, format.mintick), color.new(chart.fg_color, 40), false)
+        oCell(3, r, str.tostring(tp2, format.mintick), color.new(chart.fg_color, 40), false)
+        oCell(4, r, str.tostring(rr2, "#.#"),
+             rr2 >= 2 ? accBull : rr2 >= 1 ? color.new(#FFB300, 0) : accBear, false)
+        oCell(5, r, zt2 == "" ? "no record" : zt2, color.new(chart.fg_color, 40), false)
+        drawOrder(en, nm + "  " + str.tostring(en, format.mintick), col)
+    0
+
+if showOrders and barstate.islast
+    clearOrders()
+    res = nextLiq(true)
+    sup = nextLiq(false)
+    buf = orderBuf * atr
+
+    oCell(0, 0, "order",  chart.fg_color, true)
+    oCell(1, 0, "entry",  chart.fg_color, true)
+    oCell(2, 0, "stop",   chart.fg_color, true)
+    oCell(3, 0, "target", chart.fg_color, true)
+    oCell(4, 0, "R:R",    chart.fg_color, true)
+    oCell(5, 0, "this zone before", chart.fg_color, true)
+
+    oRow(1, "BUY LIMIT",  sup, na(sup) ? na : sup - slBuf * atr, res, accBull, sup, false)
+    oRow(2, "SELL LIMIT", res, na(res) ? na : res + slBuf * atr, sup, accBear, res, true)
+    oRow(3, "BUY STOP",   na(res) ? na : res + buf,
+         na(res) ? na : res - slBuf * atr,
+         na(res) or na(sup) ? na : res + buf + (res - sup), accBull, res, true)
+    oRow(4, "SELL STOP",  na(sup) ? na : sup - buf,
+         na(sup) ? na : sup + slBuf * atr,
+         na(res) or na(sup) ? na : sup - buf - (res - sup), accBear, sup, false)
 
 // ══════════════════ WHICH SETUP IS ACTUALLY PAYING YOU ══════════════════════
 // The question this answers is "I do not know which setups to take".
