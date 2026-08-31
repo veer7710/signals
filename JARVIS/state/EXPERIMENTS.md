@@ -966,3 +966,52 @@ that is NOT itself ATR-scaled. That means a target fixed in price terms - a
 money target, or a LEVEL-based target, where the distance to the next level is
 set by market structure rather than by current volatility. That is the next
 experiment and it is now the highest-value open question in the project.
+
+## E-040 — The cost floor: which instrument and holding period are viable at all
+`python3 JARVIS/research/cost_floor.py`. Median absolute move over N bars
+divided by round-trip cost, per market and timeframe. Asked BEFORE any strategy
+question because it constrains all of them: a signal cannot fix an instrument
+whose typical move does not clear its own spread.
+
+Move as a multiple of cost, at a ONE-BAR hold:
+
+| market | 15m | 1h |
+|---|---|---|
+| **GOLD** | **8.0x** | **9.7x** |
+| US500 | 3.9x | 6.1x |
+| EURUSD | **0.8x** | 2.3x |
+| GBPUSD | **1.0x** | 2.3x |
+
+**GOLD is structurally the right instrument and it is not close.** A single 15m
+gold bar covers its own cost eight times over. A single 15m EURUSD bar does not
+cover it at all - the median move is 0.8x the spread, so the average trade is
+behind before it starts.
+
+This is a property of the instrument, not of any strategy, and it explains
+every FX result in this repo without reference to signals. It also retires the
+question: **do not trade FX at short holds.** No entry pattern can repair a
+0.8x cost ratio.
+
+FX only becomes workable at 8h+ holds (EURUSD 1h at 8 bars = 7.3x). That is a
+different business from the one being built.
+
+### Implied M1 gold — EXTRAPOLATED, NOT MEASURED
+No M1 data exists here. Range scales with the square root of time under a
+random walk, and E-037 found these series ARE statistically random walks, so
+the scaling is better justified than usual - but it is an inference and it
+stops being one when the M1 export arrives.
+
+| hold | implied move | x cost |
+|---|---|---|
+| **1 minute** | 0.83 | **2.1x** |
+| 3 minutes | 1.43 | 3.6x |
+| 5 minutes | 1.85 | 4.6x |
+| 10 minutes | 2.61 | 6.5x |
+| 15 minutes | 3.20 | 8.0x |
+
+A one-minute hold on gold has roughly **twice the spread** to work with. Not
+impossible, but nothing sloppy survives it - and it is a mechanical explanation
+for why an M1 scalp that looks right on the chart still bleeds. **Holding
+minutes rather than seconds is what buys the room**, and the live evidence
+(12 trades, zero TPs, -0.58R) is consistent with trades being cut before they
+ever had cost-adjusted room to work.
