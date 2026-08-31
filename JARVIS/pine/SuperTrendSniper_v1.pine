@@ -73,7 +73,8 @@ sessTo   = input.int(20, "   to hour",   minval = 0, maxval = 23, group = gFl)
 
 // ──────────────────────────────── RISK / EXITS ──────────────────────────────
 gR = "RISK"
-stopAtr  = input.float(1.5, "Stop distance (× ATR)", minval = 0.2, step = 0.1, group = gR)
+stopAtr  = input.float(1.5, "Stop distance (× ATR)", minval = 0.2, step = 0.1, group = gR,
+     tooltip = "MEASURED HEAT: of the signals that eventually reached +1R, the median first drew down 0.35R against the entry, 25% drew down more than 0.59R and 10% more than 0.85R. So a stop tighter than about 0.9R is not protection - it is a coin flip on noise that removes one winner in ten. That is the arithmetic behind 'it stopped me out and then went'.")
 targetR  = input.float(3.0, "Take profit (× risk)",  minval = 0.5, step = 0.25, group = gR)
 
 gE = "EXITS  (this is what was rebuilt)"
@@ -117,8 +118,9 @@ revMinR    = input.float(0.0, "   only when the trade is this far in profit (R)"
 
 gN = "ENTRY QUALITY  (better fills, less drawdown)"
 usePull  = input.bool(false, "Wait for a better price instead of chasing", group = gN,
-     tooltip = "Market entry takes the next open, which after a displacement candle is often the worst price of the move - that is where the immediate drawdown comes from. This instead waits for price to come BACK a little and fills there. You get a tighter entry and a smaller stop. You will also MISS the setups that never pull back, and some of those are the biggest ones. It is a genuine trade-off, which is why it is off by default.")
-pullAtr  = input.float(0.30, "   how far back to wait (× ATR)", minval = 0.05, step = 0.05, group = gN)
+     tooltip = "NOW MEASURED. On GOLD 1h, 71.7% of signals close back THROUGH the signal price within 3 bars, so a resting limit gets filled most of the time. Out-of-sample expectancy: market entry +0.321R, waiting 0.30 ATR +0.451R, waiting 0.50 ATR +0.473R. The cost is real - 23% of signals never came back at 0.30 ATR and were missed entirely. Note the honest wrinkle: IN-sample the market entry looked BETTER (+0.208 vs +0.182), so the two halves disagree and t = +2.47 is still under this repo's 3.65 luck threshold. Off by default because you asked for frequency; turn it on if immediate drawdown is your complaint.")
+pullAtr  = input.float(0.30, "   how far back to wait (× ATR)", minval = 0.05, step = 0.05, group = gN,
+     tooltip = "0.30 measured best per filled trade on GOLD 1h out-of-sample. 0.50 scored marginally higher (+0.473 vs +0.451) but missed 37% of signals instead of 23%.")
 pullBars = input.int(3, "   give up waiting after this many bars", minval = 1, maxval = 20, group = gN)
 maxChase = input.float(0.50, "MISSED IT if price already ran this far ahead", minval = 0.1, step = 0.1, group = gN,
      tooltip = "THE SLOW-CHART PROTECTION. TradingView can be late, you can be looking away, the alert can arrive after the move. If price has already travelled this much of your risk in the signal's direction before you get filled, the trade is no longer the trade you were shown - the reward is smaller and the stop is further away. It is marked MISSED instead of taken. This is the single best defence against entering late.")

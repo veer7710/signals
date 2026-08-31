@@ -777,3 +777,48 @@ then, so every "shipped and working" claim about them is unverified.
 
 Status: both files UNPROVEN and currently UNLOADABLE. Full defect list with
 triggers in the review transcript.
+
+## E-035 — Entry quality: heat, fakeouts, and whether waiting pays
+`python3 JARVIS/research/entry_quality.py`. SuperTrend+DEMA signals, next-bar
+fills, first touch, ties lose, per-symbol costs, chronological 70/30 split.
+
+**HEAT.** Of signals that eventually reached +1R, how far they first went
+against the entry (in R):
+
+| market | median | p75 | p90 |
+|---|---|---|---|
+| GOLD 15m | 0.36 | 0.66 | 0.82 |
+| GOLD 1h | 0.35 | 0.59 | 0.85 |
+| US500 15m | 0.43 | 0.61 | 0.78 |
+
+A stop tighter than ~0.85R removes one eventual winner in ten. This is the
+arithmetic behind "it stopped me out and then went".
+
+Not reported, because it is a tautology: "share that went more than 1R against
+you" is 0% by construction, since MAE is measured until the stop and the stop
+sits at 1R.
+
+**FAKEOUTS.** Share of signals that close back THROUGH the signal price within
+3 bars: GOLD 15m 71.1%, GOLD 1h 71.7%, US500 15m 79.0%. Most signals retrace
+through their own entry almost immediately.
+
+**WAITING FOR A BETTER PRICE** (GOLD 1h, in-sample -> out-of-sample expectancy):
+
+| entry | IS | OOS | OOS t | never filled |
+|---|---|---|---|---|
+| market, next open | +0.208 | +0.321 | +2.05 | 0% |
+| wait 0.15 ATR | +0.187 | +0.393 | +2.34 | 11% |
+| **wait 0.30 ATR** | +0.182 | **+0.451** | **+2.47** | 23% |
+| wait 0.50 ATR | +0.131 | +0.473 | +2.37 | 37% |
+| wait 0.75 ATR | +0.125 | +0.332 | +1.41 | 55% |
+
+**Verdict: PROMISING, not proven.** Waiting improves OOS expectancy on gold and
+the mechanism is consistent with the 71.7% fakeout rate - if price comes back
+through the entry that often, a resting limit fills most of the time at a better
+price. But the two halves DISAGREE (in-sample the market entry looked better),
+and t = +2.47 is below the 3.65 multiple-testing threshold. On US500 and both FX
+pairs every entry style is negative, so this is a gold result, not a general one.
+
+The Pine default stays OFF (Veer prioritises signal count) with the measured
+numbers written into the tooltip so the trade-off is visible at the point of
+decision. pullAtr default set to the measured best, 0.30.
