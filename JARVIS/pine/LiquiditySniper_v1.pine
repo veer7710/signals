@@ -168,9 +168,9 @@ needRetest = input.bool(false, "Wait for a retest of the broken level", group = 
 retestBars = input.int(8,   "   retest must happen within (bars)", minval = 1, maxval = 30, group = gS)
 
 gP = "SIGNAL FREQUENCY"
-entryCool = input.int(3, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
+entryCool = input.int(1, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
      tooltip = "A setup condition that stays true for four bars in a row is ONE idea, not four. Without this the indicator queued a fresh entry on each of those bars and you ended up with three positions on the same trade, three stops under the same swing, and three times the risk you thought you had.")
-maxTrades = input.int(3, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
+maxTrades = input.int(4, "Max concurrent setups", minval = 1, maxval = 6, group = "SIGNAL FREQUENCY",
      tooltip = "The single biggest limiter on how many entries you see. At 1 the indicator sits idle through every setup that appears while a trade is already open - which on a trending day is most of them.")
 preset = input.string("Balanced", "Preset",
      options = ["Sniper (fewest, best measured)", "Balanced", "Scalper (most signals)", "Manual"],
@@ -194,7 +194,8 @@ gR = "RISK"
 slBuf     = input.float(0.30, "Stop beyond sweep extreme (× ATR)", minval = 0, step = 0.05, group = gR)
 tpMode    = input.string("Next liquidity", "Target", options = ["Next liquidity", "Fixed R"], group = gR)
 tpR       = input.float(2.0, "   fixed R multiple", minval = 0.5, step = 0.25, group = gR)
-minR      = input.float(1.2, "Reject setup if R:R below", minval = 0.5, step = 0.1, group = gR)
+minR      = input.float(1.0, "Reject setup if R:R below", minval = 0.5, step = 0.1, group = gR,
+     tooltip = "Lowered from 1.2, and the reason is measured rather than a preference: the 'needs room to run' idea was tested on its own across 8 markets and came out NEGATIVE in 5 of them (-0.097R median). Demanding a big R:R before entry was costing setups without buying quality, so the floor is lower and you judge the trade on the order book's R:R column instead.")
 maxRiskAtr= input.float(2.5, "Reject setup if stop wider than (× ATR)", minval = 0.5, step = 0.1, group = gR)
 
 gT = "LIVE TRADING (manual)"
@@ -254,7 +255,7 @@ HIDDEN  = color.new(color.gray, 100)
 cTp     = color.new(accBull, 88)
 cSl     = color.new(accBear, 88)
 showPanel = input.bool(true, "Show status panel", group = gD)
-cleanMode = input.bool(false, "CLEAN MODE - levels, signals and the order book only",
+cleanMode = input.bool(true, "CLEAN MODE - levels, signals and the order book only",
      group = gD,
      tooltip = "Hides the zone-record labels, the setup-name labels, the trend line and the two history tables. What is left is the levels, the buy/sell marks, the position boxes, the panel and the order book. Use it when you want to read price rather than read the indicator.")
 showWhy   = input.bool(true, "Label each signal with which setup it was", group = gD)
@@ -689,6 +690,23 @@ zoneText(float p, bool isHigh) =>
              : str.tostring(h) + " held / " + str.tostring(b) + " broke  ~"
                + str.tostring(avg, "#.#") + "pt"
     t
+
+// Sweep marks are permanent labels, one per sweep. On M1 that is hundreds in a
+// session, which buries the chart and eats the 500-label budget until
+// TradingView starts deleting other things instead. Only the recent ones stay.
+//
+// Defined HERE, above the sweep loops that call it. Pine is single-pass: a
+// function must appear before its first use, and having this further down the
+// file is what produced "Could not find function or function reference".
+var array<label> swLabs = array.new_label()
+
+keepSweep(label l) =>
+    array.push(swLabs, l)
+    while array.size(swLabs) > 25
+        l0 = array.shift(swLabs)
+        if not na(l0)
+            label.delete(l0)
+    0
 
 // ───────────────────────────── SWEEP DETECTION ──────────────────────────────
 // A break is: price takes out a level that is old enough to hold orders, and
@@ -1228,10 +1246,15 @@ openTrade(int d, float en, float sl, float tp, string setup) =>
     array.push(trTrs, float(na))
     array.push(trMfe, 0.0)
     array.push(trTrl, line(na))
+    // Borders, not just a wash of colour: the edge of the target box IS the
+    // take profit and the edge of the stop box IS the stop, so they should be
+    // lines you can read a price off rather than a fade into the background.
     array.push(trBxT, box.new(bar_index, math.max(en, tp), bar_index + 2,
-         math.min(en, tp), border_color = na, bgcolor = cTp))
+         math.min(en, tp), bgcolor = color.new(accBull, 85),
+         border_color = color.new(accBull, 30), border_width = 1))
     array.push(trBxS, box.new(bar_index, math.max(en, sl), bar_index + 2,
-         math.min(en, sl), border_color = na, bgcolor = cSl))
+         math.min(en, sl), bgcolor = color.new(accBear, 85),
+         border_color = color.new(accBear, 30), border_width = 1))
     // the line the user asked for: drawn at the price actually obtainable,
     // and extended every bar so the trade is trackable from entry to close
     array.push(trEnl, line.new(bar_index, en, bar_index + 2, en, width = 2,
@@ -1610,18 +1633,6 @@ perDay   = spanDays > 0.5 ? nSigAll / spanDays : na
 // ──────────────── ZONE RECORD LABELS — the history, on the chart ────────────
 // Drawn only on the last bar so they cost one label per level, not one per bar.
 var array<label> zLabs = array.new_label()
-// Sweep marks are permanent labels, one per sweep. On M1 that is hundreds in a
-// session, which both buries the chart and eats the 500-label budget until
-// TradingView starts deleting other things. Only the recent ones are kept.
-var array<label> swLabs = array.new_label()
-
-keepSweep(label l) =>
-    array.push(swLabs, l)
-    while array.size(swLabs) > 25
-        l0 = array.shift(swLabs)
-        if not na(l0)
-            label.delete(l0)
-    0
 
 // A level that has been touched more than once is an EQUAL HIGH or EQUAL LOW -
 // the strongest liquidity there is, because every one of those touches left

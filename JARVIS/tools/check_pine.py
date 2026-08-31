@@ -43,6 +43,34 @@ IDENT = re.compile(r'(?<![\w.])([a-zA-Z_]\w*)(?![\w(])')
 # -------------------------------------------------- line continuations
 
 # ------------------------------------------------- functions inside blocks
+
+# --------------------------------------------- user functions called too early
+def check_call_order(src):
+    """A user function must be DEFINED before it is called - Pine is
+    single-pass. The identifier scan cannot catch this: its regex deliberately
+    skips any name followed by '(' so that builtins like math.max do not get
+    flagged, which means a function call is never checked for ordering at all.
+    That hole shipped 'Could not find function or function reference keepSweep'
+    to the user, so it gets its own check."""
+    defs = {}
+    for i, l in enumerate(src, 1):
+        m = re.match(r'^([a-zA-Z_]\w*)\s*\([^)]*\)\s*=>', l.split("//")[0])
+        if m and m.group(1) not in defs:
+            defs[m.group(1)] = i
+    out = []
+    for i, l in enumerate(src, 1):
+        code = re.sub(r'"(\\.|[^"\\])*"', '""', l.split("//")[0])
+        if re.match(r'^[a-zA-Z_]\w*\s*\([^)]*\)\s*=>', code):
+            continue                       # the definition itself
+        for fn, dline in defs.items():
+            if i < dline and re.search(r'(?<![\w.])' + fn + r'\s*\(', code):
+                out.append((i, f"FUNCTION '{fn}' CALLED BEFORE IT IS DEFINED "
+                               f"(defined line {dline}; Pine is single-pass)",
+                            l.strip()[:60]))
+                break
+    return out
+
+
 def check_nested_func(src):
     """A Pine function must be declared at GLOBAL scope. Declaring one inside
     an if/for body does not compile, and it is an easy mistake because the
@@ -292,6 +320,7 @@ def check(path):
                 continue
             problems.append((i, name, l.strip()[:70]))
 
+    problems += check_call_order(src)
     problems += check_nested_func(src)
     problems += check_continuation(src)
     problems += check_var_offset(src)

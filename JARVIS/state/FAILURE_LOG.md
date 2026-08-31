@@ -166,3 +166,26 @@ because they are specific and ordered. Two rules follow: write after every
 edit, and verify the artifact afterwards rather than reading the log. This is
 the same failure family as L-009 - trusting a proxy for the thing instead of
 the thing.
+
+## F-008 — A function defined after its first call; the checker could not see it
+Veer pasted the indicator and got `Could not find function or function
+reference 'keepSweep'` at line 718. `keepSweep` was defined at line 1618 and
+called at 718. Pine is single-pass: a function must appear before its first use.
+
+WHY THE CHECKER MISSED IT, and this one is structural. The identifier scan uses
+`(?<![\w.])([a-zA-Z_]\w*)(?![\w(])` - the trailing `(?!\()` deliberately skips
+any name followed by an opening bracket, so that builtins like `math.max(` are
+not reported as undeclared. The side effect is that a FUNCTION CALL is never
+examined at all, by the existence check or the ordering check. Every user
+function call in both files was invisible to the tool.
+
+Fixed with a dedicated `check_call_order`: collect every `name(...) =>`
+definition line, then flag any call appearing earlier in the file.
+Regression-tested against a file containing exactly this fault.
+
+This is the third distinct compile rule the checker has learned by first
+letting a real failure through: illegal line wrapping (F-006), then `:=`
+treated as a declaration (F-007), now function calls excluded from scanning.
+Each hole was invisible until a specific file fell into it, which is the
+argument for keeping every regression case rather than deleting them once
+green.
