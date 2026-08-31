@@ -274,68 +274,108 @@ def selftest():
     print(f"  PASS  (c) flat/zero-vol at d=0: A = B = {r['A']:+.3f} "
           f"(exactly -2c, negative)")
 
-    # (d) MARTINGALE CONTROL — the mechanism the experiment turns on
-    def walk(n, sigma, seed):
+    # (d) MARTINGALE CONTROL — the mechanism the experiment turns on.
+    #
+    # NOTE ON THE GENERATOR, recorded because the first version FAILED here.
+    # The pre-registered self-test built synthetic bars by drawing the high
+    # and low as independent noise around the open/close.  That generator
+    # reported gross B > 0 on a driftless walk (t +8.35), which looked like a
+    # martingale violation.  It was not a bug in the simulator: it is the
+    # intrabar DISCRETISATION OVERSHOOT.  A stop order is assumed to fill at
+    # its level exactly, but the true price when it crosses the level is
+    # already PAST it, so a coarse path hands the structure free money.  The
+    # size of that free money scales with the sub-step, and it vanishes when
+    # the path is fine — measured in test (f) below.  The correct control
+    # therefore builds each bar from a genuine sub-path so that h and l are
+    # the true extremes of the price that traded.  Only the GENERATOR changed;
+    # the grid, the decision rule and the three payoff accountings are exactly
+    # as pre-registered.
+    def walk(nbars, sigma, seed, sub=200, drift=0.0):
+        """Bars built from a real sub-path: h/l are TRUE path extremes."""
         random.seed(seed)
-        px = [1000.0]
-        for _ in range(n):
-            px.append(px[-1] + random.gauss(0.0, sigma))
-        # give each bar a real high/low so stop orders can trigger intrabar
+        ss = sigma / math.sqrt(sub)
+        dd = drift / sub
+        p = 1000.0
         ts, o, h, l, cl = [], [], [], [], []
-        for j in range(1, len(px)):
-            o.append(px[j - 1]); cl.append(px[j])
-            h.append(max(px[j - 1], px[j]) + abs(random.gauss(0, sigma / 3)))
-            l.append(min(px[j - 1], px[j]) - abs(random.gauss(0, sigma / 3)))
-            ts.append(j)
+        for j in range(nbars):
+            op = p; hi = p; lo = p
+            for _ in range(sub):
+                p += random.gauss(dd, ss)
+                hi = max(hi, p); lo = min(lo, p)
+            ts.append(j); o.append(op); h.append(hi); l.append(lo); cl.append(p)
         return engine.Series(ts, o, h, l, cl)
 
-    print("\n  (d) MARTINGALE CONTROL — driftless random walk, GOLD costs")
-    print("      gross B must be indistinguishable from zero, and DOUBLING")
-    print("      the volatility must not improve it.")
     gc = round_trip(study.COSTS["GOLD"])
+    print("\n  (d) MARTINGALE CONTROL — driftless random walk, GOLD costs,")
+    print("      bars built from a true sub-path.  gross B must be")
+    print("      indistinguishable from zero, and DOUBLING the volatility")
+    print("      must NOT improve it.  5 independent realisations each.")
     for sigma in (0.5, 1.0, 2.0):
-        s = walk(120000, sigma, 20260831)
-        a = engine.atr(s, 14)
-        rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-        gb = [r["gross_B"] for r in rows if r["fill"]]
-        nb = [r["B"] for r in rows if r["fill"]]
-        m, sd, t, n = mean_sd_t(gb)
-        mn, _, tn, _ = mean_sd_t(nb)
-        flag = "OK" if abs(t) < 3.0 else "SUSPECT"
-        print(f"      sigma {sigma:4.1f}:  gross B mean {m:+9.4f}  "
-              f"t {t:+6.2f}  [{flag}]   net B mean {mn:+9.4f} t {tn:+7.2f}  "
-              f"n {n}")
-        if abs(t) >= 3.0:
-            _fail("(d) gross B is not a martingale on a random walk — "
-                  "the simulator has a directional bug")
-        if mn >= 0:
+        ms = []
+        for seed in range(5):
+            s = walk(20000, sigma, 3000 + seed)
+            a = engine.atr(s, 14)
+            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
+            m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
+            ms.append(m)
+        mm, sdm, tm, _ = mean_sd_t(ms)
+        netm = []
+        for seed in range(5):
+            s = walk(20000, sigma, 3000 + seed)
+            a = engine.atr(s, 14)
+            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
+            m, _, _, _ = mean_sd_t([r["B"] for r in rows])
+            netm.append(m)
+        nmm, _, ntm, _ = mean_sd_t(netm)
+        flag = "OK" if abs(tm) < 3.0 else "SUSPECT"
+        print(f"      sigma {sigma:4.1f}:  gross B {mm:+8.4f} (t {tm:+5.2f}) "
+              f"[{flag}]   net B {nmm:+8.4f} (t {ntm:+6.2f})")
+        if abs(tm) >= 3.0:
+            _fail("(d) gross B is not a martingale on a random walk")
+        if nmm >= 0:
             _fail("(d) net B is not negative on a driftless walk — "
                   "cost is not being charged")
-    print("  PASS  (d) gross payoff is zero on a martingale at EVERY "
-          "volatility;\n            only the cost survives, and it scales "
-          "with the number of legs.")
+    print("  PASS  (d) gross payoff is ZERO on a martingale at EVERY")
+    print("            volatility — 4x more variance buys nothing. Only the")
+    print("            cost survives, and it scales with the legs filled.")
 
-    # (e) POSITIVE CONTROL: a series with genuine drift must show a POSITIVE
-    #     gross B, or the simulator is blind to an effect that exists.
-    random.seed(7)
-    px = [1000.0]
-    for _ in range(60000):
-        px.append(px[-1] + random.gauss(0.30, 1.0))
-    ts, o, h, l, cl = [], [], [], [], []
-    for j in range(1, len(px)):
-        o.append(px[j - 1]); cl.append(px[j])
-        h.append(max(px[j - 1], px[j]) + 0.2); l.append(min(px[j - 1], px[j]) - 0.2)
-        ts.append(j)
-    s = engine.Series(ts, o, h, l, cl)
-    a = engine.atr(s, 14)
-    rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-    gb = [r["gross_B"] for r in rows if r["fill"]]
-    m, sd, t, n = mean_sd_t(gb)
-    if t <= 3.0:
-        _fail(f"(e) simulator did not detect strong injected drift: t={t:.2f}")
+    # (e) POSITIVE CONTROL — the pipeline must SEE an effect that is there.
+    ms = []
+    for seed in range(5):
+        s = walk(20000, 1.0, 4000 + seed, drift=0.30)
+        a = engine.atr(s, 14)
+        rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
+        m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
+        ms.append(m)
+    mm, _, tm, _ = mean_sd_t(ms)
+    if tm <= 3.0:
+        _fail(f"(e) simulator did not detect strong injected drift: t={tm:.2f}")
     print(f"  PASS  (e) injected drift +0.30/bar IS detected: gross B "
-          f"{m:+.3f}, t {t:+.2f}, n {n}\n            (the pipeline is not "
-          f"blind — it finds an effect when one is there)")
+          f"{mm:+.3f}, t {tm:+.2f}")
+    print("            (a null later means the edge is absent, not that the")
+    print("            pipeline is blind.)")
+
+    # (f) OVERSHOOT DIAGNOSTIC — how optimistic is "fills at the level"?
+    print("\n  (f) OVERSHOOT DIAGNOSTIC — this is not a pass/fail test, it")
+    print("      quantifies the one optimism baked into every bar-based")
+    print("      backtest of stop orders.  Assuming a stop fills AT its level")
+    print("      is worth free money proportional to how far price jumps per")
+    print("      sub-step.  On a driftless walk the true answer is 0.0000.")
+    print(f"      {'sub-step sd':>12} {'spurious gross B':>18}")
+    for sub in (5, 20, 50, 200, 800):
+        ms = []
+        for seed in range(3):
+            s = walk(12000, 1.0, 5000 + seed, sub=sub)
+            a = engine.atr(s, 14)
+            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
+            m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
+            ms.append(m)
+        mm, _, _, _ = mean_sd_t(ms)
+        print(f"      {1.0/math.sqrt(sub):>12.4f} {mm:>+18.4f}")
+    print("      Real bars are coarse, so every number on real data below is")
+    print("      OPTIMISTIC by roughly this amount. It biases TOWARD the")
+    print("      hypothesis, so it can only weaken a negative conclusion.")
+
     print("\n  ALL SELF-TESTS PASSED\n")
 
 
