@@ -65,3 +65,54 @@ Two rules now:
 Both checkers in `JARVIS/tools/` are regression-tested against the real bug
 they were written for — a checker that has never been shown to fail on known-
 bad input is not evidence of anything.
+
+## L-012 — Every stop-order backtest here is optimistic, and by how much is now known
+Found by the A4 agent while self-testing its own simulator on a driftless random
+walk: its gross payoff came back t +8.35 when it should have been zero. Not a
+simulator bug — **intrabar discretisation overshoot**. Assuming a stop order
+fills AT its level is free money, because by the time the level is crossed the
+true price is already past it. The bias shrank from +0.36 to +0.12 as the
+simulated path was refined, which is the signature of a discretisation artefact
+rather than an edge.
+
+This applies to every backtest in this repo, since all of them resolve stops by
+checking whether a bar's low or high crossed a level and then booking the fill
+at that level.
+
+**How much it matters, measured rather than assumed.** `engine.py` already
+charges half-spread plus slippage adversely on both fills (lines 194 and 215),
+so the effect is partly priced. Re-running the E-050 random-entry control at
+slippage from 0.05 up to 0.80 - sixteen times the default, cost rising 0.40 to
+1.90 - the signal stays inside the random band at every level:
+
+| slippage | signal | random median | random 95th | inside? |
+|---|---|---|---|---|
+| 0.05 | +0.321 | +0.220 | +0.424 | yes |
+| 0.20 | +0.312 | +0.211 | +0.415 | yes |
+| 0.80 | +0.275 | +0.174 | +0.377 | yes |
+
+So the optimism is real but does not carry any conclusion in this repo. It
+biases everything in the same direction, and every headline result here is
+already zero or negative — a bias toward optimism can only make a negative
+verdict safer. It would matter enormously the moment something looked positive,
+which is exactly when it must be remembered.
+
+## L-013 — Why nothing works, stated mathematically
+Also from A4, and it is the deepest result the project has produced. A spot
+position's payoff is LINEAR in price and every exit is a stopping time. By the
+optional stopping theorem, on a martingale ANY non-anticipating exit rule has
+zero expected gross return. E-037 measured these series to be martingales at
+15m and 1h.
+
+That is not one exit rule failing. It is the entire class of exit rules failing,
+for a reason that no amount of searching can overturn. Monetising volatility
+requires CONVEXITY, and convexity is the one thing a spot account cannot buy.
+
+Confirmed numerically: a straddle plus its fade equals exactly -2 x legs x cost,
+to 3.18e-13. There is no arrangement of spot positions that escapes it.
+
+The two live consequences: non-directional structure is closed for spot
+instruments and should not be revisited, and it reopens instantly if an
+options-capable account ever exists. The optional-stopping argument needs the
+martingale property, which was only measured at 15m and 1h - **M1 is not
+covered by it**, which is one more reason M1 is the strongest open branch.

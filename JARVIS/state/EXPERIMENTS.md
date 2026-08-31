@@ -1304,3 +1304,231 @@ E-037's martingale finding is measured at 15m and 1h only. If M1 shows genuine
 bid-ask-bounce autocorrelation, the series is not a martingale there and the
 optional-stopping argument does not apply. M1 remains the strongest open
 branch.
+
+## E-046 — How many live trades settle the scoreboard? The date is 2029, and the Pine only stores 30 trades
+(A7. E-046 was the assigned number and was still free when this was appended;
+E-042, E-044 and E-045 are reserved for concurrent agents.)
+
+`python3 JARVIS/research/test_engine.py` (ALL TESTS PASSED) then
+`python3 JARVIS/research/live_power.py`. A power/design calculation, not a
+backtest. **It authorises nothing — D-006 stands.**
+
+MISSION.md calls "which setup types Veer personally converts" the only live
+question with a real chance of a positive answer. Nobody had computed what it
+costs to answer. This does.
+
+### THE HEADLINE, first
+
+| question | trades needed PER SETUP TYPE | weeks at 4 trades/day over 8 types | date from 2026-08-31 |
+|---|---|---|---|
+| is this type CATASTROPHIC (-0.58R)? | **53** (sim 58) | 21 | **2027-01-26** |
+| is this type +0.25R? (optimistic sd) | **51** (sim 46) | 20 | **2027-01-20** |
+| is this type +0.25R? (backtest sd) | **371** (sim 371) | 148 | **2029-07-04** |
+| is this type +0.25R at the project's t=3.65? | **927** (sim 927) | 371 | **2033-10-08** |
+| is type A BETTER THAN type B by 0.25R? | **742** each (sim 742) | 297 | **2032-05-08** |
+
+Even with the 12/day cap fully saturated by an EA taking every signal, the
++0.25R question needs **49 weeks** and the ranking question **99 weeks**.
+
+**And none of those are reachable at all, because of the next finding.**
+
+### THE DESIGN IS CAPPED AT 30 TRADES — TOTAL, NOT PER TYPE
+`LiquiditySniper_v1.pine` line 1572:
+
+    while array.size(hDir) > 30
+        array.shift(hDir) ... array.shift(hSet) ...
+
+The completed-trade record is a **rolling 30-trade ring buffer shared by all
+eight setup types** — about 3.75 trades per type at steady state, against the
+53 per type the CHEAPEST useful question needs. The Pine state is also lost on
+every chart reload and cannot be exported. **As currently coded the scoreboard
+can never accumulate enough trades to answer anything, at any trade rate, ever.**
+It is a recent-form display. Right now it is decoration, and it will stay
+decoration until the trades are logged outside the chart.
+
+### THE NUISANCE PARAMETER, measured (this is what decides everything)
+Required n scales with (sd_R / edge)^2, so sd_R is the whole calculation.
+
+| population | n | exp R | **sd R** | IS sd | OOS sd |
+|---|---|---|---|---|---|
+| GAP FILL [GOLD 15m] | 167 | +0.042 | 1.713 | 1.627 | 1.810 |
+| PULLBACK [GOLD 15m] | 131 | +0.215 | 1.796 | 1.783 | 1.798 |
+| ORDER BLOCK [GOLD 15m] | 64 | +0.094 | 1.694 | 1.675 | 1.772 |
+| BREAKOUT [GOLD 15m] | 52 | -0.206 | 1.517 | 1.558 | 1.495 |
+| SUPERTREND SNIPER [GOLD 15m] | 116 | +0.126 | 1.795 | 1.771 | 1.834 |
+| GAP FILL [GOLD 1h] | 481 | +0.082 | 1.694 | 1.676 | 1.753 |
+| PULLBACK [GOLD 1h] | 530 | -0.101 | 1.674 | 1.648 | 1.745 |
+| SUPERTREND SNIPER [GOLD 1h] | 339 | +0.085 | 1.767 | 1.702 | 2.365 |
+
+(14 populations measured, 8 shown; per-symbol costs from `study.COSTS`,
+next-bar fills, first touch, ties lose. **Median sd_R = 1.694**, and it is
+stable across the chronological 70/30 split, which is the check that it is a
+nuisance parameter and not a fitted one.)
+
+**LIVE (LIVE_EVIDENCE.md, XAUUSD 3m, 12 SuperTrend trades):** only summary
+stats exist, so the R list was reconstructed — 8 stop-outs at -1R, 4 winners
+sharing the residual +1.1R. That gives exp **-0.575R**, sd **0.628**, with a
+95% bootstrap interval on the sd of **[0.368, 0.666]**. Equal-splitting the
+winners is the MINIMUM-variance reconstruction, so 0.628 is a **lower bound**
+and every n derived from it is a lower bound too. Both estimates are carried
+through the whole report; they differ by 2.7x and that ratio **squares** into
+the sample size (7.3x).
+
+### POWER GRID — trades per setup type, 80% power, one-sided
+(analytic n / simulated n from bootstrapping the measured, skewed R
+distribution; where they differ the simulated one is the answer)
+
+live sd 0.63 (optimistic bound):
+
+| true edge | t=2.00 | t=2.73 (Bonferroni, 8 types) | t=3.65 (project bar) |
+|---|---|---|---|
+| +0.10R | 319 / 287 | 504 / 454 | 796 / 796 |
+| +0.25R | 51 / 46 | 81 / 73 | 128 / 115 |
+| +0.50R | 13 / 12 | 21 / 17 | 32 / 26 |
+
+backtest sd 1.69 (the shape the Pine's own 3R payoff produces):
+
+| true edge | t=2.00 | t=2.73 (Bonferroni, 8 types) | t=3.65 (project bar) |
+|---|---|---|---|
+| +0.10R | 2318 / 2318 | 3671 / 3671 | 5791 / 6370 |
+| +0.25R | 371 / 371 | 588 / 588 | 927 / 927 |
+| +0.50R | 93 / 93 | 147 / 147 | 232 / 232 |
+
+**Correcting for the 8 parallel scoreboard rows costs 217 extra trades per
+type at +0.25R (371 -> 588). Meeting the project's own t=3.65 costs 556 extra
+(371 -> 927).** That is the sentence that should change behaviour.
+
+Full-precision check: backtest sd, +0.25R, t=3.65, n=927 -> empirical power
+**0.808** over 4000 bootstraps.
+
+### RANKING TWO SETUP TYPES IS THE EXPENSIVE QUESTION — and E-050 says it is the RIGHT one
+Two-sample, per type, backtest sd: gap 0.10R -> 4636 / 5100 each; gap 0.25R ->
+**742 / 742 each**; gap 0.50R -> 186 / 205 each (t=2.00). At t=3.65: 11581,
+1853, 464. E-050 established that a random entry on this payoff scores +0.202R,
+so "this type is above zero" is not the question — "this type beats the others
+on the same payoff" is, and it is **twice** the price.
+
+### WHAT THE SCOREBOARD CAN LEGITIMATELY DO FIRST — the cheap half
+Detecting a catastrophic type is one-sided and the effect is large, so it is
+far cheaper (analytic / simulated, backtest sd):
+
+| true edge | t=2.00 | t=1.645 (a=0.05) | t=2.50 (Bonferroni, 8) |
+|---|---|---|---|
+| -0.25R | 371 / 408 | 284 / 312 | 513 / 564 |
+| **-0.58R** (the live SuperTrend number) | 69 / 76 | **53 / 58** | 96 / 106 |
+| -1.00R | 24 / 30 | 18 / 22 | 33 / 41 |
+
+At the live sd 0.63 those fall to n=8 (-0.58R) and n=3 (-1.00R) at t=1.645.
+**So: kill-a-bad-setup needs 53-106 trades per type; rank-two-mediocre-setups
+needs 742-1853 per type. The two thresholds differ by roughly 14x, and only the
+first is reachable this decade.**
+
+### SEQUENTIAL RULE — errors simulated, not quoted
+One-sided Wald SPRT on per-trade R, H0 mu=0 vs H1 mu=-0.5R, designed alpha
+0.05 / beta 0.20, **no decision before 15 trades**, sd fixed at 1.694.
+4000 simulated paths per row, bootstrapped from the measured R distribution:
+
+| true expectancy | ABANDON | CLEAR | median n at decision |
+|---|---|---|---|
+| +0.00R | **0.041** | 0.959 | 27 |
+| -0.25R | 0.392 | 0.608 | 46 |
+| -0.50R | **0.831** | 0.169 | 40 |
+| -0.75R | 0.967 | 0.033 | 27 |
+| +0.25R | 0.000 | 1.000 | 18 |
+
+Realised false-abandon rate 0.041 against a design of 0.05. It kills a truly
+-0.5R setup type in a median of 40 trades. **CLEAR means "not catastrophic",
+it does not mean "profitable"** — clearing is not evidence of an edge.
+
+### AND WHAT HAPPENS WITHOUT A BOUNDARY — the reason this matters
+Watching the running t after every trade and acting when |t| crosses 2.0,
+under a true expectancy of **exactly zero**, 400 trades max:
+
+    P(ever declares POSITIVE) 0.131   P(ever declares NEGATIVE) 0.278
+    per-type false-claim rate 0.409 against a nominal 0.046
+    across 8 scoreboard rows: 0.985
+
+**When no setup type has any edge whatsoever, staring at the scoreboard and
+reacting produces at least one false verdict 98.5% of the time.** That is a
+9x inflation per type. The 12-trade judgement in LIVE_EVIDENCE.md is exactly
+this failure mode, and it is about to be repeated eight times in parallel.
+(The asymmetry — false NEGATIVE 0.278 vs false POSITIVE 0.131 — is the skewed
+3R payoff: the running mean sits below zero most of the time even when the
+true mean is zero.)
+
+### TRADE RATE, measured
+Raw signals per session day, GOLD, repo data: 15m — PULLBACK 9.48, GAP FILL
+5.79, DISCOUNT 4.37, GAP FILL+bias 3.48, ORDER BLOCK 1.29, BREAKOUT 1.21
+(**25.63 combined**); 1h — 6.91 combined. The live Pine caps at 12 signals/day
+with an 8-bar cooldown and max 2 concurrent, so the cap binds on 3m. Trades
+TAKEN is what the scoreboard records and is <= signals. Weeks at 5 trading
+days, per setup type:
+
+| trades/day taken (over 8 types) | catastrophe n=53 | +0.25R live sd n=51 | +0.25R backtest sd n=371 | +0.25R at t=3.65 n=927 | rank two types n=742 |
+|---|---|---|---|---|---|
+| 12 (cap saturated, EA) | 7w | 7w | 49w | 124w | 99w |
+| 8 | 11w | 10w | 74w | 185w | 148w |
+| **4 (realistic manual)** | **21w** | 20w | **148w** | 371w | 297w |
+| 2 | 42w | 41w | 297w | 742w | 594w |
+| 1 | 85w | 82w | 594w | >1000w | >1000w |
+
+### SELF-TESTS (printed, exit non-zero on failure — all PASSED)
+- POSITIVE CONTROL: true +0.25R at sd 1.694, analytic n 371 -> empirical power
+  **0.807**; at t=3.65, n 927 -> **0.794**. Target 0.80.
+- NEGATIVE CONTROL: true 0.00R, per-test alpha at t=2.00 measured **0.0219**
+  against a nominal 0.0228. Family-wise over 8 types: uncorrected **0.162**,
+  Bonferroni (t=2.73) **0.021**.
+- SEQUENTIAL CONTROL: SPRT designed for alpha 0.05, realised false-ABANDON
+  rate under a true 0.00R **0.0483**.
+
+### VERDICTS
+- **"The scoreboard as designed can rank which setup types Veer converts":
+  DISPROVEN.** Not by a marginal t — by arithmetic. 742-1853 trades per type
+  against a 30-trade shared ring buffer, and 99-297 weeks even if the buffer
+  were removed. It cannot happen this decade at this trade rate.
+- **"The scoreboard can flag a catastrophically bad setup type in months":
+  SUPPORTED** — 53-106 trades per type, 7-21 weeks at 4-12 trades/day, with a
+  simulated false-abandon rate of 0.041. Conditional on the trades being
+  logged somewhere that holds more than 30 of them.
+- **"12 trades can support a judgement about a strategy": DISPROVEN.** At the
+  live sd 0.628, 12 trades give a standard error of 0.181R; the observed
+  -0.575R is t = -3.17, which does clear t=2 — but the same procedure applied
+  to a true zero declares something 40.9% of the time per row.
+
+### WHAT WOULD HAVE TO CHANGE (concrete, in priority order)
+1. **Log trades outside the chart.** The 30-trade cap and the loss of state on
+   reload are fatal on their own. Nothing else matters until this is fixed.
+2. **Cut 8 setup types to 2-3 groups.** Trades per group triple or quadruple
+   AND the Bonferroni threshold falls from 2.73 to ~2.39, which together take
+   +0.25R detection from 588 trades per type to roughly 450 per group at 3-4x
+   the rate — the single largest available speed-up.
+3. **Shrink the payoff variance, not just the trade count.** sd 1.69 -> 0.63
+   cuts required n by 7.3x, more than any realistic increase in trade rate can.
+   A 3R-target payoff makes every trade a noisy measurement. This is a
+   MEASUREMENT argument for a tighter payoff, and is independent of E-043.
+4. **Run the SPRT above as the only live decision rule** — abandon-only, no
+   promotion, minimum 15 trades, and no reacting to the table between
+   boundaries.
+5. **Ask a cheaper question.** "Is any type catastrophic?" is answerable by
+   spring 2027. "Which type is best?" is not answerable before 2032.
+
+### LOGGING SCHEMA — if a field is not recorded it does not exist
+Per completed trade, one row, appended to a file that survives chart reload:
+`trade_id, utc_timestamp_signal, utc_timestamp_fill, utc_timestamp_exit,
+symbol, timeframe, setup_type, side, signalled_price, fill_price,
+slippage_R (fill vs signalled, in R), stop, target, planned_RR, exit_price,
+exit_reason (TP/SL/time/manual/opposite), R_realised, MFE_R, MAE_R, risk_ccy,
+lot_size, taken_by (manual|EA), and a free-text note`.
+Without `slippage_R` the manual-vs-EA question is unanswerable; without
+`MFE_R`/`MAE_R` no exit change can ever be evaluated retrospectively; without
+`setup_type` on every row the entire scoreboard question dies.
+
+### SCOPE AND CAVEATS
+Twenty-four power cells, six ranking cells, nine catastrophe cells and
+twenty-five calendar cells were computed — none is a test on market data, so
+there is no selection effect, but the sd that drives all of them comes from
+GOLD 15m/1h backtests in this repo plus a 12-observation live reconstruction.
+The live product trades 3m, for which **this repo has no data**; if 3m R
+dispersion differs from 1.69, every n moves with its square. Nothing here says
+whether Veer's discretion has an edge — only how long it would take to find
+out. **No live trade is authorised by any of it (D-006).**

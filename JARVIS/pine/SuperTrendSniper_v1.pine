@@ -52,14 +52,21 @@ stAtrLen = input.int(7,    "SuperTrend ATR length", minval = 1, maxval = 50, gro
 stMult   = input.float(1.2, "SuperTrend multiplier", minval = 0.2, step = 0.1, group = gS)
 useDema  = input.bool(true, "Require DEMA slope agreement", group = gS,
      tooltip = "A SuperTrend flip against the longer trend is the flip that gets reversed. The EA reads DEMA now against DEMA two bars ago; this does the same.")
-demaLen  = input.int(200,  "   DEMA length", minval = 10, maxval = 500, group = gS,
-     tooltip = "200 on M5 and above. The EA uses 60 on M1 and 100 on M3 - match whichever you run.")
+autoTf   = input.bool(true, "Scale settings to the chart timeframe", group = gS,
+     tooltip = "A LENGTH IS A DURATION, NOT A NUMBER. DEMA(200) is 200 minutes on M1 and 50 HOURS on M15 - the same input describes two completely different filters. With this on, every length below is expressed in MINUTES and converted to bars for whatever chart you are on, so M1, M5 and M15 all get the filter that was intended rather than the one the number happens to produce.")
+demaMins = input.int(3000, "   trend filter length (MINUTES)", minval = 30, maxval = 20000, group = gS,
+     tooltip = "3000 minutes = 50 hours. That is DEMA(200) on M15, DEMA(600) on M5 and DEMA(3000) on M1 - the same amount of market, whichever chart you load.")
+demaRaw  = input.int(200,  "   or a fixed bar count (auto off)", minval = 10, maxval = 5000, group = gS)
+barMins  = math.max(timeframe.in_seconds(timeframe.period) / 60.0, 0.1)
+demaLen  = autoTf ? math.max(10, math.round(demaMins / barMins)) : demaRaw
 showSt   = input.bool(true, "Draw the SuperTrend line", group = gS)
 
 gC = "CHOP GUARD  (the thing that costs the most money)"
 skipChop = input.bool(true, "Do not trade when the market is chopping", group = gC,
      tooltip = "SuperTrend(7, 1.2) is deliberately tight, which is why it catches moves early - and it is also why it whipsaws when price is going nowhere. A run of flips in a short window is not a series of signals, it is one range being cut up. Every one of those trades pays the spread and most pay the stop. This counts the flips and refuses to trade while they are stacking up.")
-chopLen  = input.int(50, "   look back this many bars", minval = 10, maxval = 300, group = gC)
+chopMins = input.int(750, "   look back this many MINUTES", minval = 30, maxval = 20000, group = gC)
+chopRaw  = input.int(50, "   or a fixed bar count (auto off)", minval = 10, maxval = 2000, group = gC)
+chopLen  = autoTf ? math.max(10, math.round(chopMins / barMins)) : chopRaw
 chopMax  = input.int(3,  "   choppy if more than this many flips in that window", minval = 1, maxval = 15, group = gC)
 
 gFl = "FILTERS  (these held out-of-sample)"
@@ -83,8 +90,10 @@ useTrail = input.bool(true, "ATR trail", group = gE,
 trailAtr = input.float(3.0, "   trail distance (× ATR)", minval = 0.5, step = 0.25, group = gE)
 trailArm = input.float(0.0, "   arm after (R in profit)", minval = 0, step = 0.25, group = gE)
 useTime  = input.bool(true, "Close a trade that stalls", group = gE)
-maxHold  = input.int(50, "   stalled after (bars)", minval = 5, maxval = 400, group = gE,
-     tooltip = "50 measured better than 20 on this strategy. Cutting winners early is a cost, not a safety feature.")
+holdMins = input.int(750, "   stalled after (MINUTES)", minval = 10, maxval = 20000, group = gE,
+     tooltip = "750 minutes = 12.5 hours, which is the 50 bars that measured better than 20 on M15. On M1 that same duration is 750 bars, not 50 - and 50 bars on M1 is 50 minutes, which cuts a trade off before it has had the room to work. E-040: a one-minute hold on gold has only about twice the spread to work with, so a short time cap at M1 is a mechanical way to lose.")
+maxHoldRaw = input.int(50, "   or a fixed bar count (auto off)", minval = 5, maxval = 2000, group = gE)
+maxHold  = autoTf ? math.max(5, math.round(holdMins / barMins)) : maxHoldRaw
 useBE    = input.bool(false, "Move stop to break-even", group = gE,
      tooltip = "LEAVE THIS OFF. It measured as the WORST exit rule on all four markets tested. It is here only so you can switch it on and watch it lose, rather than wonder.")
 beAtR    = input.float(1.5, "   break-even after (R)", minval = 0.25, step = 0.25, group = gE)

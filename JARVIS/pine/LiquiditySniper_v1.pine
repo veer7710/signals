@@ -65,7 +65,17 @@ pivFast   = input.int(2,    "   fast swing size", minval = 1, maxval = 10, group
 eqTol     = input.float(0.20, "Equal high/low tolerance (× ATR)", minval = 0.02, step = 0.02, group = gL)
 maxLevels = input.int(30,   "Max live levels per side", minval = 2, maxval = 60, group = gL,
      tooltip = "Raised because the ask was to mark out EVERY high and low. Structural levels are sticky and are never evicted while an ordinary one exists, so raising this adds detail without pushing the important levels off the chart.")
-lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, group = gL)
+// A LENGTH IS A DURATION, NOT A NUMBER. 500 bars is 8 hours on M1 and 5 DAYS
+// on M15 - the same input describes two completely different memories. With
+// auto on, these are expressed in MINUTES and converted for whatever chart is
+// loaded, so M1, M5 and M15 each get what was intended.
+autoTf    = input.bool(true, "Scale settings to the chart timeframe", group = gL,
+     tooltip = "Target timeframes are M1, M5 and M15, and a bar count means something different on each. Everything below marked MINUTES is converted to bars for the chart you are on.")
+barMins   = math.max(timeframe.in_seconds(timeframe.period) / 60.0, 0.1)
+ageMins   = input.int(7500, "Forget levels older than (MINUTES)", minval = 60, maxval = 200000, group = gL,
+     tooltip = "7500 minutes is about 5 days - the 500 bars that was intended on M15. On M1 that is 7500 bars; a 500-bar memory there is only 8 hours and throws away the levels that matter most.")
+ageRaw    = input.int(500, "   or a fixed bar count (auto off)", minval = 50, group = gL)
+lvlMaxAge = autoTf ? math.max(50, math.round(ageMins / barMins)) : ageRaw
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
 showSweeps = input.bool(true, "Mark every sweep on the chart", group = gL,
@@ -168,8 +178,12 @@ needRetest = input.bool(false, "Wait for a retest of the broken level", group = 
 retestBars = input.int(8,   "   retest must happen within (bars)", minval = 1, maxval = 30, group = gS)
 
 gP = "SIGNAL FREQUENCY"
-entryCool = input.int(8, "Wait this many bars between entries", minval = 0, maxval = 50, group = "SIGNAL FREQUENCY",
-     tooltip = "A setup condition that stays true for four bars in a row is ONE idea, not four. Without this the indicator queued a fresh entry on each of those bars and you ended up with three positions on the same trade, three stops under the same swing, and three times the risk you thought you had.")
+coolMins  = input.int(120, "Wait this many MINUTES between entries", minval = 0, maxval = 5000,
+     group = "SIGNAL FREQUENCY",
+     tooltip = "120 minutes is the 8 bars intended on M15. Expressed in bars it would be 8 minutes on M1, which is how 121 signals a day happened.")
+entryCoolRaw = input.int(8, "   or a fixed bar count (auto off)", minval = 0, maxval = 500,
+     group = "SIGNAL FREQUENCY")
+entryCool = autoTf ? math.max(0, math.round(coolMins / barMins)) : entryCoolRaw
 maxPerDay = input.int(12, "HARD CAP - signals per day", minval = 1, maxval = 200,
      group = "SIGNAL FREQUENCY",
      tooltip = "The backstop. Every other control is a gate, and gates interact - loosening six of them for six good reasons produced 120 signals a day and a chart nobody could read. A count cannot be argued with. If this is being hit every day the settings are too loose, and that is information rather than a limit to raise.")
@@ -220,7 +234,10 @@ useTrailExit = input.bool(true, "Close when the ATR trail is hit", group = gE,
      tooltip = "The trail only arms once the trade is in profit, and once armed it only ever moves in your favour. Hitting it closes the trade for whatever it is worth at that moment - which is usually less than TP and much more than nothing. Marked TRL in the record.")
 useTimeExit  = input.bool(true, "Close a trade that stalls", group = gE,
      tooltip = "A setup that has not resolved in this many bars has stopped being the setup you entered. Closing it frees the slot for one that is working. Marked TIME.")
-maxHoldBars  = input.int(40, "   stalled after (bars)", minval = 5, maxval = 300, group = gE)
+holdMins2    = input.int(600, "   stalled after (MINUTES)", minval = 10, maxval = 20000, group = gE,
+     tooltip = "600 minutes is 10 hours - the 40 bars intended on M15. On M1, 40 bars is 40 minutes, and E-040 measured that a one-minute hold on gold has only about twice the spread to work with. Cutting a trade off that early at M1 is a mechanical way to lose.")
+maxHoldRaw2  = input.int(40, "   or a fixed bar count (auto off)", minval = 5, maxval = 2000, group = gE)
+maxHoldBars  = autoTf ? math.max(5, math.round(holdMins2 / barMins)) : maxHoldRaw2
 useFlipExit  = input.bool(false, "Close on an opposite signal", group = gE,
      tooltip = "If a fresh signal fires the other way, the reason you are in the trade has gone. Off by default: on a choppy chart this closes good trades early. Marked FLIP.")
 
