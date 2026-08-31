@@ -6,26 +6,68 @@ branch of `HYPOTHESIS_TREE.md`, ranked by (potential impact x information gain)
 preamble is repeated in full inside every one, deliberately, so no agent is
 launched with half its context.
 
+## STATUS — read this before launching anything
+
+**Two of the five branches below were executed while this file was being
+written.** `E-040` (cost floor) and `E-041` (level-target reachability) are now
+in `JARVIS/state/EXPERIMENTS.md`. Prompts **A1 and A2 are SUPERSEDED** and must
+not be launched; they are kept below only as a record of how they were briefed,
+because both came back with usable results and the briefs are the reason.
+
+What those two results change for everything that follows, and every remaining
+prompt has been rewritten to carry it:
+
+- **E-040: GOLD is the instrument, and it is not close.** Median one-bar move as
+  a multiple of round-trip cost: GOLD 8.0x (15m) / 9.7x (1h), US500 3.9x / 6.1x,
+  EURUSD **0.8x** / 2.3x, GBPUSD **1.0x** / 2.3x. A 15m EURUSD bar does not
+  cover its own spread. **FX at short holds is retired** — no entry pattern can
+  repair a 0.8x cost ratio. Treat FX 15m as a known-dead CONTROL, not as a
+  market you are hoping to rescue.
+- **E-041: a filter can move a zero-edge entry toward zero; it cannot carry it
+  past zero.** Structural reachability produced a genuine gradient (Q4 beat Q1 in
+  4 of 5 markets, ratio coefficient of variation 0.99 so the test was
+  informative) and the BEST bucket in every market was still at or below zero;
+  the single positive number in the table was +0.002R. Together with E-036 and
+  E-039 this closes the whole class: **do not brief another agent to filter,
+  score, or select trades for an existing directional entry.**
+
+Any prompt that would have you improve a directional entry is now dead on
+arrival. The five live prompts below are A3, A4, A5, A6, A7.
+
+**A3 MAY ALREADY BE IN FLIGHT.** As of this writing
+`JARVIS/research/conditional_edge.py` exists in the working tree, untracked,
+which is the script A3 briefs. Check `git status` and grep EXPERIMENTS.md for
+E-042 before launching it. If an agent is already on it, the batch-1 slot goes
+to A6 alone and A4 moves up — do not launch a second agent onto the same
+branch, that is two writers on one file and a merge problem rather than speed.
+
 ## Launch order (a research plan is a sequence, not a list)
 
 | batch | agents | why now | why not later |
 |---|---|---|---|
-| **1** | **A1 cost floor** + **A2 level-target reachability** | A1 is the cheapest experiment on the board (no strategy, no backtest, pure descriptive statistics) and its answer CONDITIONS every other branch — it decides which market and timeframe deserve any further work at all. A2 is the named next action in MISSION.md and the only place a CONFIRMED finding (E-038) meets an untested application. They touch different files and neither reads the other's output. | Delaying A1 means batch 2 and 3 may be run on instruments that were never tradeable. |
-| **2** | **A3 conditional expectancy** + **A4 non-directional payoff** | A3 is the largest genuinely untested space left after E-037 (a variance ratio tests UNCONDITIONAL behaviour). A4 should read A1's cost-floor table before it starts, because a stop-order straddle pays the round trip twice and A1 sets the bar it must clear. | Running A4 before A1 would have it guess at the cost hurdle. |
-| **3** | **A5 volatility-scaled sizing** | Cheap, and its most likely honest answer is "invariant under R-normalisation", which is a one-page negative. It only becomes valuable once something else has an edge to compound. | It is the lowest (impact x information) / cost of the five. Running it first would spend a slot on a question whose answer probably does not change any decision. |
+| **1** | **A3 conditional expectancy** + **A6 M1 readiness** | A3 is the largest genuinely untested space left after E-037 — a variance ratio tests UNCONDITIONAL behaviour and that limit is stated in E-037 itself. A6 costs almost nothing and removes the project's oldest blocker: E-040's implied-M1 table (a 1-minute gold hold has ~2.1x the spread to work with) makes M1 the highest-prior branch in the tree, and it is waiting on an export that nobody has validated a harness for. A3 may already be in flight — E-041's write-up says conditional edges are "currently under test". CHECK EXPERIMENTS.md FOR E-042 BEFORE LAUNCHING A3. | A6 delayed is the M1 branch delayed by a whole round trip through Veer. |
+| **2** | **A4 non-directional payoff** + **A7 live conversion protocol** | A4 is now the direct successor to E-041: filtering is closed, so the remaining question is whether a different PAYOFF SHAPE can use the one confirmed finding. A7 designs the measurement for what MISSION.md calls "the only live question with a real chance of a positive answer", and it is a power calculation, not a backtest, so it cannot be corrupted by the data. | A4 needs E-040's cost table, which now exists. A7 needs no data at all but wants the closed branches settled so the live scoreboard is not measuring something already known dead. |
+| **3** | **A5 volatility-scaled sizing** | Cheap, and its most likely honest answer is "invariant under R-normalisation, and erased by 0.01-lot quantisation at Veer's account size" — a one-page negative that removes an item from MISSION.md's action list. | Lowest (impact x information) / cost of the five. It only becomes valuable once something else has an edge to compound, and after E-041 nothing does. |
 
 **Never launch more than 2-3 at once.** Five parallel agents exhausted the
 session budget before any wrote its findings (FAILURE_LOG F-003). Parallelise
-READS only; these five all write to different script files and append to
-`EXPERIMENTS.md` at pre-assigned numbers so no two ever rewrite the same file.
+READS only; these prompts all write to different script files and append to
+`EXPERIMENTS.md` so no two ever rewrite the same file.
 
-Pre-assigned experiment numbers: **A1 = E-040 · A2 = E-041 · A3 = E-042 ·
-A4 = E-043 · A5 = E-044.**
+**Experiment numbers.** E-040 and E-041 are taken. A3 = E-042, A4 = E-043,
+A5 = E-044, A6 = E-045, A7 = E-046 — but every prompt instructs the agent to
+check for the next free number first and note it if the assignment moved. That
+is not optional politeness; it is how two concurrent appends stay readable.
 
 ---
 ---
 
-# A1 — THE COST FLOOR  (agent type: general-purpose research/analysis · E-040)
+# A1 — THE COST FLOOR  (SUPERSEDED — RAN AS E-040, DO NOT LAUNCH)
+
+> Executed. Result in EXPERIMENTS.md E-040: GOLD 8.0x/9.7x cost, US500
+> 3.9x/6.1x, EURUSD 0.8x/2.3x, GBPUSD 1.0x/2.3x at a one-bar hold; FX at
+> short holds retired. Kept below as the record of the brief.
+
 
 **Objective in one line:** for every market and timeframe here, find the
 shortest holding horizon at which the expected move exceeds the round-trip
@@ -242,7 +284,14 @@ DELIVERABLE
 ---
 ---
 
-# A2 — LEVEL-TARGET REACHABILITY  (agent type: general-purpose · E-041)
+# A2 — LEVEL-TARGET REACHABILITY  (SUPERSEDED — RAN AS E-041, DO NOT LAUNCH)
+
+> Executed. Result in EXPERIMENTS.md E-041: the dispersion gate PASSED
+> (ratio coefficient of variation 0.99, so unlike E-039 the test was
+> informative), Q4 beat Q1 in 4 of 5 markets, and the best bucket in every
+> market was still at or below zero. Verdict UNPROVEN, and it closed the
+> whole filtering class. Kept below as the record of the brief.
+
 
 **Objective in one line:** E-039 failed because an ATR-scaled target makes
 predicted/required travel constant by construction; test the same idea against a
@@ -463,6 +512,10 @@ DELIVERABLE
 
 # A3 — CONDITIONAL EXPECTANCY  (agent type: general-purpose · E-042)
 
+> **CHECK FIRST:** `JARVIS/research/conditional_edge.py` was present and
+> untracked when this was written, so an agent may already be on this branch.
+> Grep EXPERIMENTS.md for E-042 and run `git status` before launching.
+
 **Objective in one line:** a variance ratio tests UNCONDITIONAL behaviour, so
 test whether directional predictability exists inside specific states — hours,
 post-large-range bars, post-gap, volatility transitions — under a pre-registered
@@ -614,6 +667,19 @@ WHAT HAS ALREADY BEEN DONE — do not repeat it:
 - E-021 fitted a gate on ADX AND ATR/median together; it failed out-of-sample.
 - E-022 the LeBaron compression-trend effect DOES NOT REPLICATE here; closed.
 - E-037 the unconditional result. You are testing its stated limit, not it.
+- E-040 (NEW): the cost floor. Median one-bar move as a multiple of round-trip
+  cost is GOLD 8.0x (15m) / 9.7x (1h), US500 3.9x / 6.1x, EURUSD 0.8x / 2.3x,
+  GBPUSD 1.0x / 2.3x. FX at short holds is RETIRED. Still run all 8 series —
+  FX is now your known-dead control, and a conditional effect that shows up
+  only in FX 15m is almost certainly an artefact — but any effect you report
+  as usable must be on GOLD or US500 and must be larger than that market's
+  cost.
+- E-041 (NEW): a filter can move a zero-edge entry toward zero but cannot
+  carry it past zero (structural reachability: real gradient, 4 of 5 markets,
+  best bucket still <= 0, single positive figure +0.002R). So do NOT frame
+  your result as a filter on SuperTrend trades. Your unit of analysis is the
+  conditional RETURN DISTRIBUTION. If a state shows genuine directional
+  predictability it is a new entry, not a filter on an old one.
 
 SELF-TEST BEFORE MARKET DATA — mandatory, printed, and exit non-zero on failure.
   (a) POSITIVE CONTROL: a synthetic series that is a random walk EXCEPT in a
@@ -815,6 +881,18 @@ WHAT HAS ALREADY BEEN DONE — do not repeat it:
 - E-022: the LeBaron compression-trend effect does not replicate here; closed.
 - E-008: early break-even is the worst exit rule on 4 of 4 markets. Do not add it.
 - E-039: the ATR-scaled reachability filter, REJECTED. Read the WHY.
+- E-040 (NEW, and it sets your hurdle): median one-bar move / round-trip cost
+  is GOLD 8.0x (15m) and 9.7x (1h), US500 3.9x / 6.1x, EURUSD 0.8x / 2.3x,
+  GBPUSD 1.0x / 2.3x. A structure that pays the round trip TWICE needs a
+  market with room; on EURUSD 15m the single round trip already exceeds the
+  median bar. Run GOLD and US500 as the real test and FX as the control that
+  must fail — if your straddle looks good on EURUSD 15m, your cost model is
+  broken.
+- E-041 (NEW, and it is why this branch matters): filtering is closed. A
+  filter improves a zero-edge entry toward zero and never past it. That is
+  precisely the argument for testing a different PAYOFF SHAPE rather than
+  another selection rule — and it also means you must not quietly turn this
+  into a filtered breakout.
 
 SELF-TEST BEFORE MARKET DATA — mandatory, printed, exit non-zero on failure.
   (a) A synthetic series with LARGE, KNOWN realised range and zero drift: your
@@ -1029,6 +1107,15 @@ WHAT HAS ALREADY BEEN DONE — do not repeat it:
 - E-008: early break-even is the worst exit rule on 4 of 4 markets. Do not add
   exit changes to a sizing experiment — one variable at a time.
 - D-008 settles leverage. The constraint is stop distance.
+- E-040 (NEW): the cost floor. GOLD 8.0x / 9.7x, US500 3.9x / 6.1x, EURUSD
+  0.8x / 2.3x, GBPUSD 1.0x / 2.3x median one-bar move per round trip. Report
+  all 8 series, but the only conclusion that can matter is on GOLD and US500;
+  FX at short holds is retired as an instrument.
+- E-041 (NEW): a filter cannot carry a zero-edge entry past zero. Sizing is
+  not a filter and does not claim to — but this makes the honest ceiling on
+  YOUR experiment sharper, and you must state it: with expectancy at or below
+  zero, better sizing makes the loss smoother, not smaller. If your write-up
+  could be misread as 'sizing fixed it', rewrite the write-up.
 
 SELF-TEST BEFORE MARKET DATA — mandatory, printed, exit non-zero on failure.
   (a) HOMOSCEDASTIC CONTROL: a synthetic trade stream with constant volatility.
@@ -1093,15 +1180,448 @@ DELIVERABLE
 ```
 
 ---
+---
+
+# A6 — M1 READINESS AND PRE-REGISTRATION  (agent type: general-purpose · E-045)
+
+**Objective in one line:** make the M1 branch executable and un-p-hackable the
+moment Veer's export lands — a data-integrity harness that can tell real
+tick-derived M1 from smoothed vendor fill, plus the M1 hypothesis written down
+and committed BEFORE the data exists.
+
+**Good result:** an integrity checker that fails loudly on synthetic bad data
+(gaps, duplicate timestamps, wrong timezone, weekend bars, smoothed prices), a
+pre-registered M1 test plan with its threshold fixed in advance, and a
+validation gate that checks THE DATA rather than the code — bid-ask bounce must
+appear at M1 or the export is not what it claims to be.
+**Bad result:** a wrapper around the existing export script; a plan that says
+"run study.py GOLD 1m and see"; anything that requires fetching data (every
+provider is 403 here and that is a policy denial, not a glitch).
+
+```
+You are a research agent on PROJECT TITAN, in the repo /home/user/signals. Work
+only from evidence you compute yourself.
+
+POSITION — read this, it is the whole reason your task exists.
+About 780 directional configurations have been tested here and none has cleared
+the significance bar. E-037: Lo-MacKinlay variance ratios, 40 tests, not one
+significant, largest |z| 1.79 — these series are statistically random walks at
+15m and 1h. The live chart agrees (LIVE_EVIDENCE.md: 12 real trades on XAUUSD
+3m, 33% win, -0.58R, TP 0, SL 8). E-038 found the one predictable quantity,
+volatility, in 8 of 8 series. E-039 and E-041 then established that filtering
+cannot convert it: a filter moves a zero-edge entry toward zero and never past
+it. E-040 measured the cost floor and found GOLD is the instrument (8.0x / 9.7x
+median one-bar move per round trip) and FX at short holds is retired (EURUSD 15m
+0.8x — the median bar does not cover its own spread).
+E-037 states its own two limits explicitly, and one of them is yours: "It is 15m
+and 1h. M1 is untested and is genuinely different in kind — bid-ask bounce and
+order-flow effects produce real autocorrelation at very short horizons. This is
+now the strongest argument in the repo for getting M1 data, because it is the
+one place a directional edge could still be hiding."
+E-040 sharpened it: extrapolating range as sqrt(time) — justified here precisely
+because E-037 found random-walk behaviour — a 1-minute gold hold has about 2.1x
+the round-trip cost to work with, 3.6x at 3 minutes, 8.0x at 15 minutes. That is
+EXTRAPOLATED, NOT MEASURED, and it stops being an extrapolation the moment the
+export arrives.
+
+YOU ARE NOT GETTING THE DATA. THAT IS THE POINT.
+KNOWN_LIMITATIONS.md records that ALL market-data providers are blocked by the
+organisation's egress policy in this container — Yahoo, Stooq, AlphaVantage,
+Tiingo and Nasdaq Data Link all return 403 at the proxy. Do not attempt any of
+them and do not retry: it is a policy denial, not a transient failure. There is
+no MT5 here either. The M1 data can only come from Veer running
+JARVIS/tools/export_mt5_data.py on his Windows PC.
+Your job is to make sure that when it arrives, it is (a) verified before it is
+believed and (b) tested against a hypothesis that was written down first.
+
+READ BEFORE YOU WRITE CODE (absolute paths):
+  /home/user/signals/JARVIS/titan/MISSION.md
+  /home/user/signals/JARVIS/titan/HYPOTHESIS_TREE.md
+  /home/user/signals/JARVIS/state/EXPERIMENTS.md   (E-001..E-041; read E-037,
+      E-038, E-040 in full — E-040 contains the implied-M1 table you are
+      preparing to falsify or confirm)
+  /home/user/signals/JARVIS/state/FAILURE_LOG.md   (F-005..F-008 and L-009,
+      L-010 are directly about tools that reported success while being wrong —
+      that is the failure mode you are building against)
+  /home/user/signals/JARVIS/state/KNOWN_LIMITATIONS.md
+  /home/user/signals/JARVIS/tools/GET_M1_DATA.md
+  /home/user/signals/JARVIS/tools/export_mt5_data.py
+
+CODE YOU MUST USE — do not rewrite what exists.
+/home/user/signals/JARVIS/research/engine.py
+    load(symbol, tf) — note it already sorts by timestamp and DROPS exact
+      duplicate timestamps silently. That silent drop is a data-quality event
+      your checker must SURFACE, because a vendor repeating bars is a symptom.
+    Series, atr, true_range, Costs(spread, slippage, commission_per_lot,
+      value_per_point_per_lot)
+/home/user/signals/JARVIS/research/study.py — COSTS, the per-symbol dict. The
+    export script reads the broker's REAL spread and commission; your harness
+    must produce the exact COSTS entry to paste in, and must flag how far the
+    real numbers are from the current assumptions (GOLD spread 0.30,
+    commission 7.0/lot, value_per_point_per_lot 100.0). E-033 is the precedent
+    for what wrong costs do to results.
+/home/user/signals/JARVIS/research/is_it_tradeable.py — variance_ratio(r, q),
+    autocorr(r, lag), cost_in_sigma(sym, s, r), selftest(). These are the exact
+    statistics the M1 test will run; do not rewrite them, wire them up.
+/home/user/signals/JARVIS/research/vol_predictability.py — logret, ac, selftest.
+/home/user/signals/JARVIS/research/cost_floor.py — E-040's script. Your harness
+    must be able to re-run it on M1 and replace the extrapolated table with a
+    measured one.
+/home/user/signals/JARVIS/tools/check_pine.py and verify_fixes.py — read them as
+    the house style for a checker: every rule regression-tested against a file
+    that actually contains the fault it is meant to catch. F-006, F-007 and
+    F-008 are three consecutive cases of a checker that passed a broken file
+    because its rule encoded one remembered EXAMPLE instead of the RULE. Do not
+    make that mistake a fourth time.
+Local `split(s, frac=0.70)` — copy from reachability.py; no shared helper exists.
+
+DELIVERABLE ONE — the integrity harness.
+Write /home/user/signals/JARVIS/tools/check_data.py which takes a candle JSON
+and reports, with a non-zero exit on failure:
+  - bar count, first and last timestamp, and the implied calendar span;
+  - GAPS: the distribution of inter-bar intervals against the nominal one, with
+    weekend and session breaks classified separately from true holes. On M1 gold
+    a missing hour inside a trading session is a data defect; a 48-hour weekend
+    is not;
+  - DUPLICATES: exact-duplicate timestamps, and near-duplicates (identical OHLC
+    on consecutive bars), which is the fingerprint of a vendor forward-filling;
+  - TIMEZONE AND DST: the bar-count histogram by UTC hour. A broker server on
+    EET/EEST will shift the session by an hour across DST boundaries, and every
+    hour-of-day result computed on it would be wrong in a way that looks
+    entirely plausible. Detect the shift and report it rather than assuming;
+  - OHLC SANITY: high >= max(open, close), low <= min(open, close), no zero or
+    negative prices, no bars whose range is zero for long runs (a flatline is a
+    feed outage, not a quiet market);
+  - PRICE GRANULARITY: the smallest non-zero price increment actually observed,
+    compared with the instrument's tick size. If M1 prices are quantised more
+    coarsely than the tick size, the data has been smoothed or resampled from a
+    higher timeframe, and every microstructure conclusion drawn from it would be
+    an artefact of the vendor.
+
+DELIVERABLE TWO — the validation gate, which tests THE DATA, not the code.
+This is the most valuable single idea in your brief, so implement it carefully.
+Genuine M1 data from a real feed MUST show microstructure noise: bid-ask bounce
+produces NEGATIVE lag-1 autocorrelation in returns at very short horizons. That
+is not a hopeful hypothesis, it is a mechanical consequence of trades
+alternating between the bid and the ask, and it is one of the most reliably
+documented facts in market microstructure.
+  - If the M1 data shows it, the data is real and the M1 branch can be tested.
+  - If the M1 data shows NOTHING — lag-1 autocorrelation indistinguishable from
+    zero, exactly like the 15m and 1h series in E-037 — then either the feed is
+    mid-price rather than traded price (bid-ask bounce does not appear in a
+    mid-price series, and this is the likeliest benign explanation and must be
+    checked FIRST), or the bars were interpolated. Either way the "M1 is
+    different in kind" argument does not survive contact with THIS data, and
+    that is itself a headline result: it would close the last branch on which a
+    directional edge was still plausible in this project.
+Write the gate so it produces one of those three verdicts explicitly. Do not let
+it return a vague pass.
+
+DELIVERABLE THREE — the pre-registration, committed BEFORE the data exists.
+Write /home/user/signals/JARVIS/titan/M1_TEST_PLAN.md stating, in advance:
+  - the exact hypotheses to be tested on M1, in order, with the statistic for
+    each (start from: lag-1 to lag-10 autocorrelation of returns; variance ratio
+    at q = 2, 4, 8, 16, 32; absolute-return autocorrelation as the E-038
+    replication; and cost_in_sigma / cost_floor to REPLACE E-040's extrapolated
+    implied-M1 table with a measured one);
+  - the number of tests K and therefore the correction, and the significance
+    threshold, FIXED NOW. The project threshold is t ~= 3.65 for ~780 tests;
+    state whether M1 tests inherit it and justify the answer either way;
+  - the IS/OOS split and the rule that OOS runs ONCE;
+  - what result would DISPROVE the M1 hypothesis, written as plainly as what
+    would support it;
+  - and the note that E-023 (intraday momentum) becomes testable at M5/M15 and
+    should be re-run then — it is currently UNTESTABLE, not disproven, and the
+    plan must not let anyone forget which of those two it is.
+A hypothesis written after seeing the data is not a hypothesis. This file is the
+mechanism that stops that, and it is worth more than the code.
+
+SELF-TEST BEFORE ANYTHING IS TRUSTED — mandatory, printed, exit non-zero on
+failure. Every check above must be regression-tested against SYNTHETIC data that
+actually contains the fault:
+  - a series with an injected mid-session gap — the gap check must find it and
+    must NOT flag the weekend;
+  - a series with duplicated and forward-filled bars — both must be reported;
+  - a series shifted by one hour halfway through — the DST check must find it;
+  - a series with high < close — the OHLC check must fail it;
+  - a synthetic series WITH bid-ask bounce (alternate a half-spread on each
+    return) — the validation gate must report clear negative lag-1
+    autocorrelation, at approximately the analytic value for the spread you
+    injected;
+  - the SAME series without bounce — the gate must report absence.
+And a clean, correct series must pass everything. A checker that only ever says
+"fail" is as useless as one that only ever says "pass"; L-009 in FAILURE_LOG is
+exactly this lesson and it has already cost this project five commits of
+non-compiling shipped code.
+
+NON-NEGOTIABLE METHOD RULES
+1. `python3 /home/user/signals/JARVIS/research/test_engine.py` FIRST; if it
+   fails, stop.
+2. Do not fetch data. Do not retry blocked hosts. Do not fabricate an M1 file
+   and present its output as a result — synthetic data is for testing the
+   harness and must be labelled as such in every line of output it produces.
+3. Per-symbol costs from study.COSTS; the bare engine.Costs() default is
+   GOLD-shaped and charging it to another instrument is E-033.
+4. Report every t against t ~= 3.65 and state the correction you applied.
+5. Never report a number you did not compute. Label clearly which numbers in
+   your write-up are MEASURED and which are EXTRAPOLATED — E-040 did this
+   correctly for its implied-M1 table and you must match that standard.
+6. A static checker reporting CLEAN is evidence that the specific things it
+   models are absent, NOT evidence that the data is good. Say so in the tool's
+   own output. This is L-009, verbatim, and it is in the failure log because
+   ignoring it shipped five broken files.
+
+VERDICT VOCABULARY — these words and no others: CONFIRMED · SUPPORTED ·
+PROMISING · UNPROVEN · REJECTED · DISPROVEN.
+
+A CLEAR NEGATIVE IS A COMPLETE SUCCESS. If your honest conclusion is that the
+export cannot deliver what the M1 hypothesis needs — for example because the
+broker only serves mid-price bars, so bid-ask bounce can never appear — then
+saying so now, before Veer spends an evening on it, is worth more than any
+harness.
+
+DELIVERABLE SUMMARY AND COMMIT
+- /home/user/signals/JARVIS/tools/check_data.py (harness + regression tests)
+- /home/user/signals/JARVIS/titan/M1_TEST_PLAN.md (the pre-registration)
+- Finding: APPEND to /home/user/signals/JARVIS/state/EXPERIMENTS.md as E-045 —
+  check the file for the next free number first, take it, and note if the
+  assignment moved. Append only: read the last 40 lines and append at the end,
+  never rewrite; another agent may be appending concurrently. Record what the
+  harness checks, what it CANNOT check, and the pre-registered thresholds.
+- Update /home/user/signals/JARVIS/tools/GET_M1_DATA.md with the one extra
+  instruction the harness needs from Veer, if any, keeping it to the same short,
+  plain-English, three-minute shape it has now. Do not lengthen it.
+- Commit only your own files, on branch claude/jarvis-ai-operating-system-2xaclm.
+- Final message: what the harness catches, the three verdicts the validation
+  gate can return, and the one sentence you want the next session to read.
+```
+
+---
+---
+
+# A7 — HOW MANY LIVE TRADES SETTLE IT  (agent type: general-purpose · E-046)
+
+**Objective in one line:** MISSION.md says the live scoreboard — which setup
+types Veer personally converts — is "the only live question with a real chance
+of a positive answer"; compute how many live trades are actually needed to
+answer it, and the sequential rule that stops early without inflating the false
+positive rate.
+
+**Good result:** a hard number of trades per setup type for a stated detectable
+effect size, computed from the observed R distribution rather than assumed; a
+sequential test with its error rates simulated, not quoted; and an honest
+statement of how many weeks that is at the observed trade rate.
+**Bad result:** a textbook power formula applied to a win rate with no reference
+to this project's R distribution or its multiple-testing history; a protocol
+that would let 12 trades mean something.
+
+```
+You are a research agent on PROJECT TITAN, in the repo /home/user/signals. Work
+only from evidence you compute yourself. This task is a STATISTICS AND DESIGN
+task, not a backtest — but every number in it must still be computed.
+
+POSITION — read this, it is the whole reason your task exists.
+About 780 directional configurations have been tested in this project and none
+has cleared the significance bar. E-037: 40 variance-ratio tests, not one
+significant. E-038: volatility is predictable in 8 of 8 series — the project's
+only CONFIRMED finding. E-039 and E-041: filtering cannot convert it; a filter
+moves a zero-edge entry toward zero and never past it. E-040: GOLD is the only
+instrument with real room (8.0x / 9.7x median one-bar move per round trip);
+FX at short holds is retired.
+JARVIS/state/LIVE_EVIDENCE.md is the only out-of-repo measurement either system
+has: SuperTrend Sniper on XAUUSD 3m, last 12 trades — 33% win, -6.9R total,
+-0.58R average, take-profits 0, stop-losses 8, and only 25% of trades ever
+touched 1R. It also records that the Liquidity Sniper was producing ~120 signals
+a day, which is a noise generator rather than a signal generator (lesson L-011).
+MISSION.md's closing paragraph is your brief: "The scoreboard in the liquidity
+Pine exists to find out which setup types Veer personally converts, and that
+remains the only live question with a real chance of a positive answer."
+Nobody has computed what it would take to answer it.
+
+THE QUESTION, framed so "no" is as publishable as "yes":
+How many LIVE trades, per setup type, are required before Veer's per-setup
+conversion rate can be distinguished from chance at this project's evidential
+standard — and given his observed trade rate, how long is that in calendar time?
+If the honest answer is "more trades than he will place in a year", that is a
+COMPLETE and decision-changing result: it would mean the live scoreboard cannot
+settle the question as designed, and the design must change (fewer setup types,
+a pooled test, or a different question entirely).
+
+WHY THIS IS THE HIGHEST-VALUE DESIGN TASK LEFT.
+Twelve trades were used to form a judgement about a strategy. Twelve trades
+cannot distinguish -0.58R from 0.00R at any useful confidence, and the same
+error is about to be repeated across eight setup types at once — which is eight
+simultaneous tests on a handful of samples each. Getting the required n on paper
+BEFORE the data is collected is the only way that scoreboard produces knowledge
+instead of another confident wrong answer.
+
+READ BEFORE YOU WRITE CODE (absolute paths):
+  /home/user/signals/JARVIS/titan/MISSION.md
+  /home/user/signals/JARVIS/state/LIVE_EVIDENCE.md
+  /home/user/signals/JARVIS/state/EXPERIMENTS.md    (E-024, E-025, E-027,
+      E-031, E-035, E-036, E-041 — the setup-type work and what it measured)
+  /home/user/signals/JARVIS/state/FAILURE_LOG.md    (L-011 on the signal flood)
+  /home/user/signals/JARVIS/state/DECISIONS.md      (D-006 no live action
+      without per-session confirmation; D-007 which strategy is on which
+      account; D-008 the broker and the 0.01-lot constraint)
+  /home/user/signals/JARVIS/state/KNOWN_LIMITATIONS.md
+
+CODE AND DATA YOU MUST USE — do not rewrite what exists.
+/home/user/signals/JARVIS/research/engine.py
+    load, Series, backtest(s, signal_fn, costs, ...), stats(trades) — which
+      already returns n, win_rate, expectancy_R, sd_R and t_stat; sd_R is the
+      quantity your power calculation needs and it must come from measured
+      trades, not from an assumption
+    monte_carlo(trades, trials=20000, risk_pct, seed) — the bootstrap you should
+      extend rather than replace
+/home/user/signals/JARVIS/research/study.py — COSTS per symbol; engine.Costs()'s
+    default is GOLD-shaped and charging it elsewhere is E-033
+/home/user/signals/JARVIS/research/strategies.py — supertrend_dir(s, 7, 1.2)
+    (Pine convention: d == -1 BULLISH, +1 BEARISH), supertrend_sniper(...)
+/home/user/signals/JARVIS/research/smc_setups.py — the seven setup types
+    implemented as the Pine implements them (make_fvg, make_ob, make_pullback,
+    make_breakout, make_discount, plus swings/structure), and E-031's per-setup
+    results. This is where you get the realistic per-setup trade FREQUENCY and R
+    dispersion from.
+/home/user/signals/JARVIS/research/entry_quality.py — heat(), limit_test(), and
+    E-035's measurement that 71.7% of signals retrace through the entry within
+    three bars. Relevant because it bounds how much execution variance sits on
+    top of the setup's own variance.
+/home/user/signals/JARVIS/pine/LiquiditySniper_v1.pine — the scoreboard whose
+    design you are evaluating. Read what it currently records per setup type.
+Local `split(s, frac=0.70)` — copy from reachability.py; no shared helper exists.
+
+METHOD
+1. ESTIMATE THE NUISANCE PARAMETER FROM DATA, NOT FROM A TEXTBOOK. The required
+   sample size depends on the standard deviation of per-trade R. Compute sd_R
+   per setup type from the backtested trade populations (smc_setups.py, E-031)
+   AND from the 12 live trades, and report both — if they disagree materially,
+   the live one wins, because LIVE_EVIDENCE.md outranks backtests in this
+   project, and say how wide the error bar on 12 observations is.
+2. POWER CURVE. For each setup type, compute the number of trades n required to
+   detect a true expectancy of +0.10R, +0.25R and +0.50R at 80% power, at three
+   thresholds: an uncorrected t = 2.0, a Bonferroni correction for the number of
+   setup types being scored simultaneously, and this project's t ~= 3.65. Give
+   the whole grid. The comparison between the three columns IS the finding.
+3. VERIFY THE POWER CALCULATION BY SIMULATION, not by formula alone. Bootstrap
+   from the measured R distribution — which is skewed and fat-tailed, so the
+   normal approximation understates the required n — and confirm the empirical
+   rejection rate at your chosen n matches the nominal power. Report both the
+   analytic and simulated n. Where they differ, the simulated one is the answer.
+4. CALENDAR TIME. Using the measured signal frequency per setup type, convert n
+   into weeks and months at Veer's actual trading rate. State it in weeks. That
+   single number is the most useful thing in this experiment.
+5. SEQUENTIAL RULE. Design a stopping rule that can abandon a setup type early
+   when it is clearly bad, without inflating the false-positive rate — a
+   sequential probability ratio test or an alpha-spending boundary is the
+   natural fit. SIMULATE its actual error rates under a null of zero expectancy
+   and under the alternatives from step 2. Do not quote a textbook boundary;
+   measure the one you propose. An early-stop rule that is not simulated is a
+   guess with a Greek letter on it.
+6. THE DESIGN VERDICT. Given the numbers, answer directly: can the scoreboard as
+   currently designed — eight setup types scored in parallel — ever answer the
+   question? If not, say what would: fewer types, pooling, a longer horizon, or
+   a different question. Be concrete and be willing to say the design must
+   change.
+7. THE LOGGING SCHEMA. Specify exactly what must be recorded per live trade for
+   this analysis to be possible at all: setup type, timestamp, side, entry,
+   stop, target, exit, exit reason, MFE and MAE in R, slippage against the
+   signalled price, and whether it was taken manually or by the EA. If a field
+   is not recorded it does not exist, and the analysis is not recoverable later.
+
+WHAT HAS ALREADY BEEN DONE — do not repeat it:
+- E-031 measured all seven setup types on history, one at a time, best OOS
+  t +1.35 against a threshold of about 3.65 — all UNPROVEN. You are not
+  re-measuring them on history; you are computing what it takes to measure them
+  LIVE.
+- E-036 established that history cannot rank these setups, which is exactly why
+  the ranking has to come from Veer's own results. That is the premise of your
+  task, not a thing to re-test.
+- E-025, E-026, E-027, E-035 measured bounce setups, HTF confluence, trade
+  frequency and entry quality. Use their numbers as inputs; do not re-derive.
+- E-029 and E-030 disproved the GBP60/day arithmetic. Do not re-derive profit
+  targets.
+- E-041 closed the filtering class. Do not propose a filter.
+
+SELF-TEST BEFORE ANY REAL NUMBER — mandatory, printed, exit non-zero on failure.
+  (a) POSITIVE CONTROL: simulate a setup type with a TRUE expectancy of +0.25R
+      and the measured sd_R. At your computed n, your test must reject the null
+      approximately 80% of the time. If it does not, your power calculation is
+      wrong and every n in your table is wrong with it.
+  (b) NEGATIVE CONTROL: simulate a true expectancy of exactly zero. Your test
+      must reject at approximately the nominal alpha and no more — run this at
+      the number of setup types being scored in parallel and confirm the
+      family-wise error rate is what your correction claims.
+  (c) SEQUENTIAL CONTROL: run the stopping rule over many simulated paths under
+      the null and confirm the realised false-positive rate matches its design.
+      Peeking at accumulating data without a boundary inflates alpha badly, and
+      demonstrating the size of that inflation on your own simulation is a
+      persuasive line for the write-up.
+Rationale: this project's headline near-miss (E-023, GOLD IS t +2.71, OOS
+-0.022) is exactly what happens when a threshold is trusted without checking
+what the procedure actually does.
+
+NON-NEGOTIABLE METHOD RULES
+1. `python3 /home/user/signals/JARVIS/research/test_engine.py` FIRST; if it
+   fails, stop.
+2. Closed bars only, next-bar fills, first touch, TIES LOSE, per-symbol costs
+   from study.COSTS — for any backtested population you use to estimate sd_R or
+   trade frequency. An sd_R estimated from a cost-free backtest is the wrong
+   number.
+3. Chronological IS/OOS via split() for anything estimated from history; OOS
+   runs ONCE.
+4. Report against t ~= 3.65 as well as the uncorrected threshold, and make the
+   difference between them explicit in trades-required terms. "Correcting for
+   multiple testing costs you N extra trades per setup type" is the sentence
+   that will actually change behaviour.
+5. Never report a number you did not compute. No assumed win rates. The 12 live
+   trades are the only live data that exists; treat their small n as a headline
+   caveat, not a footnote.
+6. NOTHING IN YOUR OUTPUT AUTHORISES A LIVE TRADE. D-006: no live action without
+   Veer confirming that specific action in that session. You are designing a
+   measurement, not instructing anyone to place orders, and the write-up must
+   say so.
+
+VERDICT VOCABULARY — these words and no others: CONFIRMED · SUPPORTED ·
+PROMISING · UNPROVEN · REJECTED · DISPROVEN.
+
+A CLEAR NEGATIVE IS A COMPLETE SUCCESS. "The live scoreboard as designed cannot
+answer this question inside a year, and here is the arithmetic" is a genuinely
+valuable result — it prevents months of collecting data that could never have
+settled anything, which is the single most expensive failure mode still
+available to this project.
+
+DELIVERABLE
+- Script: /home/user/signals/JARVIS/research/live_power.py, docstring stating
+  the question, the estimated sd_R and where it came from, and the run command.
+- Finding: APPEND to /home/user/signals/JARVIS/state/EXPERIMENTS.md as E-046 —
+  check for the next free number first and note it if the assignment moved.
+  Append only: read the last 40 lines, append at the end, never rewrite the
+  file. Lead with the trades-required table and the calendar-time number.
+- A short protocol section, plain English, that Veer can follow: what to log,
+  how many trades before anyone is allowed to draw a conclusion, and the
+  stopping rule. Keep it to one screen. If it is longer than one screen it will
+  not be used.
+- Commit only your own files, on branch claude/jarvis-ai-operating-system-2xaclm.
+- Final message: trades required per setup type at the project threshold, the
+  calendar time that implies, whether the current design can work, the verdict
+  word, and the one sentence you want the next session to read.
+```
+
+---
 
 ## Branches deliberately NOT briefed, and why
 
-- **M1 microstructure.** The highest-prior branch in the whole tree and it is
-  BLOCKED on data that only Veer can export (`JARVIS/tools/GET_M1_DATA.md`).
-  Briefing an agent to work on it would violate the rule against sending agents
-  at things the environment forbids — every market-data host is 403 here. The
-  correct action is a request to Veer, not an agent.
-- **Another entry pattern, confluence score, or parameter sweep.** Closed by
-  E-030, E-036 and E-037. An agent sent there would be configuration 782.
+- **Another entry pattern, confluence score, filter or parameter sweep.** Closed
+  by E-030, E-036, E-037, E-039 and now decisively by E-041: a filter improves a
+  zero-edge entry toward zero and never past it. An agent sent there would be
+  configuration 782.
+- **FX at short holds.** Retired by E-040 — the median EURUSD 15m bar is 0.8x
+  its own round-trip cost. It stays in every test as a control that should fail,
+  never as a market to rescue.
 - **Re-running E-023 intraday momentum on 1h data.** Diagnosed as a granularity
-  problem, status UNTESTABLE not disproven. It waits on M5/M15, not on analysis.
+  problem; status UNTESTABLE, not disproven. It waits on M5/M15, which is why it
+  is written into A6's pre-registration rather than briefed as its own agent.
+- **Fetching data of any kind.** Every provider returns 403 at the proxy by
+  organisation policy (KNOWN_LIMITATIONS.md). Briefing an agent to do it would
+  burn a run on a policy denial. The M1 request goes to Veer; A6 prepares for it.
