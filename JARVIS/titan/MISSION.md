@@ -60,6 +60,7 @@ any of 8 pairs).
 |---|---|
 | `JARVIS/titan/MISSION.md` | this file — mission, position, next actions |
 | `JARVIS/titan/HYPOTHESIS_TREE.md` | what has been tested, what is open |
+| `JARVIS/titan/AGENT_PROMPTS.md` | five ready-to-paste agent briefs, E-040..E-044, with launch order |
 | `JARVIS/state/EXPERIMENTS.md` | E-001..E-037, every numbered result |
 | `JARVIS/state/LIVE_EVIDENCE.md` | real-chart measurements (outrank backtests) |
 | `JARVIS/state/FAILURE_LOG.md` | F-001..F-008, L-001..L-011 |
