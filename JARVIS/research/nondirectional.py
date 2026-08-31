@@ -306,75 +306,59 @@ def selftest():
         return engine.Series(ts, o, h, l, cl)
 
     gc = round_trip(study.COSTS["GOLD"])
+
+    def pooled(sigma, sub=200, drift=0.0, seeds=4, nbars=12000, H=16, k=1.0):
+        """Pool windows across independent realisations (they are independent,
+        so pooling is legitimate and gives real power)."""
+        gb, nb = [], []
+        for seed in range(seeds):
+            s = walk(nbars, sigma, 3000 + seed + int(drift * 1000), sub=sub,
+                     drift=drift)
+            a_ = engine.atr(s, 14)
+            for r in sweep(s, a_, gc, H=H, k=k, warmup=250):
+                gb.append(r["gross_B"]); nb.append(r["B"])
+        return mean_sd_t(gb), mean_sd_t(nb)
+
     print("\n  (d) MARTINGALE CONTROL — driftless random walk, GOLD costs,")
-    print("      bars built from a true sub-path.  gross B must be")
+    print("      bars built from a TRUE sub-path.  gross B must be")
     print("      indistinguishable from zero, and DOUBLING the volatility")
-    print("      must NOT improve it.  5 independent realisations each.")
+    print("      must NOT improve it.  Windows pooled over 4 realisations.")
     for sigma in (0.5, 1.0, 2.0):
-        ms = []
-        for seed in range(5):
-            s = walk(20000, sigma, 3000 + seed)
-            a = engine.atr(s, 14)
-            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-            m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
-            ms.append(m)
-        mm, sdm, tm, _ = mean_sd_t(ms)
-        netm = []
-        for seed in range(5):
-            s = walk(20000, sigma, 3000 + seed)
-            a = engine.atr(s, 14)
-            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-            m, _, _, _ = mean_sd_t([r["B"] for r in rows])
-            netm.append(m)
-        nmm, _, ntm, _ = mean_sd_t(netm)
-        flag = "OK" if abs(tm) < 3.0 else "SUSPECT"
-        print(f"      sigma {sigma:4.1f}:  gross B {mm:+8.4f} (t {tm:+5.2f}) "
-              f"[{flag}]   net B {nmm:+8.4f} (t {ntm:+6.2f})")
-        if abs(tm) >= 3.0:
+        (mg, _, tg, ng), (mn, _, tn, _) = pooled(sigma)
+        flag = "OK" if abs(tg) < 3.0 else "SUSPECT"
+        print(f"      sigma {sigma:4.1f}:  gross B {mg:+8.4f} (t {tg:+5.2f}) "
+              f"[{flag}]   net B {mn:+8.4f} (t {tn:+7.2f})   n {ng}")
+        if abs(tg) >= 3.0:
             _fail("(d) gross B is not a martingale on a random walk")
-        if nmm >= 0:
+        if mn >= 0:
             _fail("(d) net B is not negative on a driftless walk — "
                   "cost is not being charged")
     print("  PASS  (d) gross payoff is ZERO on a martingale at EVERY")
-    print("            volatility — 4x more variance buys nothing. Only the")
+    print("            volatility — 4x the variance buys nothing.  Only the")
     print("            cost survives, and it scales with the legs filled.")
 
     # (e) POSITIVE CONTROL — the pipeline must SEE an effect that is there.
-    ms = []
-    for seed in range(5):
-        s = walk(20000, 1.0, 4000 + seed, drift=0.30)
-        a = engine.atr(s, 14)
-        rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-        m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
-        ms.append(m)
-    mm, _, tm, _ = mean_sd_t(ms)
-    if tm <= 3.0:
-        _fail(f"(e) simulator did not detect strong injected drift: t={tm:.2f}")
+    (mg, _, tg, ng), _ = pooled(1.0, drift=0.30)
+    if tg <= 3.0:
+        _fail(f"(e) simulator did not detect strong injected drift: t={tg:.2f}")
     print(f"  PASS  (e) injected drift +0.30/bar IS detected: gross B "
-          f"{mm:+.3f}, t {tm:+.2f}")
+          f"{mg:+.3f}, t {tg:+.2f}, n {ng}")
     print("            (a null later means the edge is absent, not that the")
     print("            pipeline is blind.)")
 
     # (f) OVERSHOOT DIAGNOSTIC — how optimistic is "fills at the level"?
-    print("\n  (f) OVERSHOOT DIAGNOSTIC — this is not a pass/fail test, it")
-    print("      quantifies the one optimism baked into every bar-based")
-    print("      backtest of stop orders.  Assuming a stop fills AT its level")
-    print("      is worth free money proportional to how far price jumps per")
-    print("      sub-step.  On a driftless walk the true answer is 0.0000.")
-    print(f"      {'sub-step sd':>12} {'spurious gross B':>18}")
-    for sub in (5, 20, 50, 200, 800):
-        ms = []
-        for seed in range(3):
-            s = walk(12000, 1.0, 5000 + seed, sub=sub)
-            a = engine.atr(s, 14)
-            rows = sweep(s, a, gc, H=16, k=1.0, warmup=250)
-            m, _, _, _ = mean_sd_t([r["gross_B"] for r in rows])
-            ms.append(m)
-        mm, _, _, _ = mean_sd_t(ms)
-        print(f"      {1.0/math.sqrt(sub):>12.4f} {mm:>+18.4f}")
-    print("      Real bars are coarse, so every number on real data below is")
-    print("      OPTIMISTIC by roughly this amount. It biases TOWARD the")
-    print("      hypothesis, so it can only weaken a negative conclusion.")
+    print("\n  (f) OVERSHOOT DIAGNOSTIC — not pass/fail.  It quantifies the")
+    print("      one optimism baked into EVERY bar-based backtest of stop")
+    print("      orders: assuming the stop fills AT its level is free money,")
+    print("      because the true crossing price is already past it.  On a")
+    print("      driftless walk the honest answer is 0.0000.")
+    print(f"      {'sub-step sd':>12} {'spurious gross B':>18} {'t':>7}")
+    for sub in (5, 20, 50, 200):
+        (mg, _, tg, _), _ = pooled(1.0, sub=sub, seeds=3, nbars=9000)
+        print(f"      {1.0/math.sqrt(sub):>12.4f} {mg:>+18.4f} {tg:>7.2f}")
+    print("      Real bars are coarse, so every real-data number below is")
+    print("      OPTIMISTIC by roughly this amount.  It biases TOWARD the")
+    print("      hypothesis, so it can only make a negative verdict safer.")
 
     print("\n  ALL SELF-TESTS PASSED\n")
 
@@ -421,6 +405,145 @@ def ceiling_table():
     return out
 
 
+# ------------------------------------------------- step 2: the two mirrors
+ALL_T = []
+LOOK = 20          # E-038's range-predictor lookback
+COND_CELLS = [(8, 1.0), (16, 1.0), (32, 1.0)]   # fixed before running step 2
+
+
+def pred_range(s, i, look, H):
+    """E-038's predictor: realised range over `look` bars, scaled sqrt(H/look).
+    Reads bars i-look+1..i only — nothing after bar i."""
+    hi = max(s.h[i - look + 1:i + 1])
+    lo = min(s.l[i - look + 1:i + 1])
+    return (hi - lo) * math.sqrt(float(H) / float(look))
+
+
+def step_two():
+    """Two questions the ceiling table cannot answer on its own.
+
+    (1) THE SHORT-VOLATILITY MIRROR.  Fading the range with limit orders is
+        the exact algebraic mirror of the stop-order straddle: a sell limit
+        at P+d earns (P+d) - close where the buy stop earned close - (P+d).
+        So gross_fade = -gross_B, and net_fade = -gross_B - c*legs.  If gross
+        is zero, BOTH sides of the mirror lose exactly the cost, and there is
+        no "the other way round works" escape.
+    (2) THE E-038 CONDITIONING.  Does predicted range change any of it?
+        The dispersion of predicted/d is reported FIRST (E-041's precedent),
+        because an ATR-scaled d can make the ratio constant by construction —
+        that is exactly how E-039 died.  OOS only, run once.
+    """
+    print("\n" + "=" * 74)
+    print("  STEP 2a — THE SHORT-VOLATILITY MIRROR (fade the range)")
+    print("  net_fade = -gross_B - c*legs.  Both sides of the mirror are")
+    print("  shown so no reader thinks the opposite sign was left untested.")
+    print("  Figures are mean per window in multiples of cost c.")
+    print("=" * 74)
+    print(f"{'series':>12} {'H':>3} {'k':>5} {'legs':>6} {'gross/c':>9} "
+          f"{'straddle/c':>11} {'fade/c':>9} {'n':>6}")
+    for sym, tf in SERIES:
+        s = engine.load(sym, tf)
+        c = round_trip(study.COSTS[sym])
+        a = engine.atr(s, 14)
+        for (H, k) in COND_CELLS:
+            rows = sweep(s, a, c, H, k)
+            if not rows:
+                continue
+            legs = sum(r["n_legs"] for r in rows) / len(rows)
+            mg, _, _, n = mean_sd_t([r["gross_B"] for r in rows])
+            mb, _, _, _ = mean_sd_t([r["B"] for r in rows])
+            mf, _, _, _ = mean_sd_t([-r["gross_B"] - c * r["n_legs"]
+                                     for r in rows])
+            print(f"{sym+' '+tf:>12} {H:>3} {k:>5.2f} {legs:>6.2f} "
+                  f"{mg/c:>9.2f} {mb/c:>11.2f} {mf/c:>9.2f} {n:>6}")
+
+    print("\n" + "=" * 74)
+    print("  STEP 2b — E-038 CONDITIONING.  OUT OF SAMPLE, RUN ONCE.")
+    print("  Windows bucketed by quartile of predicted range / d.")
+    print("  CV of that ratio is reported FIRST: if it is near zero the test")
+    print("  is uninformative by construction and dies as E-039 did.")
+    print("=" * 74)
+    print(f"{'series':>12} {'H':>3} {'ratio CV':>9} | "
+          f"{'gross B/c by quartile of predicted range':>44} | {'n/qtile':>8}")
+    for sym, tf in SERIES:
+        s = engine.load(sym, tf)
+        c = round_trip(study.COSTS[sym])
+        _, oos = split(s)
+        a = engine.atr(oos, 14)
+        for (H, k) in COND_CELLS:
+            recs = []
+            i = max(250, LOOK)
+            while i + H < len(oos):
+                if a[i] is None or a[i] <= 0:
+                    i += H; continue
+                d = k * a[i]
+                r = straddle_window(oos, i, d, H, c)
+                recs.append((pred_range(oos, i, LOOK, H) / d, r))
+                i += H
+            if len(recs) < 40:
+                continue
+            ratios = [x[0] for x in recs]
+            m, sd, _, _ = mean_sd_t(ratios)
+            cv = sd / m if m else 0.0
+            recs.sort(key=lambda x: x[0])
+            q = len(recs) // 4
+            cells = []
+            for j in range(4):
+                grp = recs[j * q:(j + 1) * q] if j < 3 else recs[3 * q:]
+                mg, _, _, _ = mean_sd_t([r["gross_B"] for _, r in grp])
+                mb, _, tb, _ = mean_sd_t([r["B"] for _, r in grp])
+                cells.append((mg / c, mb / c, tb))
+            gs = "  ".join(f"{g:+6.2f}" for g, _, _ in cells)
+            bs = "  ".join(f"{b:+6.2f}" for _, b, _ in cells)
+            ts = "  ".join(f"{t:+6.2f}" for _, _, t in cells)
+            print(f"{sym+' '+tf:>12} {H:>3} {cv:>9.3f} |  {gs}  | {q:>8}")
+            print(f"{'':>12} {'':>3} {'net B/c':>9} |  {bs}  |")
+            print(f"{'':>12} {'':>3} {'t(net B)':>9} |  {ts}  |")
+            for _, _, t in cells:
+                ALL_T.append(t)
+
+
+def leg_decomposition():
+    """THE BULL-MARKET CHECK the brief demands.
+
+    Gold's history here is a strong uptrend.  A genuinely NON-directional
+    structure must be indifferent to that: the up leg and the down leg should
+    contribute equally.  If the whole payoff comes from the up leg, the
+    result is a long-only trend bet wearing a straddle costume.
+    """
+    print("\n" + "=" * 74)
+    print("  STEP 2c — LONG/SHORT LEG DECOMPOSITION (the bull-market check).")
+    print("  gross contribution of each leg, mean per window, in units of c.")
+    print("  A real non-directional structure is symmetric; a trend bet is not.")
+    print("=" * 74)
+    print(f"{'series':>12} {'H':>3} {'up leg/c':>9} {'dn leg/c':>9} "
+          f"{'up fill%':>9} {'dn fill%':>9} {'n':>6}")
+    for sym, tf in SERIES:
+        s = engine.load(sym, tf)
+        c = round_trip(study.COSTS[sym])
+        a = engine.atr(s, 14)
+        for (H, k) in COND_CELLS:
+            up, dn, nu, nd_, n = [], [], 0, 0, 0
+            i = 250
+            while i + H < len(s):
+                if a[i] is None or a[i] <= 0:
+                    i += H; continue
+                d = k * a[i]; P = s.c[i]
+                hi = max(s.h[i + 1:i + 1 + H]); lo = min(s.l[i + 1:i + 1 + H])
+                cl = s.c[i + H]
+                u = (cl - (P + d)) if hi >= P + d else 0.0
+                v = ((P - d) - cl) if lo <= P - d else 0.0
+                nu += 1 if hi >= P + d else 0
+                nd_ += 1 if lo <= P - d else 0
+                up.append(u); dn.append(v); n += 1
+                i += H
+            if n < 40:
+                continue
+            mu, _, _, _ = mean_sd_t(up); md, _, _, _ = mean_sd_t(dn)
+            print(f"{sym+' '+tf:>12} {H:>3} {mu/c:>9.2f} {md/c:>9.2f} "
+                  f"{100.0*nu/n:>9.1f} {100.0*nd_/n:>9.1f} {n:>6}")
+
+
 def main():
     selftest()
     tab = ceiling_table()
@@ -455,6 +578,12 @@ def main():
     print("\n  PRE-REGISTERED RULE 2: usable requires mean B > 0 with "
           f"t > {T_THRESH} on GOLD or US500.")
     print(f"  RESULT: {'a cell qualifies' if any_b else 'NO cell qualifies'}.")
+    step_two()
+    print(f"\n  Quartile buckets tested in step 2b: {len(ALL_T)}. "
+          f"Buckets with t > 3.65: "
+          f"{sum(1 for t in ALL_T if t > T_THRESH)}. "
+          f"Largest t: {max(ALL_T):+.2f}. Smallest: {min(ALL_T):+.2f}.")
+    leg_decomposition()
 
 
 if __name__ == "__main__":

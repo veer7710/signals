@@ -1113,3 +1113,194 @@ Every future strategy claim in this project must be reported against a
 random-entry arm with the SAME payoff structure, the same bars and the same
 costs, or it is not a claim about a signal — it is a claim about a payoff
 structure wearing a signal's name.
+
+## E-043 — Non-directional payoff: the ceiling is enormous and 0% of it is reachable
+`python3 JARVIS/research/nondirectional.py`. (A4. E-043 was the assigned
+number and was still free; E-042 and E-044..E-046 are reserved for the
+concurrent agents, and E-050 was appended while this ran.)
+
+The question E-041 forces. Filtering is closed — a filter moves a zero-edge
+entry toward zero and never past it. So: can a different PAYOFF SHAPE, one
+that never bets on direction, monetise the project's only CONFIRMED finding
+(E-038, volatility predictable in 8 of 8 series)?
+
+Structure tested: at the close of bar i, a buy stop at `c[i] + k*ATR(14)` and
+a sell stop at `c[i] - k*ATR(14)`, both live for bars i+1..i+H, **neither
+cancelled when the other fills**. Grid H = 2,4,8,16,32,64 x k = 0.25,0.50,
+1.00,1.50,2.00 x 8 series = **240 cells**, non-overlapping windows, per-symbol
+costs from `study.COSTS`, per-leg round trip charged on every fill. The grid
+and the decision rule were committed in `0320f12` **before** any market data
+was read.
+
+### WHAT A SPOT MT5 ACCOUNT CAN AND CANNOT EXPRESS — read this first
+A retail spot account can place market orders, stop orders, limit orders,
+stop losses and take profits. **It cannot buy an option.** That matters more
+than anything else in this entry. A real long-volatility bet is an option: you
+pay a premium, and you win if the market moves more than the premium implied.
+A pair of stop orders is *not* that. There is no premium, so there is nothing
+to be mispriced — it is a breakout system with two entries, and it pays a full
+round trip on every leg that fills. **You cannot buy volatility on this
+account. You can only buy price direction, twice, in opposite directions, and
+pay for both.**
+
+### THE GATE: the oracle ceiling is huge — and that is the trap
+Perfect foresight of the EXIT only (capture the larger of the two excursions
+in full, minus the width, minus the honest cost of every leg that filled) is
+positive in **240 of 240 cells**, and not marginally: on GOLD 1h it runs from
+3.0x to **215x the round-trip cost** per window. A thin ceiling would have
+closed this branch cheaply. This ceiling is enormous.
+
+It is also worthless, and the decomposition is the finding. Replace perfect
+foresight with **no foresight at all** — every filled leg closed at the
+window's closing price — and the fraction of the ceiling that survives is:
+
+| series | median B/A | best cell B/A |
+|---|---|---|
+| GOLD 15m | +0.043 | +0.256 |
+| GOLD 1h | **-0.063** | **+0.002** |
+| US500 15m | -0.122 | +0.041 |
+| US500 1h | -0.021 | +0.017 |
+| EURUSD 1h | -0.086 | +0.000 |
+| GBPUSD 1h | -0.082 | +0.050 |
+
+**Essentially none of it.** The entire ceiling is exit-timing foresight, which
+is precisely what E-037 says this data does not supply.
+
+### The no-foresight result, in full
+Mean payoff per window in multiples of the round-trip cost c:
+
+- positive in **28 of 240 cells**
+- positive AND t > 3.65 in **0 of 240 cells**
+- best cell on a market E-040 says is tradeable: GOLD 15m, H=64, k=1.50,
+  **+28.51c but t = +2.57 on n = 66 windows** — below 3.65, and it is the
+  best of 240.
+- the *significant* results all point the other way: EURUSD 15m H=2 k=0.25
+  **t = -34.10**, GOLD 1h H=2 k=1.00 **t = -12.18**.
+
+### WHY, and it is not an empirical accident
+Self-test (d), run before any market data: on a driftless random walk with
+GOLD costs, bars built from a genuine sub-path,
+
+| per-bar sigma | gross payoff | t | net payoff |
+|---|---|---|---|
+| 0.5 | +0.0067 | +0.22 | -0.6538 |
+| 1.0 | +0.0134 | +0.22 | -0.6471 |
+| 2.0 | +0.0268 | +0.22 | -0.6337 |
+
+**Quadrupling the variance changes the net payoff by 3%.** The gross payoff is
+exactly zero at every volatility, because the structure's payoff is *linear*
+in price and every entry is a stopping time — by optional stopping, ANY
+non-anticipating exit rule on a martingale has zero expected gross. That is
+not one exit rule failing; it is the whole class. E-037 established these
+series are martingales. Predictable volatility scales the wins and the
+whipsaws by the same factor and cancels out. **You need convexity to monetise
+volatility, and convexity is the thing a spot instrument cannot express.**
+
+The pipeline is not blind: injecting a +0.30/bar drift into the same generator
+is detected at gross +2.392, **t +28.62**.
+
+### The whipsaw, measured rather than assumed
+Fraction of filled windows where BOTH legs fill (GOLD 1h):
+
+| H | k=0.25 | k=1.00 |
+|---|---|---|
+| 2 | 47.9% | 4.1% |
+| 8 | 75.2% | 19.6% |
+| 16 | 82.6% | 35.5% |
+| 32 | 88.1% | 48.8% |
+| 64 | 93.3% | 63.3% |
+
+A both-legs window locks in exactly -2d plus two round trips, whatever price
+then does. Widening k to avoid it just stops the structure filling at all.
+
+### THE MIRROR CLOSES THE ESCAPE ROUTE
+Fading the range (short volatility) is the exact algebraic mirror: a sell
+limit at P+d earns what a buy stop at P+d loses. Measured across 24 cells,
+
+    straddle payoff + fade payoff == -2 x (legs filled) x cost
+
+held to **3.18e-13**, i.e. exactly. Long volatility and short volatility do not
+sum to zero — they sum to *minus two round trips*. There is no sign flip that
+rescues this. In no cell were both positive; where the straddle was best
+(GOLD 15m H=32, +4.45c) the fade was -7.42c, and where the fade was best
+(GOLD 1h H=8, +2.02c) the straddle was -4.20c.
+
+### E-038 conditioning: tested anyway, and null
+Bucketing OOS windows by quartile of predicted range / d (E-038's predictor,
+`look`=20, scaled sqrt(H/look)). Dispersion gate first, as E-041 established:
+ratio CV is **0.298 to 0.347** in every series — genuinely varying, so unlike
+E-039 the test is informative, though narrower than E-041's 0.99 because d is
+still ATR-scaled. **88 quartile buckets. Buckets with t > 3.65: 0. Largest t
++1.59, smallest -6.92.** GOLD 1h H=32 Q4 shows +82.72c, which looks
+spectacular and is t = +1.59 on 30 windows — it is the loudest cell of 88 and
+it is noise.
+
+### The bull-market check
+Gold's history here is a strong uptrend, so a "non-directional" result must be
+shown to be indifferent to it. Gross contribution by leg, GOLD 1h:
+
+| H | up leg | down leg |
+|---|---|---|
+| 8 | +3.66c | -6.77c |
+| 16 | +7.55c | -8.78c |
+| 32 | **+13.54c** | **-13.37c** |
+
+The structure is *not* indifferent — it contains a large long-trend gain and
+an almost exactly equal short-trend loss, which cancel to zero gross. Deleting
+the losing leg would make it a directional trend bet, which is E-030 and E-031
+and is dead.
+
+### Verdict: REJECTED
+Not "unproven". The no-foresight payoff is negative in 212 of 240 cells, zero
+cells are positive at t > 3.65, the mechanism is proved analytically and
+reproduced numerically, and the mirror image loses by the same identity.
+
+### Method notes, including one failure worth recording
+The pre-registered self-test **FAILED on first run** (gross payoff t = +8.35
+on a driftless walk). Diagnosis: not a simulator bug but **intrabar
+discretisation overshoot** — assuming a stop order fills AT its level is free
+money, because the true price when it crosses the level is already past it.
+The bias scales with the sub-step and vanishes when the path is fine:
+
+| sub-step sd | spurious gross payoff | t |
+|---|---|---|
+| 0.4472 | +0.3598 | +4.70 |
+| 0.2236 | +0.3445 | +4.31 |
+| 0.1414 | +0.1246 | +1.52 |
+| 0.0707 | +0.1259 | +1.55 |
+
+Only the synthetic GENERATOR was changed (commit after the pre-registration,
+labelled as such); the grid, the decision rule and the three payoff
+accountings are untouched. **Every real-data figure above is optimistic by
+roughly this amount**, since real bars are coarse — which can only make a
+negative verdict safer. This is a general warning for any future stop-order
+backtest in this repo.
+
+Ties: with no tick data, a single bar containing both levels is resolved as
+BOTH legs filled (ties lose). The `tie%` column reports how much rests on it —
+at k >= 1.00 it is 2-22% of both-fill windows, so the usable widths do not
+depend on the assumption; at k = 0.25 it is 74-92% and they do.
+
+E-050's standing rule is satisfied by construction: this structure contains
+**no signal at all**, so it *is* the random arm. It earns exactly minus the
+cost. Note also that the exit here is a symmetric time exit, not the 3R/1R
+asymmetry E-050 showed can manufacture a positive number by itself.
+
+### What this licenses and what it does NOT
+LICENSES: closing "non-directional structure" as a branch for **spot
+instruments**. Every strategy in this repo bets on direction; this establishes
+that the alternative is not available on this account, for a mechanical
+reason, not a measurement one.
+
+DOES NOT LICENSE: any claim that volatility prediction is useless. E-038
+stands. It fails to become a PAYOFF here because spot payoffs are linear.
+Volatility prediction remains legitimate as a **sizing** input (that is E-044 /
+A5, untested) and as a **risk** input. If an options-capable account ever
+existed, this branch would reopen immediately and would be the first thing to
+retest — but that is a different broker and a different project.
+
+DOES NOT LICENSE: extrapolating to M1. The martingale argument is general, but
+E-037's martingale finding is measured at 15m and 1h only. If M1 shows genuine
+bid-ask-bounce autocorrelation, the series is not a martingale there and the
+optional-stopping argument does not apply. M1 remains the strongest open
+branch.
