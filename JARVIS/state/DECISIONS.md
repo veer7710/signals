@@ -68,3 +68,32 @@ account currency per point, never from leverage, and that stays true.
 Practical consequence: 1:500 means the EA's `LotFor()` will essentially never be
 margin-blocked, so a lot-size-zero rejection points at the risk maths or the
 broker's minimum volume, not at leverage.
+
+## D-009 — Target timeframes are M1, M5 and M15 (Veer, 2026-08-31)
+For BOTH the Pine and the EA.
+
+**This makes the data gap the project's binding constraint, not a footnote.**
+The repo holds 15m and 1h only. Of the three target timeframes, exactly one -
+M15 - can be measured at all. M1 and M5 have never been tested here and every
+number in EXPERIMENTS.md is silent about them.
+
+What is already known that bears on it, from E-040:
+
+| hold | move as a multiple of round-trip cost |
+|---|---|
+| M1 | **2.1x** (extrapolated, not measured) |
+| M5 | 4.6x (extrapolated) |
+| M15 | **8.0x** (measured) |
+
+So the three target timeframes are not equivalent. M15 gives a signal eight
+times its cost to work with; M1 gives about two. A strategy can be right at M15
+and mechanically unviable at M1 without anything about the signal changing.
+
+Consequences that follow and are not to be re-argued:
+1. Getting M1 and M5 data is now the highest-value action available, ahead of
+   any further research on 15m/1h. `JARVIS/tools/export_mt5_data.py`.
+2. Parameters tuned on 15m do not transfer. A DEMA(200) filter is 200 minutes
+   on M1 and 50 hours on M15 - the same number means completely different
+   things. Both products must scale their defaults by timeframe.
+3. Any claim about M1 or M5 performance is currently INFERENCE. It must be
+   labelled as such until the data exists.

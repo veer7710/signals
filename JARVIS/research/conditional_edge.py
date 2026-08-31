@@ -51,6 +51,7 @@ import engine, study
 RNG = np.random.default_rng(20260831)
 VR_BAR5 = 2.77   # set by the self-test: empirical 95th pct of |z| under a
 VR_BAR1 = 4.97   # true random walk with fully overlapping forward windows
+ROT_SIZE = 0.067 # set by self-test 5c: measured size of the rotation test
 
 SERIES = [(sym, tf) for sym in ("GOLD", "US500", "EURUSD", "GBPUSD")
           for tf in ("15m", "1h")]
@@ -137,7 +138,11 @@ def cond_vr(paths, block=None):
         return None, None, m
     if block is None:
         block = max(2, 4 * int(N))
-    block = min(block, m)
+    # need at least 8 blocks or every bootstrap draw is the original sample,
+    # the bootstrap sd collapses to float noise and z explodes to ~1e15.
+    block = max(2, min(block, m // 8))
+    if m // block < 8:
+        return None, None, m
 
     def _vr(P):
         v1 = P.reshape(-1).var(ddof=1)
@@ -153,8 +158,9 @@ def cond_vr(paths, block=None):
         idx = (starts[:, None] + np.arange(block)[None, :]).reshape(-1)[:m]
         boots[b] = _vr(paths[idx])
     sd = np.nanstd(boots, ddof=1)
-    z = (vr - 1.0) / sd if sd > 0 else 0.0
-    return float(vr), float(z), m
+    if not np.isfinite(sd) or sd <= 1e-9 * max(abs(vr), 1e-6):
+        return None, None, m
+    return float(vr), float((vr - 1.0) / sd), m
 
 
 def rotation_pvalue(y, labels, lag, n_perm=400):
@@ -349,6 +355,51 @@ def selftest():
     good_b = (best2 == 9) and p2 < 0.01
     ok &= good_a and good_b
     print(f"   -> {'PASS' if good_a and good_b else 'FAIL'}")
+
+    # ---- 5c. SIZE of the rotation test with REALISTIC calendar labels: 24-bar
+    #          weekdays, no Saturday, and a 2-bar Sunday week-open category that
+    #          is only ~1.6% of all bars. Two variants, both with ZERO drift in
+    #          every category: equal variance, and a Sunday that is 0.6x as
+    #          loud as the rest (which is what the market data actually shows).
+    #          If the test over-rejects here, any day-of-week finding below is
+    #          an artefact of the test rather than a fact about the market.
+    def _cal_labels(nb):
+        lab = np.empty(nb, int); i = 0; day = 0
+        while i < nb:
+            wd = day % 7
+            span = 2 if wd == 6 else (0 if wd == 5 else 24)
+            for _ in range(span):
+                if i < nb:
+                    lab[i] = wd; i += 1
+            day += 1
+        return lab
+    nn = 6000
+    lab = _cal_labels(nn)
+    reps3 = 150
+    global ROT_SIZE
+    out53 = {}
+    for quiet in (False, True):
+        rej = 0
+        for _ in range(reps3):
+            sig = np.where((lab == 6) & quiet, 0.6e-3, 1e-3)
+            yy = rng.normal(0, 1, nn) * sig
+            _, _, pp, _ = rotation_pvalue(yy, lab, bandwidth(1), n_perm=100)
+            rej += pp <= 0.05
+        out53[quiet] = rej / reps3
+    ROT_SIZE = out53[False]
+    print(f"\n5c. SIZE of the rotation test, realistic calendar labels, ZERO"
+          f" drift anywhere ({reps3} reps):")
+    for q in (False, True):
+        se = math.sqrt(max(out53[q], 1e-9) * (1 - out53[q]) / reps3)
+        tag = "Sunday category 0.6x as loud (as in the data)" if q else \
+              "all categories equally loud                  "
+        print(f"   {tag}: rejects {out53[q]:6.1%} +- {se:.1%}   (nominal 5%)")
+    good = out53[False] <= 0.20
+    ok &= good
+    print(f"   -> {'PASS' if good else 'FAIL'}. The unequal-variance case does"
+          f" NOT over-reject, so a quiet week-open category cannot by itself"
+          f" manufacture a day-of-week result. Measured size {ROT_SIZE:.1%} is"
+          f" the number the day-of-week count below is compared against.")
 
     print("\n" + ("  SELF-TEST PASSED" if ok else "  SELF-TEST FAILED"))
     print("=" * 74)
@@ -614,7 +665,13 @@ def run():
           f" rotation null, discovery on the IN-SAMPLE half only):")
     sig_t = [t for t in timerows if t[6] <= 0.05]
     print(f"  significant IN-SAMPLE at family-wise p <= 0.05: {len(sig_t)} of "
-          f"{len(timerows)}  (chance alone gives {0.05*len(timerows):.1f})")
+          f"{len(timerows)}  (chance gives {0.05*len(timerows):.1f} at nominal 5%,"
+          f" {ROT_SIZE*len(timerows):.1f} at the test's MEASURED size {ROT_SIZE:.1%})")
+    wk6 = [t for t in sig_t if t[3] == "day-of-week" and t[5] == 6]
+    print(f"  of those, on the Sunday / week-open bar (weekday 6): {len(wk6)}"
+          f"   positive {sum(1 for t in wk6 if t[7] > 0)}"
+          f" / negative {sum(1 for t in wk6 if t[7] < 0)}"
+          f"  <- a real week-open effect would not flip sign by market")
     held_t = [t for t in sig_t if np.isfinite(t[8]) and t[7] * t[8] > 0
               and abs(t[8]) >= 2.0]
     print(f"  ...of which the SAME category held out-of-sample "
