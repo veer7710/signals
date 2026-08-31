@@ -1015,3 +1015,53 @@ for why an M1 scalp that looks right on the chart still bleeds. **Holding
 minutes rather than seconds is what buys the room**, and the live evidence
 (12 trades, zero TPs, -0.58R) is consistent with trades being cut before they
 ever had cost-adjusted room to work.
+
+## E-041 — Level-target reachability: a real gradient that still ends at zero
+`python3 JARVIS/research/level_reach.py`. The fix E-039 implied: use a target
+whose distance is set by STRUCTURE (the next confirmed swing level, published
+5 bars late as it would actually be known) rather than by ATR, so the ratio
+predicted-travel / distance-to-target genuinely varies.
+
+The control worked: mean coefficient of variation of the ratio is **0.99**,
+against the near-zero variation that made E-039 uninformative. This test is
+informative.
+
+Out-of-sample, expectancy by quartile of the ratio:
+
+| market | Q1 | Q2 | Q3 | Q4 | Q4 > Q1 |
+|---|---|---|---|---|---|
+| GOLD 1h | -0.170 | -0.197 | +0.034 | **+0.002** | yes |
+| US500 1h | +0.208 | -0.083 | -0.065 | -0.158 | no |
+| EURUSD 15m | -0.664 | -0.543 | -0.685 | -0.305 | yes |
+| EURUSD 1h | -0.431 | -0.066 | -0.164 | -0.122 | yes |
+| GBPUSD 1h | -0.338 | -0.013 | -0.093 | -0.161 | yes |
+
+Q4 beat Q1 in **4 of 5**. Three markets lacked the sample size once a
+structural target was required.
+
+**Verdict: UNPROVEN, and the reason matters more than the verdict.**
+
+The gradient is real but no quartile is monotonic, and — decisively — **the best
+bucket in every market is at or below zero.** The single positive figure in the
+table is +0.002R. The filter moves a losing entry toward break-even. It never
+moves it past.
+
+### THE SYNTHESIS THIS FORCES
+Across E-036 (a confluence score from every measured factor: 5 of 8, backwards
+on gold 15m), E-039 (ATR-scaled reachability: uninformative by construction) and
+now E-041 (structural reachability: a real gradient ending at zero), the same
+result keeps appearing in different clothes:
+
+**A filter can improve a zero-edge entry toward zero. It cannot carry it past
+zero.** Filtering removes the worst trades from a distribution; it does not add
+information the entry never had. If the entry has no directional edge — and
+E-037 says these series have none, and the live chart agrees at -0.58R with
+zero take-profits in twelve — then no amount of filtering, confluence, zone
+memory, structure or reachability produces one.
+
+This closes an entire class of work. Effort on better filters for an existing
+directional entry is now known to be effort spent moving toward zero from
+below. What remains open is unchanged and is stated in MISSION.md: conditional
+edges (currently under test), volatility-based sizing and payoff structure
+(E-038 is CONFIRMED and is the only confirmed finding in the project), and M1
+microstructure (blocked on data).
