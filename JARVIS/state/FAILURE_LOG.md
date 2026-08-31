@@ -129,3 +129,40 @@ Corollary that cost the most here: a static checker reporting CLEAN was treated
 as evidence the file compiled. It is not. It is evidence that the specific
 things the checker models are absent. Nothing in this repo can compile Pine, so
 "CLEAN" must always be reported as "passes static checks", never as "compiles".
+
+## F-007 — Shipped a file with an undeclared variable, and lost a money bug's fix with it
+Veer pasted the indicator and got `Undeclared identifier "lastFireBar"` at line
+1314. He was right and it was my error.
+
+WHAT HAPPENED. A patch script applied `lastFireBar := bar_index` successfully,
+printed "ok" for the edit that DECLARED it, and then aborted on a later anchor.
+The script only wrote the file at the very end, so every edit it had already
+reported as done was discarded - the "ok" lines described an in-memory string
+that never reached disk. The declaration was lost; the usage, added by a
+different script, survived.
+
+WHAT ELSE WENT WITH IT. The same abort dropped the fix for the triple-entry bug
+(`canFire` counting only OPEN trades and not the pending queue) - the defect
+that put three positions on one idea and turned a 1R loss into 3R. **I had told
+Veer that was fixed. It was not.**
+
+WHY THE CHECKER DID NOT CATCH IT. `check_pine.py` treated `:=` as a
+declaration. So it saw `lastFireBar := bar_index`, recorded the name as
+declared, and never reported that nothing declared it. In Pine `:=` is
+ASSIGNMENT to a name that must already exist; only `=` declares. With that
+fixed the checker reproduces Veer's exact error on the exact line.
+
+FIXES
+1. `:=` no longer counts as a declaration in check_pine.py.
+2. Patch scripts write the file after EVERY edit, not once at the end.
+3. `JARVIS/tools/verify_fixes.py` asserts all 27 claimed fixes are present in
+   the files, by pattern, so a lost edit is caught by checking the artifact
+   rather than by trusting a script's own output.
+
+## L-010 — A patch script's success message is not evidence the file changed
+Every "ok" printed by a patch script describes an in-memory operation. If the
+script dies before writing, all of them are lies, and they are convincing ones
+because they are specific and ordered. Two rules follow: write after every
+edit, and verify the artifact afterwards rather than reading the log. This is
+the same failure family as L-009 - trusting a proxy for the thing instead of
+the thing.

@@ -25,7 +25,12 @@ runtime timenow last_bar_index last_bar_time
 else if elif for while switch break continue return type enum method import export
 """.split())
 
-DECL = re.compile(r'^\s*(?:var\s+(?:\w+\s+)?)?([a-zA-Z_]\w*)\s*(?::=|=)(?!=)')
+# ':=' is ASSIGNMENT to a variable that must already exist. Treating it as a
+# declaration is exactly how an undeclared name slips through: the checker sees
+# `lastFireBar := bar_index`, records it as declared, and never reports that
+# nothing ever declared it. Only '=' (with or without var/varip) declares.
+DECL = re.compile(r'^\s*(?:var(?:ip)?\s+(?:\w+(?:<[^>]+>)?\s+)?)?([a-zA-Z_]\w*)\s*=(?!=)')
+ASSIGN = re.compile(r'^\s*([a-zA-Z_]\w*)\s*:=')
 MULTI = re.compile(r'^\s*\[([^\]]+)\]\s*=')
 FUNC = re.compile(r'^([a-zA-Z_]\w*)\s*\(')
 PARAM = re.compile(r'\b(?:int|float|bool|string|color|line|label|box|table|array<[^>]+>)\s+([a-zA-Z_]\w*)')
