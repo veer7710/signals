@@ -68,6 +68,8 @@ maxLevels = input.int(30,   "Max live levels per side", minval = 2, maxval = 60,
 lvlMaxAge = input.int(500,  "Forget levels older than (bars)", minval = 50, group = gL)
 showLvls  = input.bool(true, "Show liquidity lines", group = gL)
 showZones = input.bool(true, "Show liquidity zones", group = gL)
+showSweeps = input.bool(true, "Mark every sweep on the chart", group = gL,
+     tooltip = "A level going grey when it is taken is easy to miss. The sweep is the event this whole strategy is built on, so it gets its own mark where it happened.")
 
 gH = "LEVELS FROM FURTHER BACK  (works on any chart timeframe)"
 useHtf = input.bool(true, "Pull levels from higher timeframes", group = gH,
@@ -92,6 +94,8 @@ biasLife  = input.int(200, "   structure goes stale after (bars)", minval = 20, 
      tooltip = "A break of structure two days ago does not describe today. Without this the Structure row stays green through days of range, and the 'only trade WITH the structure' filter keeps refusing shorts on the strength of it.")
 
 gI = "IMBALANCES AND ORDER BLOCKS"
+useIfvg = input.bool(true, "Inverse gaps (a gap that FAILS flips sides)", group = gI,
+     tooltip = "The piece most gap indicators leave out. When price closes clean through a bullish gap instead of bouncing off it, the buyers who were defending it are wrong and trapped - that same zone now caps price from above. It becomes a SELL zone. An IFVG is often a better level than the original gap was, because it has already proved which side lost.")
 useFvg = input.bool(true, "Fair value gaps (unfilled imbalance)", group = gI,
      tooltip = "Three bars where the middle one moves so fast that the first bar's high never meets the third bar's low. Price returns to fill those gaps far more often than not, and the gap edge is a precise place to enter rather than a rough zone.")
 fvgMin = input.float(0.25, "   gap must be at least (× ATR)", minval = 0.05, step = 0.05, group = gI)
@@ -701,6 +705,14 @@ if array.size(hiPx) > 0
             broke = needClose ? (close > p) : (high > p)
             if broke and barstate.isconfirmed
                 array.set(hiDead, i, true)
+                // The grab, marked where it happened. A level going grey is
+                // easy to miss; this is the event the whole strategy is built
+                // on and it should be impossible to miss.
+                if showSweeps
+                    label.new(bar_index, p, "SWEEP", size = size.tiny,
+                         style = label.style_label_down,
+                         color = color.new(color.white, 100),
+                         textcolor = color.new(accBear, 15))
                 if na(sweptHi) or p > sweptHi
                     sweptHi := p
                     sweptHiHits := array.get(hiHits, i)
@@ -712,6 +724,11 @@ if array.size(loPx) > 0
             broke = needClose ? (close < p) : (low < p)
             if broke and barstate.isconfirmed
                 array.set(loDead, i, true)
+                if showSweeps
+                    label.new(bar_index, p, "SWEEP", size = size.tiny,
+                         style = label.style_label_up,
+                         color = color.new(color.white, 100),
+                         textcolor = color.new(accBull, 15))
                 if na(sweptLo) or p < sweptLo
                     sweptLo := p
                     sweptLoHits := array.get(loHits, i)
@@ -810,8 +827,10 @@ var array<float> fvTop = array.new_float()
 var array<float> fvBot = array.new_float()
 var array<int>   fvDir = array.new_int()
 var array<box>   fvBx  = array.new_box()
+var array<bool>  fvInv = array.new_bool()   // has this gap FAILED and flipped?
 
 addFvg(float top, float bot, int dir) =>
+    array.push(fvInv, false)
     array.push(fvTop, top)
     array.push(fvBot, bot)
     array.push(fvDir, dir)
@@ -821,6 +840,7 @@ addFvg(float top, float bot, int dir) =>
         b0 = array.shift(fvBx)
         if not na(b0)
             box.delete(b0)
+        array.shift(fvInv)
         array.shift(fvTop)
         array.shift(fvBot)
         array.shift(fvDir)
@@ -834,8 +854,29 @@ if fvgDn
 // An unfilled gap that price has come back into is the entry - ONCE. Without
 // removing it, the same gap re-fires on every bar price spends inside it, which
 // on M1 is dozens of identical signals from one imbalance.
+//
+// INVERSION comes first: a gap that price CLOSES clean through has failed. The
+// side defending it was wrong, and the zone now works from the other side. It
+// is flipped rather than deleted, because an inverted gap has already proved
+// which side lost, which is more information than the original gap carried.
 float fvLong  = na
 float fvShort = na
+var bool lastWasInv = false
+if useIfvg and array.size(fvTop) > 0
+    for i = array.size(fvTop) - 1 to 0
+        t = array.get(fvTop, i)
+        b = array.get(fvBot, i)
+        dr = array.get(fvDir, i)
+        if barstate.isconfirmed and not array.get(fvInv, i)
+            failed = dr > 0 ? close < b : close > t
+            if failed
+                array.set(fvDir, i, -dr)
+                array.set(fvInv, i, true)
+                bxi = array.get(fvBx, i)
+                if not na(bxi)
+                    box.set_bgcolor(bxi, color.new(dr > 0 ? accBear : accBull, 82))
+                    box.set_border_color(bxi, color.new(dr > 0 ? accBear : accBull, 40))
+
 if array.size(fvTop) > 0
     for i = array.size(fvTop) - 1 to 0
         t  = array.get(fvTop, i)
@@ -850,6 +891,7 @@ if array.size(fvTop) > 0
                 fvShort := t
                 took := true
             if took
+                lastWasInv := array.get(fvInv, i)
                 // DELETE it. Greying it and dropping the handle leaked the box:
                 // unreachable, never reclaimed, and on M1 gold enough gaps form
                 // to reach max_boxes_count within a session - at which point
@@ -861,6 +903,7 @@ if array.size(fvTop) > 0
                 array.remove(fvTop, i)
                 array.remove(fvBot, i)
                 array.remove(fvDir, i)
+                array.remove(fvInv, i)
                 array.remove(fvBx, i)
 
 // ════════════════════ ORDER BLOCKS ═══════════════════════════════════════════
@@ -1075,10 +1118,12 @@ goShort  = anyShort and (not bothWays or not tieLong)
 // was anchored to a different one.
 nameFor(int dir) =>
     dir > 0
-         ? (not na(fvLong) ? "GAP FILL" : obLong ? "ORDER BLOCK"
+         ? (not na(fvLong) ? (lastWasInv ? "INVERSE GAP" : "GAP FILL")
+            : obLong ? "ORDER BLOCK"
             : not na(rcLong) ? "RETEST" : pbLong ? "PULLBACK"
             : boLong ? "BREAKOUT" : bncLong ? "BOUNCE" : "BREAK")
-         : (not na(fvShort) ? "GAP FILL" : obShort ? "ORDER BLOCK"
+         : (not na(fvShort) ? (lastWasInv ? "INVERSE GAP" : "GAP FILL")
+            : obShort ? "ORDER BLOCK"
             : not na(rcShort) ? "RETEST" : pbShort ? "PULLBACK"
             : boShort ? "BREAKOUT" : bncShort ? "BOUNCE" : "BREAK")
 
@@ -1554,12 +1599,17 @@ drawZoneLabels(array<float> px, array<bool> dead, bool isHigh) =>
             if not array.get(dead, i)
                 p = array.get(px, i)
                 t = zoneText(p, isHigh)
-                if t != ""
+                // BSL / SSL by name. Sell-side liquidity is the resting stops
+                // ABOVE price (shorts' stops, which a rally runs into); buy-side
+                // is the stops BELOW. Naming them removes the guesswork of
+                // reading it off the colour.
+                tag = (isHigh ? "SSL" : "BSL") + (t == "" ? "" : "  " + t)
+                if true
                     hp = zoneHold(p, isHigh)
                     col = hp < 0 ? color.new(chart.fg_color, 45)
                          : hp >= 60 ? accBull : hp <= 40 ? accBear
                          : color.new(#FFB300, 0)
-                    array.push(zLabs, label.new(bar_index + 4, p, t,
+                    array.push(zLabs, label.new(bar_index + 4, p, tag,
                          style = label.style_label_left, size = size.tiny,
                          color = color.new(color.white, 100), textcolor = col))
     0
@@ -1888,7 +1938,7 @@ if showOrders and barstate.islast
 // switch off - the only version of the question that can actually be answered.
 showBoard = input.bool(true, "Show the setup scoreboard", group = gD)
 
-var table board = table.new(position.bottom_left, 5, 9, frame_width = 1,
+var table board = table.new(position.bottom_left, 5, 10, frame_width = 1,
      frame_color = color.new(color.gray, 60), border_width = 1,
      border_color = color.new(color.gray, 85))
 
@@ -1899,7 +1949,7 @@ bCell(int c, int r, string txt, color col, bool head) =>
          bgcolor = color.new(chart.bg_color, 5))
 
 kinds = array.from("BREAK", "BOUNCE", "RETEST", "PULLBACK", "BREAKOUT",
-     "GAP FILL", "ORDER BLOCK")
+     "GAP FILL", "INVERSE GAP", "ORDER BLOCK")
 
 if showBoard and barstate.islast and array.size(hSet) > 0
     bCell(0, 0, "setup",  chart.fg_color, true)
@@ -1931,11 +1981,11 @@ if showBoard and barstate.islast and array.size(hSet) > 0
         bCell(3, ki + 1, cnt == 0 ? "-" : str.tostring(sr, "#.#"), col, false)
         bCell(4, ki + 1, cnt == 0 ? "-"
              : (sm >= 0 ? "+" : "") + str.tostring(sm, "#.##"), col, false)
-    bCell(0, 8, "keep the green ones", color.new(chart.fg_color, 30), true)
-    bCell(1, 8, "", chart.fg_color, true)
-    bCell(2, 8, "", chart.fg_color, true)
-    bCell(3, 8, "", chart.fg_color, true)
-    bCell(4, 8, "switch off red", color.new(chart.fg_color, 30), true)
+    bCell(0, 9, "keep the green ones", color.new(chart.fg_color, 30), true)
+    bCell(1, 9, "", chart.fg_color, true)
+    bCell(2, 9, "", chart.fg_color, true)
+    bCell(3, 9, "", chart.fg_color, true)
+    bCell(4, 9, "switch off red", color.new(chart.fg_color, 30), true)
 
 // ──────────────────────────────────── ALERTS ────────────────────────────────
 // Alerts fire on firedLong/firedShort - the direction actually TAKEN - not on
