@@ -407,7 +407,7 @@ input double InpRunAdx        = 25.0;   // ADX at entry (weakest of the three)
 
 input group "=== EXECUTION BOX (what is actually happening) ==="
 input bool   InpShowBox       = true;   // on-chart profit and execution panel
-input int    InpBoxCorner     = 1;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
+input int    InpBoxCorner     = 0;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 18;
 input int    InpBoxSize       = 8;      // font size

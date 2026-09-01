@@ -82,8 +82,8 @@ minScore = input.int(2, "Only signal at levels scoring at least", minval = 0, ma
 sigCool  = input.int(10, "Bars between signals", minval = 1, maxval = 200, group = gS)
 
 gB = "BREAK, RETEST, CONTINUE"
-useRetest= input.bool(true, "Wait for the retest before continuing", group = gB,
-     tooltip = "A level that breaks and is then retested from the other side is the same trade taken at a better price and with the level now working FOR you. This is the entry Veer described: break, wait, continue.")
+useRetest= input.bool(false, "Wait for the retest before continuing", group = gB,
+     tooltip = "OFF by default, deliberately. This chart's job is to catch the WHOLE move; the retest is a SECOND entry into a move already identified, and that belongs in the EA where it can be sized and managed. Turn it on only to see where those entries would have been.")
 retestWin= input.int(40, "   retest must come within (bars)", minval = 3, maxval = 500, group = gB)
 retestGo = input.float(0.15, "   confirm when price moves this far away (x ATR)", minval = 0.02, step = 0.05, group = gB)
 
@@ -94,7 +94,25 @@ scalpMin = input.int(1, "   a scalp needs a score of at least", minval = 0, maxv
 
 gX = "EXITS"
 useExit  = input.bool(true, "Mark where the trade runs into the next zone", group = gX,
-     tooltip = "Price arriving at an opposing zone is where a move most often stops. It is not a reversal signal - it is a reason to bank something.")
+     tooltip = "Price ARRIVING at an opposing zone is one event. Sitting inside it for forty bars is still one event. The first version marked every bar and covered the chart in crosses; this marks the arrival only.")
+exitMinScore = input.int(2, "   only for zones scoring at least", minval = 0, maxval = 10, group = gX)
+exitCool = input.int(15, "   and not again for (bars)", minval = 1, maxval = 200, group = gX)
+
+gF = "SMC  —  displacement, fair value gaps, order blocks"
+useSmc   = input.bool(true, "Require SMC confluence for the main signal", group = gF,
+     tooltip = "A level breaking is common. A level breaking on a DISPLACEMENT candle that leaves a fair value gap behind is the thing worth trading, and it is what turns a break into a sniper entry: the gap gives you a price to come back to, so the entry is a limit rather than a chase.")
+dispAtr  = input.float(1.5, "   displacement bar is at least (x ATR)", minval = 0.5, step = 0.1, group = gF)
+useFvg   = input.bool(true, "   require a fair value gap", group = gF)
+showFvg  = input.bool(true, "   draw the gaps", group = gF)
+useIfvg  = input.bool(true, "   treat a filled gap as an inverse FVG", group = gF)
+showOb   = input.bool(true, "   draw the order block behind the move", group = gF)
+
+gP = "POSITION BOX"
+showPos  = input.bool(true, "Track the live signal", group = gP)
+posLots  = input.float(0.01, "   lots, for the P/L figure", minval = 0.01, step = 0.01, group = gP)
+posCcy   = input.string("GBP", "   label", group = gP)
+posRate  = input.float(0.79, "   account currency per USD", minval = 0.01, step = 0.01, group = gP,
+     tooltip = "Gold is quoted in USD. 0.01 lots is 1 ounce, so a $1 move is $1. This converts that to your account currency for the box.")
 
 gV = "LOOK"
 showZone = input.bool(true, "Zones", group = gV)
@@ -167,6 +185,72 @@ findNear(float px, int dir) =>
                     hit := i
     hit
 
+// ---------------------------------------------------------------- SMC ------
+// DISPLACEMENT, FAIR VALUE GAP, ORDER BLOCK.
+//
+// A level breaking is common and mostly meaningless. A level breaking on a
+// DISPLACEMENT candle that leaves a FAIR VALUE GAP behind is the event worth
+// trading, and it is what turns a break into a sniper entry rather than a
+// chase: the gap is a price the market has shown it will come back to, so the
+// entry can be a LIMIT sitting there instead of a market order at the worst
+// price of the move.
+//
+// A fair value gap is three bars where the middle one moved so hard that bar
+// 1's high never met bar 3's low. Nothing traded in between. That untraded
+// band is the gap.
+//
+// An INVERSE fair value gap is one that has since been closed THROUGH. It
+// stops being support and starts being resistance, which is why it is tracked
+// rather than deleted.
+//
+// NONE OF THIS IS MEASURED YET. Displacement, FVGs and order blocks are not in
+// any experiment in this project. They are here because Veer asked for them
+// and because they give the entry a defined price; the panel says UNPROVEN and
+// it should keep saying that until the numbers exist.
+
+// bullish gap: this bar's low is above the high of two bars back
+fvgUp   = low > high[2] and close > open
+fvgDn   = high < low[2] and close < open
+fvgUpTop = low
+fvgUpBot = high[2]
+fvgDnTop = low[2]
+fvgDnBot = high
+
+isDisp  = atr > 0 and (high - low) >= dispAtr * atr
+
+// the ORDER BLOCK behind a move: the last candle of the opposite colour
+// before the displacement. It is where the move was actually loaded.
+obUpTop = high[1]
+obUpBot = low[1]
+obIsUp  = isDisp and close > open and close[1] < open[1]
+obIsDn  = isDisp and close < open and close[1] > open[1]
+
+var box  fvgBox = na
+var box  obBox  = na
+var float lastFvgMid = na
+var int   lastFvgDir = 0
+var int   lastFvgBar = -9999
+
+if useFvg and (fvgUp or fvgDn)
+    lastFvgDir := fvgUp ? 1 : -1
+    lastFvgMid := fvgUp ? math.avg(fvgUpTop, fvgUpBot) : math.avg(fvgDnTop, fvgDnBot)
+    lastFvgBar := n
+    if showFvg
+        top = fvgUp ? fvgUpTop : fvgDnTop
+        bot = fvgUp ? fvgUpBot : fvgDnBot
+        col = fvgUp ? cSup : cRes
+        fvgBox := box.new(n - 2, top, n + 12, bot,
+             border_color = color.new(col, 80), bgcolor = color.new(col, 90))
+
+// INVERSE FVG: the gap has been closed through, so it now works the other way
+ifvgFlip = useIfvg and lastFvgDir != 0 and not na(lastFvgMid)
+     and (lastFvgDir == 1 ? close < lastFvgMid : close > lastFvgMid)
+
+if showOb and (obIsUp or obIsDn)
+    obBox := box.new(n - 1, obUpTop, n + 6, obUpBot,
+         border_color = color.new(obIsUp ? cSup : cRes, 60),
+         bgcolor = color.new(obIsUp ? cSup : cRes, 92))
+
 // ------------------------------------------------------------ new pivots ---
 ph = ta.pivothigh(swing, swing)
 pl = ta.pivotlow(swing, swing)
@@ -220,6 +304,7 @@ if useMtf
 // Every level, every bar: has price arrived, has it been turned away, has it
 // been cut through. All three are decided on bars that have already closed.
 var int  lastSigBar = -9999
+var int  lastExitBar = -9999
 var bool sigBuy  = false
 var bool sigSell = false
 var bool retBuy  = false
@@ -266,8 +351,15 @@ if array.size(LV) > 0
             L.broken := true
             L.brokeBar := n
             L.pendBar := -1
-            // FOLLOW the break. This is the direction with evidence behind it.
-            if showSig and (sigMode != "Fade the rejection")
+            // FOLLOW the break, WITH CONFLUENCE. A break on an ordinary bar
+            // is just a break; a break on a DISPLACEMENT candle that leaves a
+            // fair value gap behind is the entry. Requiring both is what turns
+            // forty signals a day into the handful that are the actual move -
+            // which is what Veer asked for: catch the whole move, not every
+            // wobble that crosses a line.
+            bool smcOk = not useSmc or (isDisp and (not useFvg
+             or (lastFvgBar >= n - 3 and lastFvgDir == L.dir)))
+            if showSig and (sigMode != "Fade the rejection") and smcOk
                 if scoreOf(L.reacts, L.members, L.best, false) >= minScore
                  and n - lastSigBar >= sigCool
                     if L.dir > 0
@@ -355,13 +447,22 @@ if array.size(LV) > 0
                     else
                         scpBuy := true
 
-        // ---- EXIT MARKERS: an unbroken opposing zone right in front of price
+        // ---- EXIT MARKERS. ARRIVAL ONLY.
+        // The first version tested "is price inside the zone" on every bar, so
+        // a forty-bar consolidation inside one zone drew forty crosses and the
+        // chart filled up. Veer, exactly: "it keeps producing random ass x
+        // signs". It is ONE event - the arrival - and only worth marking at a
+        // zone strong enough to be worth banking into.
         if useExit and not L.broken and L.reacts >= minReact
-            if math.abs(close - L.px) <= tol * 1.5
-                if L.dir > 0
-                    exitUp := true
-                else
-                    exitDn := true
+            bool inNow  = math.abs(close - L.px) <= tol * 1.5
+            bool inPrev = math.abs(close[1] - L.px) <= tol * 1.5
+            if inNow and not inPrev and n - lastExitBar >= exitCool
+                if scoreOf(L.reacts, L.members, L.best, false) >= exitMinScore
+                    if L.dir > 0
+                        exitUp := true
+                    else
+                        exitDn := true
+                    lastExitBar := n
 
         // ---- is price near a remembered price RIGHT NOW?
         int sc = scoreOf(L.reacts, L.members, L.best, L.broken)
@@ -471,6 +572,75 @@ plotshape(useExit and exitUp, "into resistance", shape.xcross, location.abovebar
      color.new(color.orange, 25), size = size.tiny)
 plotshape(useExit and exitDn, "into support", shape.xcross, location.belowbar,
      color.new(color.orange, 25), size = size.tiny)
+
+// ------------------------------------------------------- POSITION BOX ------
+// What the signal is actually WORTH, live, in the currency Veer thinks in.
+// Not a backtest and not a scoreboard - the trade that is on right now: where
+// it entered, what it is worth, the best it has been, and how much of that
+// best has already gone. That last row is the whole problem this project has
+// been chasing, and until now it has only ever been visible after the fact.
+//
+// GOLD is quoted in USD and 0.01 lots is one ounce, so a $1 move is $1.
+// posRate converts that to the account currency for display only.
+var bool  pActive = false
+var int   pDir    = 0
+var float pEntry  = na
+var int   pBar    = 0
+var float pPeak   = 0.0
+var float pWorst  = 0.0
+var float pLimit  = na
+
+if showPos and (sigBuy or sigSell or retBuy or retSell)
+    pActive := true
+    pDir    := (sigBuy or retBuy) ? 1 : -1
+    pEntry  := close
+    pBar    := n
+    pPeak   := 0.0
+    pWorst  := 0.0
+    // the SNIPER price: where a limit would sit, at the gap the move left
+    pLimit  := (lastFvgBar >= n - 4 and not na(lastFvgMid)) ? lastFvgMid : na
+
+if pActive and not na(pEntry)
+    fav = (pDir == 1 ? high - pEntry : pEntry - low)
+    adv = (pDir == 1 ? pEntry - low : high - pEntry)
+    pPeak  := math.max(pPeak, fav)
+    pWorst := math.max(pWorst, adv)
+
+pNow   = pActive and not na(pEntry) ? (pDir == 1 ? close - pEntry : pEntry - close) : 0.0
+oz     = posLots * 100.0
+pMoney = pNow * oz * posRate
+pBest  = pPeak * oz * posRate
+pBack  = (pPeak - pNow) * oz * posRate
+pKept  = pPeak > 0 ? 100.0 * pNow / pPeak : 0.0
+
+var table B = table.new(position.bottom_left, 2, 8, border_width = 1)
+
+f_b(int r, string a, string b, color c) =>
+    table.cell(B, 0, r, a, text_color = color.silver, text_size = size.tiny)
+    table.cell(B, 1, r, b, text_color = c, text_size = size.tiny)
+
+if showPos and barstate.islast
+    table.cell(B, 0, 0, "POSITION", text_color = color.white,
+         bgcolor = color.new(color.teal, 40), text_size = size.small)
+    table.cell(B, 1, 0, pActive ? (pDir == 1 ? "LONG" : "SHORT") : "flat",
+         text_color = color.white, bgcolor = color.new(color.teal, 40),
+         text_size = size.small)
+
+    f_b(1, "entry", pActive ? str.tostring(pEntry, format.mintick) : "-",
+         color.white)
+    f_b(2, "now", pActive ? str.tostring(pMoney, "#.##") + " " + posCcy : "-",
+         pMoney >= 0 ? cSup : cRes)
+    f_b(3, "peak", pActive ? str.tostring(pBest, "#.##") + " " + posCcy : "-",
+         color.white)
+    f_b(4, "given back", pActive ? str.tostring(pBack, "#.##") + " " + posCcy : "-",
+         pBack > 0 ? color.orange : color.silver)
+    f_b(5, "kept of peak", pActive and pPeak > 0
+         ? str.tostring(pKept, "#") + "%" : "-",
+         pKept >= 60 ? cSup : (pKept >= 30 ? color.orange : cRes))
+    f_b(6, "bars held", pActive ? str.tostring(n - pBar) : "-", color.silver)
+    f_b(7, "limit / gap", not na(pLimit)
+         ? str.tostring(pLimit, format.mintick) : "no gap left behind",
+         not na(pLimit) ? color.yellow : color.silver)
 
 alertcondition(retBuy, "LIQ v2 RETEST BUY", "Liquidity Sniper v2: retest BUY")
 alertcondition(retSell, "LIQ v2 RETEST SELL", "Liquidity Sniper v2: retest SELL")
