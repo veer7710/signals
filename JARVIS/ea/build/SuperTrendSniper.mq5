@@ -572,6 +572,21 @@ int      g_flipHistN     = 0;
 // for a display that feeds no decision. (Audit finding 13.) Cached per bar;
 // the money figures below still update on every tick, which is the only part
 // a person actually watches move.
+// SPREAD TELEMETRY. I have twice built an argument on a spread number I read
+// off a chart rather than off the account that trades. Veer's EA runs on a
+// different broker from his TradingView feed, and he says the spread is not
+// large. Guessing again would be the third time, so the EA now MEASURES it:
+// every tick updates the running picture, every entry records the spread at
+// the moment of the fill, and the box shows it. One session of this settles
+// what no amount of analysis can.
+double   g_spMin         = 1e9;
+double   g_spMax         = 0.0;
+double   g_spSum         = 0.0;
+long     g_spN           = 0;
+double   g_spEntrySum    = 0.0;   // spread at the moment of each entry
+int      g_spEntryN      = 0;
+double   g_spEntryMax    = 0.0;
+
 datetime g_boxBar        = 0;
 double   g_boxEff        = 0.0;
 int      g_boxFlips      = 0;
@@ -1400,10 +1415,17 @@ void TryEntry()
          return;
       }
 
+      double spAtEntry = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                       - SymbolInfoDouble(_Symbol, SYMBOL_BID);
       if(trade.Buy(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
+         g_spEntrySum += spAtEntry; g_spEntryN++;
+         if(spAtEntry > g_spEntryMax) g_spEntryMax = spAtEntry;
          g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
-         Journal("ENTRY", "long", ask, lots, sl, tp, 0, "");
+         Journal("ENTRY", "long", ask, lots, sl, tp, 0,
+                 StringFormat("spread %.*f stop %.*f cost/stop %.3f",
+                              dg, spAtEntry, dg, stopDist,
+                              stopDist > 0 ? RoundTripCost() / stopDist : 0.0));
          Log(StringFormat("LONG %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
       }
@@ -1444,10 +1466,17 @@ void TryEntry()
          return;
       }
 
+      double spAtEntry = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                       - SymbolInfoDouble(_Symbol, SYMBOL_BID);
       if(trade.Sell(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
+         g_spEntrySum += spAtEntry; g_spEntryN++;
+         if(spAtEntry > g_spEntryMax) g_spEntryMax = spAtEntry;
          g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
-         Journal("ENTRY", "short", bid, lots, sl, tp, 0, "");
+         Journal("ENTRY", "short", bid, lots, sl, tp, 0,
+                 StringFormat("spread %.*f stop %.*f cost/stop %.3f",
+                              dg, spAtEntry, dg, stopDist,
+                              stopDist > 0 ? RoundTripCost() / stopDist : 0.0));
          Log(StringFormat("SHORT %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
       }
@@ -2765,6 +2794,17 @@ void DrawBox()
    BoxLine(r++, StringFormat("       supertrend leg %s, %d bars",
                              (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
                              g_barsInTrend), InpBoxText);
+   // THE ROW THAT SETTLES THE ARGUMENT. If the average spread here is small,
+   // the cost floor on the stop (InpMinStopCostX) never binds and the ATR term
+   // decides the stop, exactly as before. If it is large, it binds - and the
+   // number is measured rather than assumed.
+   double spAvg = (g_spN > 0) ? g_spSum / (double)g_spN : 0.0;
+   double spEnt = (g_spEntryN > 0) ? g_spEntrySum / (double)g_spEntryN : 0.0;
+   BoxLine(r++, StringFormat("spread now %.*f  avg %.*f  entry-avg %.*f  worst %.*f",
+                             _Digits, SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                    - SymbolInfoDouble(_Symbol, SYMBOL_BID),
+                             _Digits, spAvg, _Digits, spEnt, _Digits, g_spMax),
+           InpBoxText);
    BoxLine(r++, StringFormat("cost %.1f%% of stop   efficiency %.2f   flips %d/%d",
                              (g_boxStop > 0 ? 100.0 * g_boxCost / g_boxStop : 0.0),
                              g_boxEff, g_boxFlips, InpChopFlipLen),
@@ -2859,6 +2899,11 @@ int OnInit()
    // a lock or move the drawdown baseline.
    LoadGuards();
 
+   PrintFormat("Broker spread right now: %.*f. The stop's cost floor "
+               "(InpMinStopCostX = %.1f) only binds if the spread is large "
+               "relative to ATR - watch the 'spread' row in the box.",
+               _Digits, SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                      - SymbolInfoDouble(_Symbol, SYMBOL_BID), InpMinStopCostX);
    PrintFormat("SuperTrendSniper started. ST(%d, %.2f) DEMA(%d) risk %.2f%% "
                "target %.1fR  BE=%s trail=%s",
                InpStAtrLen, InpStMult, InpDemaLen, InpRiskPct, InpTargetR,
@@ -2903,6 +2948,17 @@ void OnTick()
    // while nothing acts; on M1 a bar-close-only exit is allowed to look once
    // a minute. Entries stay on bar close - that is what keeps the backtest
    // and the live account the same system.
+   // measure the spread on every tick, before anything decides anything
+   double spNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(spNow > 0.0)
+   {
+      if(spNow < g_spMin) g_spMin = spNow;
+      if(spNow > g_spMax) g_spMax = spNow;
+      g_spSum += spNow;
+      g_spN++;
+   }
+
    CheckGuardsTick();      // before anything else: a breach outranks a rule
    UpdatePeaks();
    ProtectPositions();
