@@ -228,3 +228,106 @@ POLICIES = {
     "time 50 bars":          time_exit(50),
     "ORACLE (not tradeable)": oracle_peak(),
 }
+
+
+# ---------------------------------------------------------------------------
+# PEAK GIVE-BACK  (E-051)
+#
+# Veer's live complaint, stated mechanically: a trade reaches GBP10+ floating
+# and closes for far less; a basket reaches GBP12 and closes at breakeven.
+# Every exit rule above is anchored to PRICE (a stop level, an ATR distance,
+# a fixed multiple of risk). None of them is anchored to HOW GOOD THE TRADE
+# ALREADY WAS. This one is: it remembers the best the trade ever got, and
+# leaves when a fixed fraction of that best has been handed back.
+#
+# NO LOOK-AHEAD. The trigger price for bar i is computed from the peak as it
+# stood at the END of bar i-1. Using this bar's own high to place a trigger
+# inside this bar would assume the high printed before the retrace, which is
+# unknowable from OHLC. That assumption is worth roughly a third of the
+# measured edge, so it is not made.
+#
+# The fill is still optimistic in the same way every stop in this lab is
+# (L-012, intrabar discretisation): a real fill is at or past the trigger,
+# never better. Read every number below as a ceiling.
+def peak_giveback(arm_r, gb, use_stop=True):
+    """Exit when the trade hands back `gb` of its best-ever profit, once that
+    best has reached arm_r. Below arm_r the original stop is the only exit."""
+    def f(p, b):
+        side = p["side"]
+        if use_stop:
+            hit = b["l"] <= p["stop"] if side == 1 else b["h"] >= p["stop"]
+            if hit:
+                return (p["stop"], "stop")
+        prev_peak = p.get("gb_peak", 0.0)          # peak as of the LAST bar
+        if prev_peak >= arm_r * p["risk"]:
+            trig = p["entry"] + side * prev_peak * (1.0 - gb)
+            through = b["l"] <= trig if side == 1 else b["h"] >= trig
+            if through:
+                return (trig, f"gaveback_{int(gb*100)}pct")
+        fav = (b["h"] - p["entry"]) if side == 1 else (p["entry"] - b["l"])
+        p["gb_peak"] = max(prev_peak, fav)          # update AFTER the test
+        return None
+    return f
+
+
+def peak_giveback_ratchet(arm_r, tiers, use_stop=True):
+    """Same idea, but the allowed give-back TIGHTENS as the trade gets better.
+    `tiers` is [(peak_in_R, allowed_giveback), ...] in ascending order — the
+    last tier whose peak has been exceeded wins.
+
+    The reason for tiering: handing back 35% of a 1R peak costs 0.35R and is
+    the price of letting a trade breathe. Handing back 35% of a 6R peak costs
+    2.1R, which is the failure Veer is describing. A flat percentage treats
+    those as the same event; this does not."""
+    def f(p, b):
+        side = p["side"]
+        if use_stop:
+            hit = b["l"] <= p["stop"] if side == 1 else b["h"] >= p["stop"]
+            if hit:
+                return (p["stop"], "stop")
+        prev_peak = p.get("gb_peak", 0.0)
+        peak_r = prev_peak / p["risk"] if p["risk"] > 0 else 0.0
+        if peak_r >= arm_r:
+            gb = tiers[0][1]
+            for lvl, allowed in tiers:
+                if peak_r >= lvl:
+                    gb = allowed
+            trig = p["entry"] + side * prev_peak * (1.0 - gb)
+            through = b["l"] <= trig if side == 1 else b["h"] >= trig
+            if through:
+                return (trig, "ratchet")
+        fav = (b["h"] - p["entry"]) if side == 1 else (p["entry"] - b["l"])
+        p["gb_peak"] = max(prev_peak, fav)
+        return None
+    return f
+
+
+def trail_plus_giveback(mult, arm_r, gb):
+    """The wide ATR trail (measured best so far) AND the give-back rule
+    together — whichever fires first. This is the honest candidate: it does
+    not remove the rule that already won, it adds a ceiling on how much of a
+    good trade can evaporate."""
+    tr = atr_trail(mult)
+    pg = peak_giveback(arm_r, gb, use_stop=False)
+    def f(p, b):
+        r1 = pg(p, b)          # tested first: it uses last bar's peak
+        r2 = tr(p, b)          # moves and tests the trailing stop
+        if r2 is not None:
+            return r2
+        return r1
+    return f
+
+
+POLICIES.update({
+    "giveback 30% arm@0.5R":  peak_giveback(0.5, 0.30),
+    "giveback 30% arm@1R":    peak_giveback(1.0, 0.30),
+    "giveback 40% arm@1R":    peak_giveback(1.0, 0.40),
+    "giveback 50% arm@1R":    peak_giveback(1.0, 0.50),
+    "giveback 25% arm@1.5R":  peak_giveback(1.5, 0.25),
+    "ratchet 45/30/22":       peak_giveback_ratchet(
+                                  0.8, [(0.8, 0.45), (2.0, 0.30), (4.0, 0.22)]),
+    "ratchet 50/35/25":       peak_giveback_ratchet(
+                                  0.5, [(0.5, 0.50), (2.0, 0.35), (4.0, 0.25)]),
+    "trail3ATR + gb40 arm@1R": trail_plus_giveback(3.0, 1.0, 0.40),
+    "trail3ATR + gb30 arm@1R": trail_plus_giveback(3.0, 1.0, 0.30),
+})

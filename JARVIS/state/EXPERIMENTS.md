@@ -1532,3 +1532,91 @@ The live product trades 3m, for which **this repo has no data**; if 3m R
 dispersion differs from 1.69, every n moves with its square. Nothing here says
 whether Veer's discretion has an edge — only how long it would take to find
 out. **No live trade is authorised by any of it (D-006).**
+
+---
+
+## E-051 — Profit protection: the give-back rule BEATS the trail this EA ships
+**Verdict: SUPPORTED (exit comparison only — it is NOT a claim of an edge)**
+Scripts: `JARVIS/research/exits.py` (new policies), `JARVIS/research/giveback_study.py`
+Run: `python3 JARVIS/research/giveback_study.py GOLD 1h`
+
+### The question
+Veer's complaint is not about entries. It is: *"a basket reached ~£12 floating
+and closed at breakeven; four positions reached ~£4 and still closed in loss;
+trades reached £10+ and closed for far less."* Every exit rule in this repo
+is anchored to PRICE — a stop level, an ATR distance, a multiple of risk.
+None is anchored to **how good the trade already was**. So a new family was
+built that is: remember the best the trade ever got, leave when a fixed
+fraction of that best has been handed back.
+
+### No look-ahead
+The trigger for bar *i* is computed from the peak as it stood at the END of
+bar *i-1*. Using this bar's own high to place a trigger inside this bar would
+assume the high printed before the retrace, which OHLC cannot tell you. That
+assumption is worth roughly a third of the measured result, so it is not made.
+Fills remain optimistic in the usual way (L-012, intrabar discretisation) —
+every number below is a ceiling.
+
+### The result that decides it
+Identical entries (`donchian_trend`), only the exit changes. `trail 3xATR` is
+what `SuperTrendSniper.mq5` ships today; `giveback 30% arm@1R` is the
+candidate.
+
+| market | trail 3xATR | giveback 30% arm@1R | change |
+|---|---|---|---|
+| GOLD 1h    | +0.077R | **+0.099R** | +0.022 |
+| GOLD 15m   | −0.160R | **+0.059R** | +0.219 |
+| EURUSD 1h  | −0.283R | **−0.028R** | +0.255 |
+| US500 1h   | −0.080R | **+0.099R** | +0.179 |
+| GBPUSD 1h  | −0.164R | **−0.082R** | +0.082 |
+
+**5 of 5** on expectancy. And 5 of 5 on drawdown — GOLD 1h at 2% risk:
+real max drawdown 92% → 63%, 95th-percentile bootstrap drawdown 78% → 53%,
+P(drawdown > 30%) 99% → 68%, P(ending down) 19% → 2%.
+
+### It removes the exact complaint
+"Went at least 1R into profit and still closed at or below zero", GOLD 1h,
+846 paired trades:
+
+| rule | complaint rate |
+|---|---|
+| fixed 3R | 196 of 449 — **44%** |
+| trail 3xATR (shipped) | 138 of 435 — **32%** |
+| time 20 bars | 87 of 401 — 22% |
+| giveback 30% arm@1R | 6 of 449 — **1%** |
+
+### Where it costs, and why that is acceptable
+Trades bucketed by how good they ever got (MFE), GOLD 1h, fixed 3R vs giveback:
+
+| MFE bucket | n | fixed 3R | giveback | difference |
+|---|---|---|---|---|
+| 0–1R | 397 | −0.997R | −0.997R | +0.000R |
+| 1–3R | 200 | −0.953R | +0.891R | **+1.845R** |
+| 3–6R | 247 | +2.988R | +1.156R | **−1.833R** |
+| 6R+ | 2 | +0.619R | +7.872R | +7.253R |
+
+The rule is a **redistribution, not an improvement in edge**: it converts
+almost-winners into winners at almost exactly the cost of turning good
+winners into small winners. The two middle buckets cancel to within 1%.
+It wins overall because the drawdown path is far kinder, not because it
+finds money.
+
+### What this does NOT say — read before quoting it
+1. **This is a comparison of exits, not evidence of an edge.** E-050 measured
+   a RANDOM entry at +0.202R on GOLD 1h. `fixed 3R` (+0.181R) and
+   `time 20 bars` (+0.196R) sit on that number; the give-back rule at +0.099R
+   sits *below* it. Nothing here beats random entry on GOLD 1h.
+2. **EURUSD and GBPUSD are negative under every rule tested.** The give-back
+   rule loses less. Losing less is not winning.
+3. **47% of all trades (397 of 846) never got 1R green at all** and lose a
+   full R under every exit. No exit rule touches that. It is entry quality,
+   and it is the larger problem.
+4. Tested on 15m and 1h. **Veer trades M1/M5/M15 and this repo has no M1 or
+   M5 data.** The 15m column is the closest evidence and it is the strongest
+   one, but M1 is unverified.
+
+### What it changes in the product
+`InpUseGiveBack` becomes the default profit protection in the EA, alongside
+(not instead of) the trail — the trail is the disaster stop, the give-back
+rule is the profit stop. Defaults set from this table: arm at 1.0R, give back
+30%, tightening as the peak grows.
