@@ -1895,3 +1895,141 @@ E-050 retracted a headline for want of a random control. This retracts one for
 want of the right entries. Both failures are the same failure: a number was
 carried further than the thing it was computed on. **A result is a statement
 about the exact configuration that produced it and about nothing else.**
+
+---
+
+## E-054 — Was the +GBP50 session evidence of an edge? It depends entirely on one number Veer has not told me
+**Verdict: UNRESOLVED, and resolvable in about a minute from the EA's journal**
+Script: `JARVIS/research/luck.py`
+
+Veer: *"the ea made me 50+ even with its shit stacking shit closing at peaks in
+a few hours this means if we improve even on chop days and good days we will
+see straight green and consistent results"*.
+
+The inference only holds if the session came from EDGE. If it came from SIZE,
+the identical settings produce the mirror image just as readily.
+
+Method: take the R distribution of the REAL SuperTrend strategy (GOLD 15m, the
+EA's own gating) and shift it so expectancy is EXACTLY ZERO. The shape is real
+— the fat right tail, the cluster of full-R losses — and the edge is gone. Then
+ask how often a worthless system doubles.
+
+**Reaching 2.24x (GBP50 -> GBP112) in one session, with NO edge at all:**
+
+| risk/trade | trades | P(hit +124%) | P(lose half) |
+|---|---|---|---|
+| 1% | 20–80 | **0.0%** | 0.0% |
+| 2% | 40 | **0.0%** | 0.1% |
+| 2% | 80 | 0.9% | 3.3% |
+| 5% | 40 | 8.3% | 26.3% |
+| 10% | 40 | **25.5%** | **68.5%** |
+| 20% | 40 | **34.1%** | **92.3%** |
+
+**This is the whole answer and it is not rhetorical.** At 1–2% risk a zero-edge
+system essentially never does this, so if that is what he risked, the session
+is real evidence and deserves investigation rather than dismissal. At 10–20%
+risk, a worthless system does it in one session out of three.
+
+The number needed is risk per trade, or equivalently lot size and stop
+distance and trade count. **The EA already writes all three to
+`MQL5/Files/STS_journal_<symbol>_<tf>.csv` on every fill.** One file settles it.
+
+What does NOT depend on the answer: at the settings that make +124% reachable,
+the same settings halve the account 68–92% of the time. Both branches come out
+of the same distribution and only one of them gets screenshotted.
+
+---
+
+## E-055 — Sessions: too thin to call
+**Verdict: UNPROVEN**
+Script: `JARVIS/research/sessions.py`
+
+Veer: *"think in terms of sessions sometimes session opens create diffrent
+trends"*. Six session blocks, 8 market/timeframe combinations, each cell scored
+against that market's own base expectancy.
+
+| block | markets below own base |
+|---|---|
+| Asia (00–07 UTC) | 6 of 8 |
+| London open (07–10) | 1 of 6 — i.e. 5 of 6 ABOVE |
+| London (10–12) | 2 of 3 |
+| NY overlap (12–16) | 3 of 8 |
+| NY late (16–21) | 6 of 7 |
+| Close/thin (21–24) | 2 of 5 |
+
+The direction is plausible — Asia and the late NY session worse, the London
+open better — but **nothing reaches 7 of 8 or 8 of 8**, and with six blocks
+examined that is inside what chance produces. NY late at 6 of 7 is p ≈ 0.06
+one-sided; London open at 5 of 6 is p ≈ 0.11. Neither survives being one of
+six.
+
+The hourly cut on GOLD, the instrument that matters, is worse: GOLD 15m has
+145 signals across 24 hours and not one hour reaches 15 observations. The
+GOLD 1h cells that do print (06:00 at +1.055R on n=20) are noise wearing a
+decimal point, and are shown in the output only so nobody mistakes them for a
+finding later.
+
+**No session filter is justified by this data.** M1 data would give roughly
+sixty times the signals per bucket and would genuinely answer it — another
+line on the list of things `ExportHistory.mq5` unlocks.
+
+---
+
+## E-056 — A STALL PREDICTS THE GIVE-BACK. Unanimous across every market tested.
+**Verdict: CONFIRMED**
+Script: `JARVIS/research/stall.py`
+
+Veer: *"what if price reacts to our position but has slow price action how do
+we know how to move"*. This is the best-posed question he has asked, because
+it is about information the EA already holds and throws away.
+
+**STALL** = bars since the position last made a new favourable extreme. A
+trade that just printed a new best has stall 0; one that peaked twelve bars
+ago has stall 12. Measured at every bar of every trade that reached at least
++0.5R. Outcome: did it give back to break-even BEFORE adding another 0.5R?
+Ties go to the give-back (L-012).
+
+**P(gives it back), minus each market's own base rate:**
+
+| market | stall 0–1 | 1–3 | 3–6 | 6–12 | 12–25 | 25+ |
+|---|---|---|---|---|---|---|
+| GOLD 1h | −19.9 | −7.8 | +0.2 | +4.9 | +9.3 | +9.4 |
+| GOLD 15m | −27.3 | −8.2 | −2.3 | +0.5 | +9.3 | +10.8 |
+| EURUSD 1h | −18.5 | −7.3 | −2.0 | +1.5 | +8.5 | +6.5 |
+| EURUSD 15m | −21.0 | −7.6 | +0.6 | +2.6 | +5.8 | +7.3 |
+| GBPUSD 1h | −23.9 | −10.4 | −2.5 | −1.2 | +5.5 | +15.6 |
+| GBPUSD 15m | −20.3 | −6.5 | +4.2 | +7.9 | +4.7 | +6.1 |
+| US500 1h | −18.6 | −8.4 | −3.5 | +1.5 | +6.6 | +17.9 |
+| US500 15m | −27.3 | −11.8 | −2.0 | +0.1 | −2.3 | +19.9 |
+| **worse than base** | **0/8** | **0/8** | 3/8 | 7/8 | 7/8 | **8/8** |
+
+Monotone in every single market. Two unanimous buckets and two at 7 of 8.
+With six buckets examined, roughly 0.2 cells at the 7-of-8 level are expected
+by chance; four appeared, two of them stronger than that.
+
+**GOLD 15m in absolute terms** (base 51.3%): stall 0–1 gives back **24.0%** of
+the time; stall 25+ gives back **62.1%**. A 38-point spread on the same trade,
+from a number the EA can compute for free.
+**GOLD 1h** (base 37.9%): **18.0%** at stall 0–1 against **47.3%** at 25+.
+
+### The honest caveat, and it matters
+These are observations PER BAR, not per trade, so a single long trade
+contributes dozens of correlated rows. **The Wilson intervals printed by the
+script are therefore far too narrow and should not be read as if each row were
+independent.** What carries this result is not the interval width — it is that
+the gradient is monotone and points the same way in 8 of 8 markets across two
+timeframes and four instruments, which correlated sampling within a trade
+cannot manufacture.
+
+### What it changes
+The EA's only current answer to a stalling trade is `InpMaxBars = 50`, which
+is blind: it treats a trade that made a new high on the last bar exactly like
+one that peaked thirty bars ago. Those are measurably different trades.
+
+1. A **stall cap** replaces the blind bar cap as the primary time exit.
+2. The give-back allowance now **scales with stall** — generous while a trade
+   is still making new highs, tight once it has stopped.
+
+This is also the direct answer to Veer's actual question. When price reacts to
+the position but goes slow: the slowness itself is the signal, and it is worth
+between 20 and 38 percentage points of give-back probability.

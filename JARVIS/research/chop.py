@@ -143,7 +143,7 @@ def collect(s: Series, costs, warmup=300, horizon=200, max_bars=50,
         if e20 is None or e50 is None:
             continue
         rows.append({
-            "won": won, "r": r, "side": side,
+            "i": i, "won": won, "r": r, "side": side,
             "flips20": cum[i + 1] - cum[max(0, i - 19)],
             "flips50": cum[i + 1] - cum[max(0, i - 49)],
             "er20": e20, "er50": e50,
