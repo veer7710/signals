@@ -1620,3 +1620,88 @@ finds money.
 (not instead of) the trail — the trail is the disaster stop, the give-back
 rule is the profit stop. Defaults set from this table: arm at 1.0R, give back
 30%, tightening as the peak grows.
+
+---
+
+## E-052 — "Don't enter at the end of a trend": right at the extreme, wrong everywhere else
+**Verdict: PARTIALLY SUPPORTED — and it disproves two of the three gates I had
+already written into the EA**
+Script: `JARVIS/research/continuation.py` — `python3 ... continuation.py ALL`
+
+### The hypothesis, in Veer's words
+*"the ea doesn't understand a trend doesn't always continue so when its
+constantly doing a buy or a sell it needs to actually use analysis and see if
+it will continue as we don't wanna enter on the end of a trend get caught in
+the reversal or new trend"*
+
+### The outcome measured, and why it is not R
+Conditioning R on entry features measures the exit as much as the entry. The
+outcome here is **P(+1R before −1R)** — did price travel one unit of risk in
+the trade's favour before it travelled one against — which is a property of
+the entry alone. A bar spanning both levels is scored a LOSS, because OHLC
+cannot say which came first and assuming the good one is free money (L-012).
+Every bucket is reported as a difference from **that market's own base rate**,
+never against 50%.
+
+8 market/timeframe combinations, SuperTrend entries as the EA gates them.
+
+### WHAT REPLICATED
+Both findings say the same thing in two different units — the FAR END of a
+one-way run is worse — which is why they are treated as one effect, not two.
+
+| feature | bucket | markets below their own base | mean |
+|---|---|---|---|
+| bars since the opposite signal | **100+** | **7 of 8** | −3.4 pts |
+| distance travelled in the run | **8+ ATR** | **7 of 8** | −3.0 pts |
+
+And its mirror image, which is the same effect read from the other end:
+
+| bars since the opposite signal | **15–40** | **0 of 7 below — all 7 ABOVE** | +6.6 pts |
+
+A run that is well underway but not exhausted is the best place to enter.
+A run past 100 bars or 8 ATR is the worst. **Veer's instinct is correct.**
+
+### WHAT DID NOT REPLICATE — including two gates I had already built
+| feature | bucket | markets below base | reading |
+|---|---|---|---|
+| consecutive same-direction signals | 1–2 / 2–3 / 3–4 / 4–6 / 6+ | 4/8, 4/8, 2/6, 2/8, 5/8 | **coin flip. No effect.** |
+| stretch from DEMA200 | 2.5 ATR+ | 5/8 | no gradient; the 0–0.5 ATR bucket is 5/5 below, i.e. being CLOSE to the mean is the bad one |
+| position in the last 100 bars | 0.9+ (at the extreme) | **2 of 8 — 6 of 8 ABOVE base** | **backwards.** Entering at the top of the range is BETTER |
+| ADX at entry | 25–35 | 6/8 | correct sign, but mean only −1.3 pts. The weakest of the three kept. |
+
+I had already written `InpMaxSameDir` (streak) and `InpTrendStretch`
+(stretch) into the EA as two of the three components of its trend-risk score.
+**Neither survives.** They were written from the instinct, before the
+measurement, and the measurement says they are noise. They are being replaced
+with run-age and run-distance, which are what actually replicated.
+
+### Multiple testing — read this before quoting any cell
+30 buckets were examined. Under the null, P(a bucket lands ≥7 of 8 on one
+side) ≈ 3.5%, so **about 1 such cell is expected by chance alone**, and 3–4
+were found. That is an excess, not a landslide. The reason the run-age result
+is believed anyway is that its two strongest cells are not independent tests:
+`runbars 100+` and `runmove 8+` are two measurements of one thing, they agree,
+and the 15–40 bucket is the same effect with its sign flipped.
+
+### THE MAGNITUDE, stated plainly so it is not oversold
+The effect is worth roughly **3.4 percentage points** on a base rate near 50%.
+Filtering out the oldest runs moves P(+1R first) from about 51% to about 47%
+in the bucket avoided — worth about 0.07R per trade. It is real, it is
+consistent, and it is **small**. This is not a filter that turns a losing
+system into a winning one, and per E-041 no filter can be: a filter improves
+a zero-edge entry toward zero, never past it. It is a reason to size down and
+to refuse ADDING to an exhausted run — not a reason to expect a different
+system.
+
+### What it changes in the EA
+`TrendRisk()` is rewritten to score: run age ≥ 100 bars, run distance ≥ 8 ATR,
+ADX ≥ 25. Streak and stretch are deleted. Effects unchanged and deliberately
+proportionate to a 3-point edge: score 2 halves the size, score 3 refuses a
+further same-way entry, and a higher score tightens the give-back allowance.
+No score blocks a fresh signal in a NEW direction — the finding is about
+continuing an old run, not about trading at all.
+
+### Caveats
+15m and 1h only; **this repo still has no M1 or M5 data** and Veer trades
+M1/M5/M15. Base rates ran 45–55%, so none of these markets showed a large
+directional edge to begin with, consistent with E-050.

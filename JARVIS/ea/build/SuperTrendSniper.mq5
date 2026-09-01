@@ -200,6 +200,68 @@ input long   InpMagic         = 770001; // magic number
 input bool   InpVerboseLog    = true;   // log every decision
 input bool   InpJournal       = true;   // write every signal and fill to a CSV
 
+input group "=== PROFIT PROTECTION (E-051: measured, not guessed) ==="
+// This is the answer to "we need to stop watching profit disappear", and it
+// is NOT a fixed take profit. A fixed TP decides in advance how big the move
+// will be, which nobody knows. This rule decides nothing in advance: it
+// remembers the best the trade ever was and leaves when a fixed fraction of
+// that best has been handed back.
+//
+// MEASURED, on identical entries, only the exit changing (E-051):
+//   vs the 3xATR trail this EA used to ship, it was BETTER on 5 of 5
+//   market/timeframe combinations tested (GOLD 1h/15m, EURUSD 1h, US500 1h,
+//   GBPUSD 1h), and cut GOLD 1h max drawdown from 92% to 63% at 2% risk.
+//   "Went 1R green and still closed at or below zero" fell from 32% of such
+//   trades to 1%.
+// WHAT IT IS NOT: it did not beat a random entry on GOLD 1h (E-050), and
+//   EURUSD/GBPUSD stay negative under every exit rule tested. It makes the
+//   equity path survivable. It does not manufacture an edge.
+input bool   InpUseGiveBack   = true;   // leave when profit is handed back
+input double InpGbArmR        = 1.0;    // only after the trade got this good
+input double InpGbBase        = 0.30;   // give back this much of the peak
+input double InpGbTier2R      = 2.0;    // once the peak passes this...
+input double InpGbTier2       = 0.24;   // ...allow only this much give-back
+input double InpGbTier3R      = 4.0;    // and past this...
+input double InpGbTier3       = 0.18;   // ...this much. Big peaks are protected harder
+input double InpGbMinMoney    = 0.0;    // ignore the rule below this profit (0 = off)
+
+input group "=== BASKET (manage the TOTAL, not one trade) ==="
+// Veer's actual failure was never one trade: "the basket reached ~GBP12 and
+// closed at breakeven; four positions reached ~GBP4 and still closed in loss".
+// Four positions each individually behaving reasonably can still hand back
+// the whole basket, because nothing was watching the total. Now something is.
+input bool   InpUseBasket     = true;   // protect total floating profit
+input double InpBasketArmPct  = 0.60;   // arm once the basket is this % of equity green
+input double InpBasketMinMoney= 2.00;   // ...and at least this much money
+input double InpBasketGiveBack= 0.35;   // close the basket after handing back this much
+input bool   InpBasketCloseAll= true;   // false = only close the losers, keep the winner
+input int    InpMaxStack      = 1;      // positions allowed at once. 1 = no stacking
+input int    InpStackCoolBars = 5;      // bars between adds
+input double InpMaxNetLots    = 0.0;    // hard cap on one-way exposure (0 = auto)
+
+input group "=== TREND PERSISTENCE (trends do not last forever) ==="
+// Veer, verbatim: "sometimes the ea will continue in one direction have it
+// understand that it can be risky trends don't always last forever".
+// Three independent readings of how far a one-way run has already gone. Each
+// one that trips raises the risk score, and a higher score makes the EA
+// protect profit sooner, size smaller, and eventually refuse to add at all.
+// This is also the reading behind the ADX ceiling that already measured well
+// (+0.304R at ADX<20 vs -0.132R at ADX>35): late in a trend is the losing
+// bucket, so late in a trend the EA should want less, not more.
+input bool   InpUseTrendAge   = true;
+input int    InpTrendOldBars  = 40;     // bars in one direction = "this has run"
+input double InpTrendStretch  = 2.5;    // ATR away from the DEMA = "stretched"
+input int    InpMaxSameDir    = 3;      // consecutive same-way entries before it counts
+
+input group "=== EXECUTION BOX (what is actually happening) ==="
+input bool   InpShowBox       = true;   // on-chart profit and execution panel
+input int    InpBoxCorner     = 1;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
+input int    InpBoxX          = 12;     // pixels in from that corner
+input int    InpBoxY          = 18;
+input int    InpBoxSize       = 8;      // font size
+input color  InpBoxHead       = clrGold;
+input color  InpBoxText       = clrGainsboro;
+
 //============================ STATE ================================
 datetime g_lastBarTime = 0;
 double   g_dayStartEq  = 0.0;
@@ -217,6 +279,90 @@ double   g_finalLower  = 0.0;
 int      g_stDir       = 0;      // -1 bullish, +1 bearish (Pine convention)
 int      g_stDirPrev   = 0;
 bool     g_stReady     = false;
+
+//================ BASKET / PEAK / TREND STATE ======================
+// Per-position tracking. MQL5 has no dictionary, so this is parallel arrays
+// with a linear find. MAX_TRACK is 64; the EA cannot open anywhere near that
+// many, and an overflow degrades to "not tracked" rather than to corruption.
+#define MAX_TRACK 64
+ulong    g_tkId[MAX_TRACK];        // position ticket
+double   g_tkPeakPx[MAX_TRACK];    // best favourable excursion, in price
+double   g_tkWorstPx[MAX_TRACK];   // worst adverse excursion, in price
+double   g_tkRisk[MAX_TRACK];      // original risk distance, in price
+double   g_tkPeakMoney[MAX_TRACK]; // best floating profit, in account currency
+datetime g_tkPeakTime[MAX_TRACK];  // when that best happened
+int      g_tkCount = 0;
+
+// Basket-level. A "basket" is every position this EA has open on this symbol,
+// treated as one trade, because that is how the account experiences it.
+double   g_bkPeak      = 0.0;      // best TOTAL floating profit this basket saw
+datetime g_bkPeakTime  = 0;
+datetime g_bkStart     = 0;
+bool     g_bkArmed     = false;
+
+// Trend persistence
+int      g_barsInTrend   = 0;
+int      g_sameDirEntries = 0;
+int      g_lastEntryDir  = 0;
+datetime g_lastEntryBar  = 0;
+
+// Lifetime execution statistics - the numbers the box exists to show.
+// These are what makes "we keep giving profit back" a measurement instead of
+// an argument. They survive a terminal restart via GlobalVariables.
+int      g_stTrades      = 0;   // closed positions
+int      g_stWins        = 0;
+int      g_stGreenRed    = 0;   // got >= 0.5R green and STILL closed <= 0
+double   g_stRealized    = 0.0; // money actually banked, all time
+double   g_stPeakSum     = 0.0; // sum of each trade's best-ever floating profit
+double   g_stGivenBack   = 0.0; // that sum minus what was kept
+double   g_stDayRealized = 0.0;
+int      g_stDayTrades   = 0;
+double   g_stWorstGB     = 0.0; // biggest single give-back seen
+
+struct Basket
+{
+   int      n;            // open positions
+   int      nLong;
+   int      nShort;
+   double   lots;         // total volume
+   double   netLots;      // long lots minus short lots
+   double   money;        // total floating profit, account currency
+   double   wAvgEntry;    // volume-weighted average entry price
+   double   peakMoney;    // best floating profit this basket ever showed
+   double   givenBack;    // peak minus current
+   double   bestR;        // best R across the open positions, right now
+   double   peakR;        // best peak-R across the open positions
+   int      oldestBars;   // bars the oldest position has been open
+   int      sincePeakSec; // seconds since the basket peaked
+   int      dir;          // +1 net long, -1 net short, 0 flat or hedged
+};
+
+// FORWARD DECLARATIONS.
+// MQL5 does compile a call to a function defined further down the file, but
+// this EA has already been shipped three times in a state that would not
+// compile (F-006, F-007, F-008), and each time the cause was an ordering or
+// scoping rule I had assumed rather than checked. Prototypes make the
+// question moot: every function below is declared before anything calls it,
+// under any rule the compiler happens to use.
+double MoneyPerPricePerLot();
+string Money(double v);
+int    TrackFind(ulong tk);
+int    TrackAdd(ulong tk, double risk);
+void   TrackDrop(int i);
+void   Snapshot(Basket &b);
+int    TrendRisk(string &why);
+double GiveBackAllowed(double peakR);
+void   UpdatePeaks();
+void   ProtectPositions();
+void   ProtectBasket();
+bool   StackAllows(int dir, string &why);
+void   RegisterEntry(int dir);
+void   BoxLine(int idx, string txt, color c);
+void   BoxClear();
+void   DrawBox();
+void   SaveStats();
+void   LoadStats();
+
 
 //==================== HELPERS ======================================
 void Log(string msg)
@@ -357,6 +503,7 @@ void UpdateSuperTrend()
 
    double fUpper = 0.0, fLower = 0.0;
    int    dir = 0, dirPrev = 0;
+   int    run = 0;    // bars this direction has lasted
    bool   seeded = false;
 
    // s indexes atrBuf, so bar shift = s + 1. s = 0 is the last CLOSED bar;
@@ -394,15 +541,18 @@ void UpdateSuperTrend()
       dirPrev = dir;
       if(dir == 1 && c > fUpper)       dir = -1;   // flip bullish
       else if(dir == -1 && c < fLower) dir = 1;    // flip bearish
+
+      if(dir != dirPrev) run = 0; else run++;
    }
 
    if(!seeded) return;
 
    g_finalUpper = fUpper;
    g_finalLower = fLower;
-   g_stDir      = dir;
-   g_stDirPrev  = dirPrev;
-   g_stReady    = true;
+   g_stDir       = dir;
+   g_stDirPrev   = dirPrev;
+   g_barsInTrend = run;
+   g_stReady     = true;
 }
 
 //==================== LEVELS =======================================
@@ -626,7 +776,6 @@ bool HasPosition()
 //==================== ENTRY ========================================
 void TryEntry()
 {
-   if(HasPosition()) return;
    // A resting limit already IS this signal. Without this the next flip stacks
    // a second order on the same idea and both can fill within a few points of
    // each other - the same triple-entry fault that had to be fixed in the Pine.
@@ -640,6 +789,12 @@ void TryEntry()
    if(!flipUp && !flipDown) return;
 
    string sdir = flipUp ? "long" : "short";
+
+   // STACKING. Default InpMaxStack=1 means this is still "one position at a
+   // time" and nothing about the EA's exposure has changed. Turning it up
+   // opens the gates in StackAllows, not the floodgates.
+   string sw = "";
+   if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
 
    string why = "";
    if(!RiskAllowsEntry(why)) { SkipLog(sdir, why); return; }
@@ -706,6 +861,33 @@ void TryEntry()
    double lots = LotFor(stopDist);
    if(lots <= 0) { SkipLog(sdir, "lot size rounded to zero"); return; }
 
+   // TRENDS DO NOT LAST FOREVER. A signal in the same direction as a run that
+   // is already old, already stretched and already crowded is not the same
+   // trade as the first signal of that run, and it should not be the same
+   // size. At the top of the scale the EA simply declines: the measured
+   // late-trend bucket was -0.132R, and the correct size for a negative
+   // expectation is zero.
+   string trWhy = "";
+   int trRisk = TrendRisk(trWhy);
+   bool sameWay = (g_lastEntryDir != 0 && g_lastEntryDir == (flipUp ? 1 : -1));
+   if(trRisk >= 3 && sameWay)
+   {
+      SkipLog(sdir, "trend risk 3/3 and this is another same-way entry: " + trWhy);
+      return;
+   }
+   if(trRisk == 2)
+   {
+      double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double half = lots * 0.5;
+      if(step > 0) half = MathFloor(half / step) * step;
+      if(half >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+      {
+         Log(StringFormat("trend risk 2/3 (%s): sizing down %.2f -> %.2f",
+                          trWhy, lots, half));
+         lots = half;
+      }
+   }
+
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -745,7 +927,7 @@ void TryEntry()
          if(trade.BuyLimit(lots, lim, _Symbol, lsl, ltp, ORDER_TIME_GTC, 0,
                            RiskTag(stopDist, dg)))
          {
-            g_tradesToday++;
+            g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
             Journal("LIMIT", "long", lim, lots, lsl, ltp, 0, "waiting for pullback");
             Log(StringFormat("BUY LIMIT %.2f at %.*f  sl %.*f  tp %.*f",
                              lots, dg, lim, dg, lsl, dg, ltp));
@@ -756,7 +938,7 @@ void TryEntry()
 
       if(trade.Buy(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
-         g_tradesToday++;
+         g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
          Journal("ENTRY", "long", ask, lots, sl, tp, 0, "");
          Log(StringFormat("LONG %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
@@ -789,7 +971,7 @@ void TryEntry()
          if(trade.SellLimit(lots, lim, _Symbol, lsl, ltp, ORDER_TIME_GTC, 0,
                             RiskTag(stopDist, dg)))
          {
-            g_tradesToday++;
+            g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
             Journal("LIMIT", "short", lim, lots, lsl, ltp, 0, "waiting for pullback");
             Log(StringFormat("SELL LIMIT %.2f at %.*f  sl %.*f  tp %.*f",
                              lots, dg, lim, dg, lsl, dg, ltp));
@@ -800,7 +982,7 @@ void TryEntry()
 
       if(trade.Sell(lots, _Symbol, 0.0, sl, tp, RiskTag(stopDist, dg)))
       {
-         g_tradesToday++;
+         g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
          Journal("ENTRY", "short", bid, lots, sl, tp, 0, "");
          Log(StringFormat("SHORT %.2f lots  sl %.*f  tp %.*f  atr %.*f",
                           lots, dg, sl, dg, tp, dg, atr));
@@ -1086,6 +1268,633 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    Journal("EXIT", dir, px, vol, 0, 0, money, why);
    Log(StringFormat("closed %s %.2f at %s for %.2f (%s)",
                     dir, vol, DoubleToString(px, _Digits), money, why));
+
+   // ---- EXECUTION STATISTICS
+   // Only a FULL close counts as a finished trade. A partial produces an
+   // out-deal too, and counting those would inflate the trade count and make
+   // every ratio in the box wrong.
+   ulong pid = (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID);
+   if(PositionSelectByTicket(pid)) return;      // still open: this was a partial
+
+   int ti = TrackFind(pid);
+   double peakMoney = (ti >= 0) ? g_tkPeakMoney[ti] : MathMax(money, 0.0);
+   double peakR     = (ti >= 0 && g_tkRisk[ti] > 0.0)
+                    ? g_tkPeakPx[ti] / g_tkRisk[ti] : 0.0;
+
+   g_stTrades++;
+   g_stDayTrades++;
+   g_stRealized    += money;
+   g_stDayRealized += money;
+   g_stPeakSum     += MathMax(peakMoney, 0.0);
+   g_stGivenBack   += MathMax(0.0, peakMoney - money);
+   if(money > 0) g_stWins++;
+
+   // The row that names Veer's complaint: it went into profit and did not
+   // close profitably. 0.5R is the threshold for "was genuinely green" -
+   // below that a trade never really got going and calling it a give-back
+   // would be counting spread noise.
+   if(peakR >= 0.5 && money <= 0.0)
+   {
+      g_stGreenRed++;
+      Log(StringFormat("GREEN->RED: peaked %.2fR (%s) and closed %s. "
+                       "That is now %d of %d closed trades.",
+                       peakR, Money(peakMoney), Money(money),
+                       g_stGreenRed, g_stTrades));
+   }
+   if(ti >= 0) TrackDrop(ti);
+   SaveStats();
+}
+
+//===================================================================
+//  MODULE: MONEY
+//===================================================================
+// Everything below is quoted to Veer in pounds, because that is the unit he
+// actually experiences. R is the unit the research is in. This converts.
+double MoneyPerPricePerLot()
+{
+   double tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(ts <= 0.0) return 0.0;
+   return tv / ts;
+}
+
+string Money(double v)
+{
+   return StringFormat("%s%.2f", (v < 0 ? "-" : ""),
+                       MathAbs(NormalizeDouble(v, 2)));
+}
+
+//===================================================================
+//  MODULE: PER-POSITION PEAK REGISTRY
+//===================================================================
+// The single most important thing this EA did not know before: how good each
+// trade ALREADY WAS. Without that number, "it gave the profit back" is an
+// opinion. With it, it is a column.
+int TrackFind(ulong tk)
+{
+   for(int i = 0; i < g_tkCount; i++)
+      if(g_tkId[i] == tk) return i;
+   return -1;
+}
+
+int TrackAdd(ulong tk, double risk)
+{
+   if(g_tkCount >= MAX_TRACK) return -1;
+   int i = g_tkCount;
+   g_tkId[i]        = tk;
+   g_tkPeakPx[i]    = 0.0;
+   g_tkWorstPx[i]   = 0.0;
+   g_tkRisk[i]      = risk;
+   g_tkPeakMoney[i] = 0.0;
+   g_tkPeakTime[i]  = TimeCurrent();
+   g_tkCount++;
+   return i;
+}
+
+void TrackDrop(int i)
+{
+   if(i < 0 || i >= g_tkCount) return;
+   for(int j = i; j < g_tkCount - 1; j++)
+   {
+      g_tkId[j]        = g_tkId[j + 1];
+      g_tkPeakPx[j]    = g_tkPeakPx[j + 1];
+      g_tkWorstPx[j]   = g_tkWorstPx[j + 1];
+      g_tkRisk[j]      = g_tkRisk[j + 1];
+      g_tkPeakMoney[j] = g_tkPeakMoney[j + 1];
+      g_tkPeakTime[j]  = g_tkPeakTime[j + 1];
+   }
+   g_tkCount--;
+}
+
+//===================================================================
+//  MODULE: BASKET SNAPSHOT
+//===================================================================
+// One pass over the open positions producing every number the rest of the EA
+// and the box need. Called on EVERY TICK, so it does no trading and no
+// logging - it only looks.
+
+void Snapshot(Basket &b)
+{
+   b.n = 0; b.nLong = 0; b.nShort = 0;
+   b.lots = 0.0; b.netLots = 0.0; b.money = 0.0; b.wAvgEntry = 0.0;
+   b.bestR = 0.0; b.peakR = 0.0; b.oldestBars = 0; b.dir = 0;
+   b.peakMoney = 0.0; b.givenBack = 0.0; b.sincePeakSec = 0;
+
+   double num = 0.0;
+   datetime oldest = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double vol  = PositionGetDouble(POSITION_VOLUME);
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double prof = PositionGetDouble(POSITION_PROFIT)
+                  + PositionGetDouble(POSITION_SWAP);
+      datetime ot = (datetime)PositionGetInteger(POSITION_TIME);
+
+      b.n++;
+      if(dir > 0) b.nLong++; else b.nShort++;
+      b.lots    += vol;
+      b.netLots += dir * vol;
+      b.money   += prof;
+      num       += open * vol;
+      if(oldest == 0 || ot < oldest) oldest = ot;
+
+      int ti = TrackFind(tk);
+      if(ti >= 0 && g_tkRisk[ti] > 0.0)
+      {
+         double px = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                               : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+         double rNow = (px - open) * dir / g_tkRisk[ti];
+         double rPk  = g_tkPeakPx[ti] / g_tkRisk[ti];
+         if(rNow > b.bestR) b.bestR = rNow;
+         if(rPk  > b.peakR) b.peakR = rPk;
+      }
+   }
+
+   if(b.lots > 0.0) b.wAvgEntry = num / b.lots;
+   if(b.netLots > 0.0) b.dir = 1; else if(b.netLots < 0.0) b.dir = -1;
+   if(oldest > 0) b.oldestBars = iBarShift(_Symbol, _Period, oldest, false);
+   b.peakMoney = g_bkPeak;
+   b.givenBack = MathMax(0.0, g_bkPeak - b.money);
+   if(g_bkPeakTime > 0) b.sincePeakSec = (int)(TimeCurrent() - g_bkPeakTime);
+}
+
+//===================================================================
+//  MODULE: TREND PERSISTENCE RISK
+//===================================================================
+// "Sometimes the EA will continue in one direction - have it understand that
+//  it can be risky, trends don't always last forever."
+//
+// Three independent readings, each worth one point:
+//   AGE      - how long this SuperTrend direction has already lasted
+//   STRETCH  - how far price has travelled from its own DEMA, in ATRs
+//   CROWDING - how many same-direction entries have been taken in a row
+//
+// A trend can be old without being stretched (a slow grind) or stretched
+// without being old (a news spike), and those are different risks. Adding
+// them means the EA only becomes really cautious when several agree.
+//
+// The score is not a prediction that the trend will end. It is a statement
+// that the PAYOFF for staying has got worse: late-trend entries measured
+// -0.132R against +0.304R for early ones (the ADX result). So a high score
+// buys less and protects sooner. It never reverses anything on its own.
+int TrendRisk(string &why)
+{
+   why = "";
+   if(!InpUseTrendAge) return 0;
+   int sc = 0;
+
+   if(g_barsInTrend >= InpTrendOldBars)
+   {
+      sc++;
+      why += StringFormat("old(%d bars) ", g_barsInTrend);
+   }
+
+   double a = ATR(1);
+   double d = DEMA(InpDemaLen, 1);
+   if(a > 0.0 && d > 0.0)
+   {
+      double stretch = MathAbs(iClose(_Symbol, _Period, 1) - d) / a;
+      if(stretch >= InpTrendStretch)
+      {
+         sc++;
+         why += StringFormat("stretched(%.1f ATR) ", stretch);
+      }
+   }
+
+   if(g_sameDirEntries >= InpMaxSameDir)
+   {
+      sc++;
+      why += StringFormat("crowded(%d same-way) ", g_sameDirEntries);
+   }
+
+   if(sc == 0) why = "fresh";
+   return sc;
+}
+
+// How much of a peak the EA is willing to hand back, given how big that peak
+// is and how far the trend has already run. Two forces, both tightening:
+//   - a bigger peak is worth protecting harder (30% of 1R is 0.3R and is the
+//     price of letting a trade breathe; 30% of 6R is 1.8R and is the failure
+//     Veer is describing). This is the E-051 ratchet.
+//   - an old, stretched, crowded trend deserves less rope than a fresh one.
+double GiveBackAllowed(double peakR)
+{
+   double gb = InpGbBase;
+   if(peakR >= InpGbTier2R) gb = InpGbTier2;
+   if(peakR >= InpGbTier3R) gb = InpGbTier3;
+
+   string w = "";
+   int risk = TrendRisk(w);
+   if(risk == 1)      gb *= 0.80;
+   else if(risk == 2) gb *= 0.62;
+   else if(risk >= 3) gb *= 0.45;
+
+   // never so tight that ordinary noise closes a trade the moment it arms
+   return MathMax(gb, 0.08);
+}
+
+//===================================================================
+//  MODULE: PROFIT PROTECTION  (runs on EVERY TICK)
+//===================================================================
+// WHY EVERY TICK, when everything else in this EA runs on bar close:
+// the whole complaint is about profit disappearing while nothing acts. On M1
+// a bar-close-only exit watches up to 60 seconds of give-back before it is
+// even allowed to look. Entries stay on bar close - that is what keeps the
+// backtest honest (it is why v19.18 was rejected). Exits do not have that
+// problem: acting sooner than the backtest assumed can only close nearer the
+// trigger, never further from it.
+// Test this in the Strategy Tester on "Every tick based on real ticks".
+void UpdatePeaks()
+{
+   // register anything new, and refresh every peak
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      string cmt  = PositionGetString(POSITION_COMMENT);
+      double prof = PositionGetDouble(POSITION_PROFIT)
+                  + PositionGetDouble(POSITION_SWAP);
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      int ti = TrackFind(tk);
+      if(ti < 0)
+      {
+         // OriginalRisk reads the risk stamped into the comment at entry, so
+         // it stays correct after the stop has been trailed away from it.
+         ti = TrackAdd(tk, OriginalRisk(open, sl, cmt));
+         if(ti < 0) continue;
+      }
+
+      double fav = (px - open) * dir;
+      double adv = (open - px) * dir;
+      if(fav > g_tkPeakPx[ti])
+      {
+         g_tkPeakPx[ti]   = fav;
+         g_tkPeakTime[ti] = TimeCurrent();
+      }
+      if(adv > g_tkWorstPx[ti]) g_tkWorstPx[ti] = adv;
+      if(prof > g_tkPeakMoney[ti]) g_tkPeakMoney[ti] = prof;
+   }
+
+   // forget positions that have closed
+   for(int i = g_tkCount - 1; i >= 0; i--)
+      if(!PositionSelectByTicket(g_tkId[i])) TrackDrop(i);
+
+   // basket peak
+   Basket b;
+   Snapshot(b);
+   if(b.n == 0)
+   {
+      // flat: the basket is over, so its peak resets. Nothing is carried into
+      // the next one - a fresh basket has given nothing back yet.
+      g_bkPeak = 0.0; g_bkPeakTime = 0; g_bkStart = 0; g_bkArmed = false;
+      return;
+   }
+   if(g_bkStart == 0) g_bkStart = TimeCurrent();
+   if(b.money > g_bkPeak)
+   {
+      g_bkPeak     = b.money;
+      g_bkPeakTime = TimeCurrent();
+   }
+}
+
+// PER-POSITION give-back. This is the E-051 rule, in the EA.
+void ProtectPositions()
+{
+   if(!InpUseGiveBack) return;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      int ti = TrackFind(tk);
+      if(ti < 0 || g_tkRisk[ti] <= 0.0) continue;
+
+      double peakR = g_tkPeakPx[ti] / g_tkRisk[ti];
+      if(peakR < InpGbArmR) continue;                 // never got good enough
+      if(InpGbMinMoney > 0.0 && g_tkPeakMoney[ti] < InpGbMinMoney) continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double rNow = (px - open) * dir / g_tkRisk[ti];
+
+      double gb   = GiveBackAllowed(peakR);
+      double keep = peakR * (1.0 - gb);
+      if(rNow > keep) continue;
+
+      double money = PositionGetDouble(POSITION_PROFIT)
+                   + PositionGetDouble(POSITION_SWAP);
+      if(trade.PositionClose(tk))
+      {
+         double back = g_tkPeakMoney[ti] - money;
+         if(back > g_stWorstGB) g_stWorstGB = back;
+         Log(StringFormat("GIVE-BACK exit: peaked %.2fR (%s), now %.2fR (%s), "
+                          "allowed give-back %.0f%%",
+                          peakR, Money(g_tkPeakMoney[ti]), rNow, Money(money),
+                          gb * 100.0));
+         Journal("GIVEBACK", dir > 0 ? "long" : "short", px, 0, 0, 0, money,
+                 StringFormat("peak %.2fR kept %.2fR", peakR, rNow));
+      }
+   }
+}
+
+// BASKET give-back. The rule that would have saved the GBP12 basket.
+//
+// A basket of four positions can be handed back without any single position
+// breaking its own give-back rule: each one individually retraces less than
+// its allowance, and the TOTAL still round-trips. Nothing but a total-level
+// rule sees that, which is exactly why it kept happening.
+void ProtectBasket()
+{
+   if(!InpUseBasket) return;
+
+   Basket b;
+   Snapshot(b);
+   if(b.n == 0) return;
+
+   double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
+   double arm = MathMax(eq * InpBasketArmPct / 100.0, InpBasketMinMoney);
+
+   // an old, stretched, crowded run gets protected sooner, not later
+   string w = "";
+   int risk = TrendRisk(w);
+   if(risk >= 2) arm *= 0.60;
+
+   if(g_bkPeak < arm) return;         // never got big enough to be worth saving
+   if(!g_bkArmed)
+   {
+      g_bkArmed = true;
+      Log(StringFormat("basket protection ARMED at %s peak (%d positions, "
+                       "%.2f lots, trend %s)",
+                       Money(g_bkPeak), b.n, b.lots, w));
+   }
+
+   double allowed = InpBasketGiveBack;
+   if(risk == 1)      allowed *= 0.80;
+   else if(risk == 2) allowed *= 0.62;
+   else if(risk >= 3) allowed *= 0.45;
+   allowed = MathMax(allowed, 0.10);
+
+   double floorMoney = g_bkPeak * (1.0 - allowed);
+   if(b.money > floorMoney) return;
+
+   double back = g_bkPeak - b.money;
+   if(back > g_stWorstGB) g_stWorstGB = back;
+   Log(StringFormat("BASKET PROTECT: peaked %s, now %s, handed back %s "
+                    "(%.0f%% of peak, allowance %.0f%%). Closing %s.",
+                    Money(g_bkPeak), Money(b.money), Money(back),
+                    (g_bkPeak > 0 ? 100.0 * back / g_bkPeak : 0.0),
+                    allowed * 100.0,
+                    InpBasketCloseAll ? "the basket" : "the losing side"));
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+      double prof = PositionGetDouble(POSITION_PROFIT)
+                  + PositionGetDouble(POSITION_SWAP);
+      // InpBasketCloseAll=false keeps the position that is still working and
+      // cuts the ones dragging the total down. It banks less and it can be
+      // right more often. Neither version has been measured against the other
+      // on live fills, so the default is the simple one.
+      if(InpBasketCloseAll || prof < 0.0)
+         trade.PositionClose(tk);
+   }
+   Journal("BASKET", b.dir > 0 ? "long" : "short", b.wAvgEntry, b.lots,
+           0, 0, b.money, StringFormat("peak %s given back %s",
+                                       Money(g_bkPeak), Money(back)));
+}
+
+//===================================================================
+//  MODULE: STACKING
+//===================================================================
+// Default InpMaxStack = 1, so this EA does not stack at all until Veer turns
+// it on deliberately. That is not timidity: stacking has never been measured
+// on these entries, and the live baskets that prompted this whole rebuild
+// were stacked ones. The gates below are what it has to pass if he does.
+bool StackAllows(int dir, string &why)
+{
+   Basket b;
+   Snapshot(b);
+   if(b.n == 0) return true;
+
+   if(b.n >= InpMaxStack)
+   { why = StringFormat("already %d position(s), max %d", b.n, InpMaxStack); return false; }
+
+   if(b.dir != 0 && b.dir != dir)
+   { why = "would hedge the basket"; return false; }
+
+   if(g_lastEntryBar > 0
+      && iBarShift(_Symbol, _Period, g_lastEntryBar, false) < InpStackCoolBars)
+   { why = StringFormat("only %d bars since the last entry, need %d",
+                        iBarShift(_Symbol, _Period, g_lastEntryBar, false),
+                        InpStackCoolBars); return false; }
+
+   string w = "";
+   int risk = TrendRisk(w);
+   if(risk >= 2)
+   { why = "trend already run: " + w; return false; }
+
+   // DO NOT ADD AFTER PROFIT. An add on top of a basket that is already green
+   // is the trade that turns a good day into a flat one: it is bought at the
+   // worst price of the move so far, and it enlarges the position exactly
+   // when the give-back risk is highest.
+   double px = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                         : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   bool better = (dir > 0) ? (px < b.wAvgEntry) : (px > b.wAvgEntry);
+   if(!better)
+   { why = "add would be at a worse price than the basket average"; return false; }
+
+   double cap = InpMaxNetLots;
+   if(cap <= 0.0)
+   {
+      // auto cap: no more one-way exposure than InpMaxStack normal-sized
+      // trades would be. Without this, a run of flips in one direction can
+      // build a position nobody chose.
+      double atr = ATR(1);
+      if(atr > 0) cap = LotFor(InpStopAtrMult * atr) * InpMaxStack;
+   }
+   if(cap > 0.0 && MathAbs(b.netLots) >= cap)
+   { why = StringFormat("net exposure %.2f lots already at the %.2f cap",
+                        MathAbs(b.netLots), cap); return false; }
+
+   return true;
+}
+
+void RegisterEntry(int dir)
+{
+   if(dir == g_lastEntryDir) g_sameDirEntries++;
+   else                      g_sameDirEntries = 1;
+   g_lastEntryDir = dir;
+   g_lastEntryBar = iTime(_Symbol, _Period, 0);
+}
+
+//===================================================================
+//  MODULE: EXECUTION BOX
+//===================================================================
+// Nothing here is a decision. It is the answer to "what is actually
+// happening", written where it cannot scroll away.
+//
+// The row that matters most is KEPT OF PEAK. If the EA banks GBP60 out of
+// GBP100 of floating profit it ever showed, that is 60% and it is the single
+// number that says whether the execution problem is fixed. GREEN->RED is the
+// second: trades that went into profit and did not close profitably. Those
+// two rows are Veer's complaint, as a measurement.
+void BoxLine(int idx, string txt, color c)
+{
+   string nm = StringFormat("STS_box_%02d", idx);
+   if(ObjectFind(0, nm) < 0)
+   {
+      ObjectCreate(0, nm, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
+      ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX);
+      ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY + idx * (InpBoxSize + 6));
+      ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, InpBoxSize);
+      ObjectSetString(0, nm, OBJPROP_FONT, "Consolas");
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      // right-hand corners read right-to-left, or the text runs off the chart
+      if(InpBoxCorner == 1 || InpBoxCorner == 3)
+         ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
+   }
+   ObjectSetString(0, nm, OBJPROP_TEXT, txt);
+   ObjectSetInteger(0, nm, OBJPROP_COLOR, c);
+}
+
+void BoxClear()
+{
+   for(int i = 0; i < 40; i++)
+      ObjectDelete(0, StringFormat("STS_box_%02d", i));
+}
+
+void DrawBox()
+{
+   if(!InpShowBox) return;
+
+   Basket b;
+   Snapshot(b);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   string tw = "";
+   int risk = TrendRisk(tw);
+
+   color ok   = clrLime, bad = clrTomato, warn = clrOrange;
+   color pnlC = (b.money >= 0) ? ok : bad;
+
+   int r = 0;
+   BoxLine(r++, "== SNIPERBOT EXECUTION ==", InpBoxHead);
+   BoxLine(r++, StringFormat("open        %d pos  %.2f lots  net %+.2f",
+                             b.n, b.lots, b.netLots), InpBoxText);
+   BoxLine(r++, StringFormat("basket P/L  %s", Money(b.money)), pnlC);
+   BoxLine(r++, StringFormat("basket peak %s   armed %s",
+                             Money(b.peakMoney), g_bkArmed ? "YES" : "no"),
+           g_bkArmed ? ok : InpBoxText);
+   BoxLine(r++, StringFormat("given back  %s%s", Money(b.givenBack),
+                             (b.peakMoney > 0
+                              ? StringFormat("  (%.0f%% of peak)",
+                                             100.0 * b.givenBack / b.peakMoney)
+                              : "")),
+           (b.givenBack > 0 ? warn : InpBoxText));
+   if(b.n > 0)
+      BoxLine(r++, StringFormat("best now %.2fR  peaked %.2fR  held %d bars",
+                                b.bestR, b.peakR, b.oldestBars), InpBoxText);
+   BoxLine(r++, "", InpBoxText);
+
+   // ---- the two rows the whole rebuild exists to move
+   double kept = (g_stPeakSum > 0.0) ? 100.0 * g_stRealized / g_stPeakSum : 0.0;
+   BoxLine(r++, StringFormat("KEPT OF PEAK   %.0f%%   (%s of %s)",
+                             kept, Money(g_stRealized), Money(g_stPeakSum)),
+           (g_stPeakSum <= 0 ? InpBoxText : (kept >= 50 ? ok : (kept >= 30 ? warn : bad))));
+   BoxLine(r++, StringFormat("GREEN -> RED   %d of %d closed (%.0f%%)",
+                             g_stGreenRed, g_stTrades,
+                             (g_stTrades > 0 ? 100.0 * g_stGreenRed / g_stTrades : 0.0)),
+           (g_stTrades == 0 ? InpBoxText
+                            : (g_stGreenRed * 100 <= g_stTrades * 10 ? ok : bad)));
+   BoxLine(r++, StringFormat("given back all-time %s   worst one %s",
+                             Money(g_stGivenBack), Money(g_stWorstGB)),
+           InpBoxText);
+   BoxLine(r++, "", InpBoxText);
+
+   BoxLine(r++, StringFormat("closed %d   won %d (%.0f%%)   realized %s",
+                             g_stTrades, g_stWins,
+                             (g_stTrades > 0 ? 100.0 * g_stWins / g_stTrades : 0.0),
+                             Money(g_stRealized)), InpBoxText);
+   BoxLine(r++, StringFormat("today  %d trades   %s   equity %s",
+                             g_stDayTrades, Money(g_stDayRealized), Money(eq)),
+           (g_stDayRealized >= 0 ? ok : bad));
+   BoxLine(r++, "", InpBoxText);
+
+   BoxLine(r++, StringFormat("trend  %s dir  %d bars  risk %d/3",
+                             (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
+                             g_barsInTrend, risk),
+           (risk >= 2 ? bad : (risk == 1 ? warn : ok)));
+   BoxLine(r++, StringFormat("       %s", tw),
+           (risk >= 2 ? bad : InpBoxText));
+   BoxLine(r++, StringFormat("give-back allowance now %.0f%%",
+                             GiveBackAllowed(MathMax(b.peakR, 0.0)) * 100.0),
+           InpBoxText);
+
+   string lock = g_lockedPerm ? "LOCKED (max drawdown)"
+               : (g_lockedDay ? "locked for today" : "trading");
+   BoxLine(r++, StringFormat("state  %s   %d/%d trades today",
+                             lock, g_tradesToday, InpMaxTradesDay),
+           (g_lockedPerm || g_lockedDay) ? bad : ok);
+
+   // clear anything left over from a longer previous draw
+   for(int i = r; i < 40; i++)
+      ObjectDelete(0, StringFormat("STS_box_%02d", i));
+}
+
+//===================================================================
+//  MODULE: STATISTICS PERSISTENCE
+//===================================================================
+// The box is worthless if a terminal restart zeroes it, so the counters live
+// in GlobalVariables, which survive restarts and are keyed per symbol and
+// timeframe so two charts do not overwrite each other.
+void SaveStats()
+{
+   GSet("st_trades",  (double)g_stTrades);
+   GSet("st_wins",    (double)g_stWins);
+   GSet("st_greenred",(double)g_stGreenRed);
+   GSet("st_real",    g_stRealized);
+   GSet("st_peaksum", g_stPeakSum);
+   GSet("st_back",    g_stGivenBack);
+   GSet("st_worstgb", g_stWorstGB);
+}
+
+void LoadStats()
+{
+   g_stTrades    = (int)GGet("st_trades", 0);
+   g_stWins      = (int)GGet("st_wins", 0);
+   g_stGreenRed  = (int)GGet("st_greenred", 0);
+   g_stRealized  = GGet("st_real", 0);
+   g_stPeakSum   = GGet("st_peaksum", 0);
+   g_stGivenBack = GGet("st_back", 0);
+   g_stWorstGB   = GGet("st_worstgb", 0);
 }
 
 //==================== LIFECYCLE ====================================
@@ -1107,6 +1916,8 @@ int OnInit()
    trade.SetTypeFillingBySymbol(_Symbol);
    trade.SetDeviationInPoints(20);
 
+   LoadStats();
+
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEq = eq;
    g_peakEq     = eq;
@@ -1124,6 +1935,8 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   SaveStats();
+   BoxClear();
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    if(g_adxHandle != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
 }
@@ -1142,8 +1955,21 @@ void OnTick()
       g_dayStartEq  = eq;
       g_tradesToday = 0;
       g_lockedDay   = false;
+      g_stDayRealized = 0.0;
+      g_stDayTrades   = 0;
       Log("new trading day, daily counters reset");
    }
+
+   // ---- EVERY TICK: watch the profit and protect it.
+   // This is the only part of the EA that does not wait for a bar to close,
+   // and it is deliberate. The complaint being fixed is profit evaporating
+   // while nothing acts; on M1 a bar-close-only exit is allowed to look once
+   // a minute. Entries stay on bar close - that is what keeps the backtest
+   // and the live account the same system.
+   UpdatePeaks();
+   ProtectPositions();
+   ProtectBasket();
+   DrawBox();
 
    // EVERYTHING BELOW RUNS ONLY WHEN A BAR CLOSES.
    // This is what makes a backtest match live. v19.18 recomputed its engine on
