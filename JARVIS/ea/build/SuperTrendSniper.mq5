@@ -242,16 +242,30 @@ input double InpMaxNetLots    = 0.0;    // hard cap on one-way exposure (0 = aut
 input group "=== TREND PERSISTENCE (trends do not last forever) ==="
 // Veer, verbatim: "sometimes the ea will continue in one direction have it
 // understand that it can be risky trends don't always last forever".
-// Three independent readings of how far a one-way run has already gone. Each
-// one that trips raises the risk score, and a higher score makes the EA
-// protect profit sooner, size smaller, and eventually refuse to add at all.
-// This is also the reading behind the ADX ceiling that already measured well
-// (+0.304R at ADX<20 vs -0.132R at ADX>35): late in a trend is the losing
-// bucket, so late in a trend the EA should want less, not more.
+// MEASURED, not assumed (E-052). Eight market/timeframe combinations, outcome
+// = P(+1R before -1R), each bucket read against that market's OWN base rate:
+//
+//   run older than 100 bars ....... below base in 7 of 8 markets, -3.4 points
+//   run travelled over 8 ATR ...... below base in 7 of 8 markets, -3.0 points
+//   ADX at entry above 25 ......... below base in 6 of 8 markets, -1.3 points
+//
+// And, for the record, the two readings that FAILED and were removed from
+// this EA rather than kept because they sounded right:
+//
+//   consecutive same-way signals .. 4/8, 4/8, 2/6, 2/8, 5/8. A coin flip.
+//   stretch from the DEMA ......... no gradient, and the CLOSE-to-the-mean
+//                                   bucket was the bad one, not the far one.
+//   at the top of the range ....... backwards - better in 6 of 8 markets.
+//
+// THE SIZE OF THIS EFFECT IS 3 PERCENTAGE POINTS on a base rate near 50%.
+// It is real and it is consistent, and it is small. It is a reason to size
+// down and to stop ADDING to an exhausted run. It is not a reason to expect
+// a different system, and no score here blocks a fresh signal in a NEW
+// direction - the finding is about continuing an old run, not about trading.
 input bool   InpUseTrendAge   = true;
-input int    InpTrendOldBars  = 40;     // bars in one direction = "this has run"
-input double InpTrendStretch  = 2.5;    // ATR away from the DEMA = "stretched"
-input int    InpMaxSameDir    = 3;      // consecutive same-way entries before it counts
+input int    InpRunOldBars    = 100;    // bars since the OPPOSITE signal = exhausted
+input double InpRunFarAtr     = 8.0;    // ATR travelled in this run = exhausted
+input double InpRunAdx        = 25.0;   // ADX at entry (weakest of the three)
 
 input group "=== EXECUTION BOX (what is actually happening) ==="
 input bool   InpShowBox       = true;   // on-chart profit and execution panel
@@ -300,9 +314,14 @@ datetime g_bkPeakTime  = 0;
 datetime g_bkStart     = 0;
 bool     g_bkArmed     = false;
 
-// Trend persistence
-int      g_barsInTrend   = 0;
-int      g_sameDirEntries = 0;
+// Trend persistence. A "run" is the stretch of signals since the last one in
+// the OPPOSITE direction - which is what E-052 measured, and is not the same
+// as the current SuperTrend leg (the leg is fresh at every flip, and on M1
+// there are dozens of flips inside one directional run).
+int      g_barsInTrend   = 0;   // bars in the current SuperTrend leg (display)
+int      g_lastSigDir    = 0;   // direction of the last signal that passed the filters
+datetime g_runStartBar   = 0;   // bar of the first signal of this run
+double   g_runStartPx    = 0.0; // close at that bar
 int      g_lastEntryDir  = 0;
 datetime g_lastEntryBar  = 0;
 
@@ -357,6 +376,9 @@ void   ProtectPositions();
 void   ProtectBasket();
 bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
+void   RegisterSignal(int dir);
+int    RunBars();
+double RunMoveAtr();
 void   BoxLine(int idx, string txt, color c);
 void   BoxClear();
 void   DrawBox();
@@ -821,6 +843,11 @@ void TryEntry()
          return;
       }
    }
+
+   // The signal is real from here: it has passed the DEMA slope and the ADX
+   // ceiling, which is exactly how E-052 defined a signal. Record it against
+   // the run BEFORE anything reads the risk score.
+   RegisterSignal(flipUp ? 1 : -1);
 
    // --- session filter
    if(InpUseSession)
@@ -1445,37 +1472,63 @@ void Snapshot(Basket &b)
 // that the PAYOFF for staying has got worse: late-trend entries measured
 // -0.132R against +0.304R for early ones (the ADX result). So a high score
 // buys less and protects sooner. It never reverses anything on its own.
+// Bars since the first signal of the current run, and how far price has
+// travelled since it. These are the two readings that replicated.
+int RunBars()
+{
+   if(g_runStartBar == 0) return 0;
+   int b = iBarShift(_Symbol, _Period, g_runStartBar, false);
+   return (b < 0) ? 0 : b;
+}
+
+double RunMoveAtr()
+{
+   double a = ATR(1);
+   if(a <= 0.0 || g_runStartPx <= 0.0) return 0.0;
+   return MathAbs(iClose(_Symbol, _Period, 1) - g_runStartPx) / a;
+}
+
+// Called the moment a signal clears the filters, BEFORE the risk score is
+// read - so the score describes the run this signal belongs to, exactly as
+// the study computed it.
+void RegisterSignal(int dir)
+{
+   if(dir != g_lastSigDir)
+   {
+      g_runStartBar = iTime(_Symbol, _Period, 1);
+      g_runStartPx  = iClose(_Symbol, _Period, 1);
+      g_lastSigDir  = dir;
+   }
+}
+
 int TrendRisk(string &why)
 {
    why = "";
    if(!InpUseTrendAge) return 0;
    int sc = 0;
 
-   if(g_barsInTrend >= InpTrendOldBars)
+   int rb = RunBars();
+   if(rb >= InpRunOldBars)
    {
       sc++;
-      why += StringFormat("old(%d bars) ", g_barsInTrend);
+      why += StringFormat("run %d bars old ", rb);
    }
 
-   double a = ATR(1);
-   double d = DEMA(InpDemaLen, 1);
-   if(a > 0.0 && d > 0.0)
-   {
-      double stretch = MathAbs(iClose(_Symbol, _Period, 1) - d) / a;
-      if(stretch >= InpTrendStretch)
-      {
-         sc++;
-         why += StringFormat("stretched(%.1f ATR) ", stretch);
-      }
-   }
-
-   if(g_sameDirEntries >= InpMaxSameDir)
+   double rm = RunMoveAtr();
+   if(rm >= InpRunFarAtr)
    {
       sc++;
-      why += StringFormat("crowded(%d same-way) ", g_sameDirEntries);
+      why += StringFormat("run %.1f ATR far ", rm);
    }
 
-   if(sc == 0) why = "fresh";
+   double adx = ADXValue(1);
+   if(adx > 0.0 && adx >= InpRunAdx)
+   {
+      sc++;
+      why += StringFormat("ADX %.0f ", adx);
+   }
+
+   if(sc == 0) why = StringFormat("run %d bars / %.1f ATR - not exhausted", rb, rm);
    return sc;
 }
 
@@ -1747,8 +1800,6 @@ bool StackAllows(int dir, string &why)
 
 void RegisterEntry(int dir)
 {
-   if(dir == g_lastEntryDir) g_sameDirEntries++;
-   else                      g_sameDirEntries = 1;
    g_lastEntryDir = dir;
    g_lastEntryBar = iTime(_Symbol, _Period, 0);
 }
@@ -1848,12 +1899,15 @@ void DrawBox()
            (g_stDayRealized >= 0 ? ok : bad));
    BoxLine(r++, "", InpBoxText);
 
-   BoxLine(r++, StringFormat("trend  %s dir  %d bars  risk %d/3",
-                             (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
-                             g_barsInTrend, risk),
+   BoxLine(r++, StringFormat("run    %s  %d bars  %.1f ATR  risk %d/3",
+                             (g_lastSigDir == 1 ? "LONG" : (g_lastSigDir == -1 ? "SHORT" : "-")),
+                             RunBars(), RunMoveAtr(), risk),
            (risk >= 2 ? bad : (risk == 1 ? warn : ok)));
    BoxLine(r++, StringFormat("       %s", tw),
            (risk >= 2 ? bad : InpBoxText));
+   BoxLine(r++, StringFormat("       supertrend leg %s, %d bars",
+                             (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
+                             g_barsInTrend), InpBoxText);
    BoxLine(r++, StringFormat("give-back allowance now %.0f%%",
                              GiveBackAllowed(MathMax(b.peakR, 0.0)) * 100.0),
            InpBoxText);
