@@ -81,6 +81,21 @@ sigMode  = input.string("Follow the break", "On a level, act by", options = ["Fo
 minScore = input.int(2, "Only signal at levels scoring at least", minval = 0, maxval = 10, group = gS)
 sigCool  = input.int(10, "Bars between signals", minval = 1, maxval = 200, group = gS)
 
+gB = "BREAK, RETEST, CONTINUE"
+useRetest= input.bool(true, "Wait for the retest before continuing", group = gB,
+     tooltip = "A level that breaks and is then retested from the other side is the same trade taken at a better price and with the level now working FOR you. This is the entry Veer described: break, wait, continue.")
+retestWin= input.int(40, "   retest must come within (bars)", minval = 3, maxval = 500, group = gB)
+retestGo = input.float(0.15, "   confirm when price moves this far away (x ATR)", minval = 0.02, step = 0.05, group = gB)
+
+gK = "SCALPS INSIDE THE MOVE"
+useScalp = input.bool(true, "Also signal the smaller zones inside a run", group = gK,
+     tooltip = "The big move is one trade. The pullbacks inside it are others. A zone that scores below the BUY/SELL threshold but is still real gets a small marker rather than nothing - so the scalps are visible without pretending they are the same quality as the main entry.")
+scalpMin = input.int(1, "   a scalp needs a score of at least", minval = 0, maxval = 10, group = gK)
+
+gX = "EXITS"
+useExit  = input.bool(true, "Mark where the trade runs into the next zone", group = gX,
+     tooltip = "Price arriving at an opposing zone is where a move most often stops. It is not a reversal signal - it is a reason to bank something.")
+
 gV = "LOOK"
 showZone = input.bool(true, "Zones", group = gV)
 showLine = input.bool(true, "Level lines", group = gV)
@@ -110,6 +125,9 @@ type Lvl
     float best       // biggest move it ever produced, in ATR
     bool  swept      // wicked through and closed back
     bool  broken     // closed through
+    int   brokeBar   // when it broke, -1 if it has not
+    bool  retested   // price came back to it and left again, in the break direction
+    int   backBar    // when price returned to it, -1 if not currently back
     int   lastTouch
     int   pendBar    // bar the current approach started, -1 if none
     float pendExt    // extreme reached during that approach
@@ -174,7 +192,7 @@ addLevel(float px, int dir, int src, float strength) =>
         L.best := math.max(L.best, strength)
     else
         array.unshift(LV, Lvl.new(px, n, dir, src, 1, 0, 0, strength,
-             false, false, -9999, -1, na, na, na, na))
+             false, false, -1, false, -1, -9999, -1, na, na, na, na))
     true
 
 // A pivot high's strength is how far price fell away from it in the bars that
@@ -204,12 +222,24 @@ if useMtf
 var int  lastSigBar = -9999
 var bool sigBuy  = false
 var bool sigSell = false
+var bool retBuy  = false
+var bool retSell = false
+var bool scpBuy  = false
+var bool scpSell = false
+var bool exitUp  = false
+var bool exitDn  = false
 var int  nearCount = 0
 var float nearPx = na
 var int  nearScore = 0
 
 sigBuy := false
 sigSell := false
+retBuy := false
+retSell := false
+scpBuy := false
+scpSell := false
+exitUp := false
+exitDn := false
 nearCount := 0
 nearPx := na
 nearScore := 0
@@ -234,6 +264,7 @@ if array.size(LV) > 0
         bool closedThru = L.dir > 0 ? (close > L.px + atr * brkAtr) : (close < L.px - atr * brkAtr)
         if closedThru and not L.broken
             L.broken := true
+            L.brokeBar := n
             L.pendBar := -1
             // FOLLOW the break. This is the direction with evidence behind it.
             if showSig and (sigMode != "Fade the rejection")
@@ -281,6 +312,56 @@ if array.size(LV) > 0
                         lastSigBar := n
             else if (n - L.pendBar) > reactWin
                 L.pendBar := -1
+
+        // ---- BREAK, RETEST, CONTINUE
+        // The level broke. Price came back to it. If it leaves again in the
+        // direction of the break, the level that was resistance is now
+        // support and the original move has something to lean on. This is
+        // the entry Veer described - break, wait for the retest, then
+        // continue - and it is deliberately a SEPARATE signal from the break
+        // itself so the two can be compared on the journal, not blended.
+        if useRetest and L.broken and not L.retested and L.brokeBar > 0
+            bool inWindow = (n - L.brokeBar) <= retestWin
+            if inWindow
+                bool cameBack = (low <= L.px + tol) and (high >= L.px - tol)
+                if cameBack and L.backBar < 0
+                    L.backBar := n
+                if L.backBar >= 0
+                    bool away = L.dir > 0 ? (close > L.px + atr * retestGo)
+                     : (close < L.px - atr * retestGo)
+                    if away
+                        L.retested := true
+                        L.backBar := -1
+                        if showSig and n - lastSigBar >= sigCool
+                            if scoreOf(L.reacts, L.members, L.best, false) >= minScore
+                                if L.dir > 0
+                                    retBuy := true
+                                else
+                                    retSell := true
+                                lastSigBar := n
+            else
+                L.backBar := -1
+
+        // ---- SCALPS INSIDE THE MOVE
+        // A zone too weak to carry the main entry is still a place price
+        // pauses. Marked small and separately, never dressed up as the same
+        // trade.
+        if useScalp and not L.broken
+            int ssc = scoreOf(L.reacts, L.members, L.best, false)
+            if ssc >= scalpMin and ssc < minScore
+                if math.abs(close - L.px) <= tol and n - lastSigBar >= 2
+                    if L.dir > 0
+                        scpSell := true
+                    else
+                        scpBuy := true
+
+        // ---- EXIT MARKERS: an unbroken opposing zone right in front of price
+        if useExit and not L.broken and L.reacts >= minReact
+            if math.abs(close - L.px) <= tol * 1.5
+                if L.dir > 0
+                    exitUp := true
+                else
+                    exitDn := true
 
         // ---- is price near a remembered price RIGHT NOW?
         int sc = scoreOf(L.reacts, L.members, L.best, L.broken)
@@ -374,6 +455,27 @@ plotshape(showNear and nearCount > 0 and not sigBuy and not sigSell,
      "at a remembered level", shape.circle, location.absolute,
      color.new(color.orange, 40), size = size.tiny)
 
+plotshape(showSig and retBuy, "BUY retest", shape.labelup, location.belowbar,
+     color.new(cSup, 20), text = "RETEST", textcolor = color.white, size = size.tiny)
+plotshape(showSig and retSell, "SELL retest", shape.labeldown, location.abovebar,
+     color.new(cRes, 20), text = "RETEST", textcolor = color.white, size = size.tiny)
+
+// scalps: visible, and visibly smaller than the main entry
+plotshape(showSig and scpBuy and not sigBuy and not retBuy, "scalp buy",
+     shape.triangleup, location.belowbar, color.new(cSup, 45), size = size.tiny)
+plotshape(showSig and scpSell and not sigSell and not retSell, "scalp sell",
+     shape.triangledown, location.abovebar, color.new(cRes, 45), size = size.tiny)
+
+// not a reversal signal - a reason to bank something
+plotshape(useExit and exitUp, "into resistance", shape.xcross, location.abovebar,
+     color.new(color.orange, 25), size = size.tiny)
+plotshape(useExit and exitDn, "into support", shape.xcross, location.belowbar,
+     color.new(color.orange, 25), size = size.tiny)
+
+alertcondition(retBuy, "LIQ v2 RETEST BUY", "Liquidity Sniper v2: retest BUY")
+alertcondition(retSell, "LIQ v2 RETEST SELL", "Liquidity Sniper v2: retest SELL")
+alertcondition(exitUp or exitDn, "LIQ v2 into a zone",
+     "Price has reached an opposing zone - consider banking")
 alertcondition(sigBuy, "LIQ v2 BUY", "Liquidity Sniper v2: BUY")
 alertcondition(sigSell, "LIQ v2 SELL", "Liquidity Sniper v2: SELL")
 alertcondition(nearCount > 0, "LIQ v2 near a remembered level",

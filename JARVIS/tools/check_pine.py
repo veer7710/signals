@@ -14,7 +14,12 @@ Run:  python3 JARVIS/tools/check_pine.py <file.pine>
 from __future__ import annotations
 import re, sys
 
-BUILTIN = set("""
+BUILTIN = set(
+    # price shorthands and namespaces missing until 2026-09-01
+    'hl2 hlc3 ohlc4 hlcc4 order dayofweek dayofmonth weekofyear '
+    'earnings dividends splits chart currency display format scale '
+    'position size text xloc yloc extend adjustment barmerge session '.split() +
+    """
 open high low close volume time bar_index na true false math ta array box line label
 table str color input indicator strategy plot plotshape plotchar bgcolor alertcondition
 alert request barmerge syminfo timeframe chart hour minute second dayofweek year month
@@ -288,6 +293,19 @@ def check(path):
         m = FUNC.match(code)
         if m and "=>" in code:
             declared.add(m.group(1))
+            # ...and its PARAMETERS. PARAM below only matches TYPED parameters
+            # (`int len`), but Pine's common form is untyped - `f(src, len) =>`
+            # - and every one of those names was invisible to this checker,
+            # so any file using one drew a false "undeclared identifier".
+            # Added 2026-09-01 after four such alarms on a correct file.
+            inner = code[code.index("(") + 1:code.rindex(")")] if "(" in code and ")" in code else ""
+            for prm in inner.split(","):
+                prm = prm.strip()
+                if "=" in prm:
+                    prm = prm.split("=")[0].strip()
+                prm = prm.split()[-1] if prm.split() else ""
+                if re.fullmatch(r'[A-Za-z_]\w*', prm or ""):
+                    declared.add(prm)
         for n in PARAM.findall(code):
             declared.add(n)
         # loop variables

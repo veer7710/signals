@@ -2113,3 +2113,66 @@ Nothing is built for B or C.
 15m and 1h only. HORIZON is 30 bars; a different horizon moves the
 unconditional rates, though it moves the control with them, which is the point
 of having one.
+
+---
+
+## E-058 — "A baseline of GBP50 a day": the arithmetic that decides what the EA is for
+**Verdict: the target is coherent at GBP2,500–5,000. On GBP112 it is not a
+low-risk target and no execution work makes it one.**
+Script: `JARVIS/research/target.py`
+
+Veer: *"the goal of this live ea is a low risk compoudning results 50 a day or
+40 ... we want a baseline of 50 a day which is possible it happend today"*.
+
+GBP50/day is not one target. It is three different targets depending on the
+account, and the EA's code cannot tell them apart — the same settings produce
+all three.
+
+| daily return | account for GBP50/day | what that return is |
+|---|---|---|
+| 0.5% | GBP10,000 | demanding but coherent |
+| 1.0% | GBP5,000 | demanding but coherent |
+| 2.0% | GBP2,500 | very good, sustainable |
+| 5.0% | GBP1,000 | top decile, hard to sustain |
+| 10.0% | GBP500 | not sustainable |
+| **45%** | **GBP111** | **what GBP112 requires** |
+
+### Why "baseline" cannot attach to the last row
+If GBP50/day were genuinely a floor on GBP112, compounding over 20 trading days:
+
+| after | equity |
+|---|---|
+| 1 day | GBP162 |
+| 5 days | GBP718 |
+| 10 days | GBP4,601 |
+| 20 days | **GBP189,051** |
+
+One GBP50 day on GBP112 is a real event that happened. A *baseline* of GBP50/day
+on GBP112 is a different claim and that table is what it implies.
+
+### The risk it requires, and what that risk costs
+Real SuperTrend payoff shape, expectancy forced to zero, 40 trades, 20,000 runs:
+
+| risk/trade | P(+45% day) | P(−45% day) | P(halved) |
+|---|---|---|---|
+| 1% | 0.1% | 0.0% | 0.0% |
+| 2% | 4.2% | 0.4% | 0.1% |
+| 5% | 16.3% | 23.2% | 26.1% |
+| 10% | 19.7% | **52.0%** | **68.6%** |
+| 20% | 9.7% | **79.5%** | **92.4%** |
+
+**There is no risk setting where the good day is likely and the bad day is
+not.** At 20% risk the up-day probability has already started FALLING while the
+down-day probability keeps climbing — the geometry turns against you before the
+target gets easier.
+
+### What this settles for the EA
+Tune it for the account it will grow into, not the one it is on. The settings
+that take GBP112 to GBP5,000 fastest are the same ones most likely to take it
+to zero first, and the EA cannot know which run it is in until afterwards.
+
+**The supported half of Veer's claim:** today's session did leave money on the
+table, the give-back was real and measurable, and closing nearer the peak is
+worth a quantified amount (E-051b, E-056, E-057). That is a genuine capture
+improvement. It is a different claim from GBP50/day being a floor, and only one
+of the two has numbers behind it.

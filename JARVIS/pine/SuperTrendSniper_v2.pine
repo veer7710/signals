@@ -1,0 +1,256 @@
+//@version=6
+// ============================================================================
+//  SUPERTREND SNIPER v2  —  the EA's eyes
+//  SuperTrend + DEMA · clean BUY/SELL · levels only where they matter
+// ============================================================================
+//
+//  WHAT THIS IS FOR
+//  This is not a second opinion. It is the SuperTrendSniper EA's own logic
+//  drawn on the chart, so that what you see is what it trades. Every gate
+//  below exists in the .mq5 with the same name and the same default. If this
+//  prints a BUY and the EA does not take it, one of them has a bug and the
+//  panel will say which gate refused it.
+//
+//  WHAT IS ON THE CHART, AND NOTHING ELSE
+//    the SuperTrend line, the DEMA, BUY/SELL labels, and the handful of
+//    levels a trade could actually reach. No scoreboards, no eight-colour
+//    dashboards, no signals you are asked to ignore.
+//
+//  THE FOUR THINGS THAT WERE MEASURED, AND WHAT THEY DO HERE
+//   E-052  a run older than 100 bars, or further than 8 ATR, is worse in 7 of
+//          8 markets. Late-run signals are marked hollow, not solid.
+//   E-053  round-trip cost against the stop separated the winning markets
+//          from the losing ones almost perfectly. On M1 gold that cost is
+//          15-22% of the risk. The panel shows it; the EA refuses above 10%.
+//   E-056  bars since a trade last made a new high predicts the give-back:
+//          24% at stall 0-1 against 62% at stall 25+ on GOLD 15m, monotone
+//          and unanimous across 8 of 8 markets. The panel counts it live.
+//   E-057  after an impulse bar the median give-back exceeds the impulse's
+//          OWN range, in 8 of 8 markets against a matched control. Impulse
+//          bars are marked so a peak printed by one is treated as fragile.
+//
+//  WHAT IS NOT CLAIMED
+//  E-050 could not distinguish this entry from a random one on the data
+//  available, and there is still no M1 data in the project. Everything above
+//  is about EXECUTION - keeping more of a move once it goes your way. None of
+//  it is evidence that the entry predicts the move.
+// ============================================================================
+
+indicator("SuperTrend Sniper v2", "ST v2", overlay = true,
+     max_lines_count = 100, max_labels_count = 200, max_boxes_count = 50)
+
+// ---------------------------------------------------------------- inputs ---
+gS = "SIGNAL  (identical to the EA)"
+atrLen  = input.int(7, "SuperTrend ATR length", minval = 1, group = gS)
+stMult  = input.float(1.2, "SuperTrend multiplier", minval = 0.1, step = 0.1, group = gS)
+demaLen = input.int(200, "DEMA length", minval = 5, group = gS)
+useDema = input.bool(true, "Only trade with the DEMA slope", group = gS)
+useAdx  = input.bool(true, "Skip when ADX is already extended", group = gS)
+maxAdx  = input.float(35.0, "   ADX ceiling", minval = 5, group = gS)
+
+gR = "RUN EXHAUSTION  (E-052)"
+useRun  = input.bool(true, "Mark late-run signals as weak", group = gR,
+     tooltip = "A run older than 100 bars or further than 8 ATR was worse than its market's own base rate in 7 of 8 markets tested. The effect is about 3 percentage points - real, consistent, and small. It marks a signal down. It does not delete it.")
+runOld  = input.int(100, "   run is old after (bars)", minval = 10, group = gR)
+runFar  = input.float(8.0, "   run is far after (x ATR)", minval = 1, step = 0.5, group = gR)
+
+gC = "COST  (E-053)"
+showCost= input.bool(true, "Warn when the spread is too big a share of the stop", group = gC)
+costMax = input.float(0.10, "   refuse above (cost / stop)", minval = 0.01, step = 0.01, group = gC)
+spreadEst = input.float(0.30, "   assumed round-trip spread, in price", minval = 0.0, step = 0.01, group = gC,
+     tooltip = "Pine cannot read your live spread. Put YOUR broker's typical gold spread here. On M1 this single number decides whether the strategy is viable: the stop is only about 5x the cost at M1 gold, against 26x at 15m.")
+
+gL = "LEVELS  (only the ones a trade could reach)"
+showLv  = input.bool(true, "Show levels", group = gL)
+lvSwing = input.int(8, "   swing size", minval = 2, group = gL)
+lvCount = input.int(4, "   how many, each side", minval = 1, maxval = 10, group = gL)
+
+gV = "LOOK"
+showSt   = input.bool(true, "SuperTrend line", group = gV)
+showDema = input.bool(true, "DEMA", group = gV)
+showImp  = input.bool(true, "Mark impulse bars", group = gV)
+showPan  = input.bool(true, "Panel", group = gV)
+cUp      = input.color(#089981, "Up", group = gV)
+cDn      = input.color(#f23645, "Down", group = gV)
+
+// ------------------------------------------------------------------ core ---
+atr  = ta.atr(atrLen)
+atr14 = ta.atr(14)
+n    = bar_index
+
+f_dema(src, len) =>
+    e1 = ta.ema(src, len)
+    2 * e1 - ta.ema(e1, len)
+
+dema = f_dema(close, demaLen)
+
+// ---- SuperTrend, computed exactly as the EA computes it
+var float fUp = na
+var float fLo = na
+var int   dir = 0
+
+mid = hl2
+bUp = mid + stMult * atr
+bLo = mid - stMult * atr
+
+fUp := na(fUp[1]) ? bUp : (bUp < fUp[1] or close[1] > fUp[1] ? bUp : fUp[1])
+fLo := na(fLo[1]) ? bLo : (bLo > fLo[1] or close[1] < fLo[1] ? bLo : fLo[1])
+
+dirPrev = dir
+dir := na(dir[1]) or dir[1] == 0 ? (close > bUp ? -1 : 1) : dir[1]
+if dir == 1 and close > fUp
+    dir := -1
+else if dir == -1 and close < fLo
+    dir := 1
+
+flipUp = dir == -1 and dirPrev == 1
+flipDn = dir == 1 and dirPrev == -1
+
+stLine = dir == -1 ? fLo : fUp
+plot(showSt ? stLine : na, "SuperTrend", dir == -1 ? cUp : cDn, 2,
+     plot.style_linebr)
+plot(showDema ? dema : na, "DEMA", color.new(color.gray, 30), 1)
+
+// ---- the EA's gates, in the EA's order
+demaOk = not useDema or (flipUp ? dema > dema[2] : dema < dema[2])
+adxV   = ta.adx(14, 14)
+adxOk  = not useAdx or na(adxV) or adxV <= maxAdx
+
+// ---- run exhaustion (E-052): bars and distance since the last OPPOSITE signal
+var int   runStart = 0
+var float runPx    = 0.0
+var int   lastDir  = 0
+
+rawSig = (flipUp or flipDn) and demaOk and adxOk
+sigDir = flipUp ? 1 : -1
+
+if rawSig and sigDir != lastDir
+    runStart := n
+    runPx    := close
+    lastDir  := sigDir
+
+runBars = n - runStart
+runAtr  = atr14 > 0 ? math.abs(close - runPx) / atr14 : 0.0
+runTired = useRun and (runBars >= runOld or runAtr >= runFar)
+
+// ---- cost gate (E-053)
+stopDist = 1.5 * atr14
+costFrac = stopDist > 0 ? spreadEst / stopDist : 1.0
+costOk   = not showCost or costFrac <= costMax
+
+// ---- the signal
+goLong  = rawSig and flipUp and costOk
+goShort = rawSig and flipDn and costOk
+
+plotshape(goLong and not runTired, "BUY", shape.labelup, location.belowbar,
+     cUp, text = "BUY", textcolor = color.white, size = size.small)
+plotshape(goShort and not runTired, "SELL", shape.labeldown, location.abovebar,
+     cDn, text = "SELL", textcolor = color.white, size = size.small)
+
+// late in a run: same signal, drawn hollow, because the measured penalty is
+// three points and that is a discount, not a veto
+plotshape(goLong and runTired, "buy (late run)", shape.triangleup,
+     location.belowbar, color.new(cUp, 55), size = size.tiny)
+plotshape(goShort and runTired, "sell (late run)", shape.triangledown,
+     location.abovebar, color.new(cDn, 55), size = size.tiny)
+
+// ---- impulse bars (E-057)
+isImp = showImp and atr14 > 0 and (high - low) >= 2.0 * atr14
+barcolor(isImp ? color.new(color.orange, 30) : na, title = "impulse")
+
+// ---- stall, on the live signal (E-056)
+var float posPeak = na
+var int   peakBar = 0
+var int   posDir  = 0
+
+if goLong or goShort
+    posDir  := goLong ? 1 : -1
+    posPeak := close
+    peakBar := n
+else if posDir != 0
+    newBest = posDir == 1 ? high > posPeak : low < posPeak
+    if newBest
+        posPeak := posDir == 1 ? high : low
+        peakBar := n
+
+stall = posDir == 0 ? 0 : n - peakBar
+
+// ---- levels: only the nearest few in each direction
+ph = ta.pivothigh(lvSwing, lvSwing)
+pl = ta.pivotlow(lvSwing, lvSwing)
+
+var array<float> hiLv = array.new<float>()
+var array<float> loLv = array.new<float>()
+
+if not na(ph)
+    array.unshift(hiLv, ph)
+    if array.size(hiLv) > 30
+        array.pop(hiLv)
+if not na(pl)
+    array.unshift(loLv, pl)
+    if array.size(loLv) > 30
+        array.pop(loLv)
+
+var array<line> drawn = array.new<line>()
+
+if barstate.islast and showLv
+    if array.size(drawn) > 0
+        for i = 0 to array.size(drawn) - 1
+            line.delete(array.get(drawn, i))
+        array.clear(drawn)
+
+    above = array.new<float>()
+    below = array.new<float>()
+    if array.size(hiLv) > 0
+        for i = 0 to array.size(hiLv) - 1
+            v = array.get(hiLv, i)
+            if v > close
+                array.push(above, v)
+    if array.size(loLv) > 0
+        for i = 0 to array.size(loLv) - 1
+            v = array.get(loLv, i)
+            if v < close
+                array.push(below, v)
+    array.sort(above, order.ascending)
+    array.sort(below, order.descending)
+
+    na_ = math.min(lvCount, array.size(above))
+    nb_ = math.min(lvCount, array.size(below))
+    if na_ > 0
+        for i = 0 to na_ - 1
+            array.push(drawn, line.new(n - 60, array.get(above, i), n + 8,
+                 array.get(above, i), color = color.new(cDn, 45), width = 1))
+    if nb_ > 0
+        for i = 0 to nb_ - 1
+            array.push(drawn, line.new(n - 60, array.get(below, i), n + 8,
+                 array.get(below, i), color = color.new(cUp, 45), width = 1))
+
+alertcondition(goLong and not runTired, "ST v2 BUY", "SuperTrend Sniper v2: BUY")
+alertcondition(goShort and not runTired, "ST v2 SELL", "SuperTrend Sniper v2: SELL")
+
+// ---------------------------------------------------------------- panel ----
+var table P = table.new(position.top_right, 2, 7, border_width = 1)
+
+f_cell(int r, string a, string b, color c) =>
+    table.cell(P, 0, r, a, text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, r, b, text_color = c, text_size = size.tiny)
+
+if showPan and barstate.islast
+    table.cell(P, 0, 0, "SUPERTREND SNIPER v2", text_color = color.white,
+         bgcolor = color.new(color.blue, 40), text_size = size.small)
+    table.cell(P, 1, 0, timeframe.period, text_color = color.white,
+         bgcolor = color.new(color.blue, 40), text_size = size.small)
+
+    f_cell(1, "trend", dir == -1 ? "UP" : "DOWN", dir == -1 ? cUp : cDn)
+    f_cell(2, "run", str.tostring(runBars) + " bars / "
+         + str.tostring(runAtr, "#.#") + " ATR",
+         runTired ? color.orange : color.silver)
+    f_cell(3, "cost / stop", str.tostring(costFrac * 100, "#.#") + "%",
+         costOk ? color.lime : color.red)
+    f_cell(4, "stall", posDir == 0 ? "-" : str.tostring(stall) + " bars",
+         stall > 12 ? color.orange : color.silver)
+    f_cell(5, "refused by",
+         not costOk ? "COST" : (not demaOk ? "DEMA" : (not adxOk ? "ADX"
+         : (runTired ? "late run (marked, not blocked)" : "nothing"))),
+         costOk and demaOk and adxOk and not runTired ? color.lime : color.orange)
+    f_cell(6, "entry edge", "UNPROVEN vs random (E-050)", color.orange)
