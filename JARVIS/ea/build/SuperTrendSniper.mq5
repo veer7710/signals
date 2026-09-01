@@ -121,7 +121,11 @@ CTrade trade;
 //                     total; nothing but a total-level rule sees that.
 //   partial at level. bank half approaching a level, let the rest run
 //   trail ........... 3 ATR behind, ratchets only, bar close
-//   time cap ........ closed after InpMaxBars
+//   STALL ........... closed after InpMaxStall bars with NO NEW HIGH. This is
+//                     the primary time exit. A trade that stopped climbing is
+//                     measurably a different trade from one that has not, and
+//                     the blind bar cap could not tell them apart (E-056).
+//   time cap ........ closed after InpMaxBars. A backstop now.
 //   target .......... capped just SHORT of the next level, so it fills rather
 //                     than watching price turn a tick away from it
 //   stop ............ attached at OrderSend, never held in EA memory only
@@ -161,7 +165,33 @@ input group "=== EXIT (measured on THIS strategy, out-of-sample) ==="
 // the stop at entry and gets scratched by noise. That distinction is the whole
 // difference between +0.505R and the worst rule tested.
 input double InpTargetR       = 3.0;    // hard take profit at N x risk
-input int    InpMaxBars       = 50;     // time cap. 50 measured better than 20 here
+input int    InpMaxBars       = 50;     // absolute ceiling. See InpMaxStall first.
+
+input group "=== STALL (E-056: the strongest result in this project) ==="
+// Veer: "what if price reacts to our position but has slow price action how
+// do we know how to move".
+//
+// STALL = bars since the position last made a NEW BEST. A trade that printed
+// a new high on the last bar has stall 0; one that peaked thirty bars ago has
+// stall 30. InpMaxBars cannot tell those apart. They are not the same trade.
+//
+// MEASURED on every bar of every trade that reached +0.5R, across 8
+// market/timeframe combinations. P(gives it back to break-even before adding
+// another 0.5R), minus each market's own base rate:
+//
+//   stall      0-1     1-3     3-6    6-12   12-25     25+
+//   worse in   0/8     0/8     3/8     7/8     7/8     8/8   markets
+//
+// Monotone in every market. GOLD 15m in absolute terms: 24.0% give-back at
+// stall 0-1 against 62.1% at stall 25+. GOLD 1h: 18.0% against 47.3%. That is
+// a 30-to-38 point swing available from a number the EA already has.
+//
+// CAVEAT, because it is a real one: those are observations per BAR, so rows
+// within one trade are correlated and the confidence intervals in the study
+// are too narrow. What carries the finding is the 8-of-8 unanimity, which
+// correlated sampling inside a trade cannot manufacture.
+input int    InpMaxStall      = 25;     // close a stalled trade after this many bars
+input bool   InpStallScales   = true;   // and tighten the give-back as it stalls
 input bool   InpUseTrail      = true;   // ON: measured best on SuperTrend entries
 input double InpTrailAtR      = 0.0;    // arm immediately. A wide trail needs no delay
 input double InpTrailAtrMult  = 3.0;    // 3 ATR. Wide on purpose - tight trails lost
@@ -249,8 +279,8 @@ input group "=== COST GATE (E-053: this is the real M1 problem) ==="
 // because it reads the live spread at the moment of the decision.
 input bool   InpUseCostGate   = true;
 input double InpMaxCostFrac   = 0.10;   // refuse if round trip > this x the stop
-input double InpCommPerLot    = 7.0;    // YOUR broker's commission, per lot, round turn
-input double InpSlipPoints    = 5.0;    // expected slippage per side, in points
+input double InpCommPerLot    = 7.0;    // commission per lot, ROUND TURN, in the ACCOUNT currency
+input double InpSlipSpreads   = 0.25;   // expected slippage per side, as a FRACTION of the spread
 
 input group "=== CHOP GUARD (present so it can be tested, not argued about) ==="
 // DEFAULT OFF, and the reason is the measurement, not caution. Across 8
@@ -421,6 +451,7 @@ double   g_tkWorstPx[MAX_TRACK];   // worst adverse excursion, in price
 double   g_tkRisk[MAX_TRACK];      // original risk distance, in price
 double   g_tkPeakMoney[MAX_TRACK]; // best floating profit, in account currency
 datetime g_tkPeakTime[MAX_TRACK];  // when that best happened
+datetime g_tkPeakBar[MAX_TRACK];   // the BAR it happened on - stall is measured in bars
 int      g_tkCount = 0;
 
 // Basket-level. A "basket" is every position this EA has open on this symbol,
@@ -502,6 +533,7 @@ struct Basket
    double   peakR;        // best peak-R across the open positions
    int      oldestBars;   // bars the oldest position has been open
    int      sincePeakSec; // seconds since the basket peaked
+   int      stall;        // BARS since any open position made a new best (E-056)
    int      dir;          // +1 net long, -1 net short, 0 flat or hedged
 };
 
@@ -519,7 +551,8 @@ int    TrackAdd(ulong tk, double risk);
 void   TrackDrop(int i);
 void   Snapshot(Basket &b);
 int    TrendRisk(string &why);
-double GiveBackAllowed(double peakR);
+double GiveBackAllowed(double peakR, int stall);
+int    StallBars(int ti);
 void   UpdatePeaks();
 void   ProtectPositions();
 void   ProtectBasket();
@@ -1344,6 +1377,19 @@ string RiskTag(double stopDist, int dg)
    return "STS|" + DoubleToString(stopDist, dg);
 }
 
+// The risk this trade was SIZED on, in price. It is stamped into the position
+// comment at entry because the stop moves afterwards - once the trail has run,
+// the distance from entry to the current stop is not the risk any more.
+//
+// (Audit finding 10.) Many brokers replace or strip position comments. The
+// fallback then reads the CURRENT stop, and that fails in three different
+// ways, all of them previously silent:
+//   - trail already moved  -> risk read too small, the give-back rule arms
+//                             far too early
+//   - trail crossed entry  -> risk read near zero, one tick of noise fires it
+//   - no stop at all       -> risk zero, the position is unmanaged entirely
+// So the fallback is now the ATR-derived stop distance, which is what the
+// trade was actually sized on, and it says so out loud the first time.
 double OriginalRisk(double openPx, double sl, string cmt)
 {
    if(StringLen(cmt) > 4 && StringSubstr(cmt, 0, 4) == "STS|")
@@ -1351,7 +1397,22 @@ double OriginalRisk(double openPx, double sl, string cmt)
       double d = StringToDouble(StringSubstr(cmt, 4));
       if(d > 0) return d;
    }
-   return MathAbs(openPx - sl);
+
+   static bool told = false;
+   if(!told)
+   {
+      told = true;
+      Print("NOTE: a position comment did not carry its original risk tag - "
+            "this broker probably rewrites comments. Falling back to the "
+            "ATR stop distance. Every R figure in the log and the box is an "
+            "approximation from here on.");
+   }
+
+   double a = ATR(1);
+   if(a > 0.0) return InpStopAtrMult * a;
+
+   double d2 = MathAbs(openPx - sl);
+   return (d2 > 0.0) ? d2 : 0.0;
 }
 
 // A partial close must happen ONCE. Without this the old code re-closed half
@@ -1426,7 +1487,24 @@ void ManagePosition()
       if(risk <= 0) continue;
       double rNow  = (price - open) * dir / risk;
 
-      // --- time cap. Measured as one of the two best exits on gold.
+      // --- STALL EXIT, and it comes before the blind bar cap because it is
+      // the better of the two. A trade still printing new highs at bar 49 is
+      // not the trade InpMaxBars was written for; one that peaked thirty bars
+      // ago and is drifting is, and InpMaxBars cannot tell them apart. E-056
+      // measured the difference at 30 to 38 percentage points of give-back
+      // probability, unanimous across 8 of 8 markets.
+      int tix = TrackFind(tk);
+      int stallNow = StallBars(tix);
+      if(InpMaxStall > 0 && tix >= 0 && stallNow >= InpMaxStall)
+      {
+         if(trade.PositionClose(tk))
+            Log(StringFormat("STALL exit: no new high for %d bars, sitting at "
+                             "%.2fR. Measured give-back rate at this stall is "
+                             "roughly 60%%.", stallNow, rNow));
+         continue;
+      }
+
+      // --- absolute bar cap. A backstop now, not the main rule.
       int barsHeld = iBarShift(_Symbol, _Period, ot, false);
       if(InpMaxBars > 0 && barsHeld >= InpMaxBars)
       {
@@ -1651,6 +1729,7 @@ int TrackAdd(ulong tk, double risk)
    g_tkRisk[i]      = risk;
    g_tkPeakMoney[i] = 0.0;
    g_tkPeakTime[i]  = TimeCurrent();
+   g_tkPeakBar[i]   = iTime(_Symbol, _Period, 0);
    g_tkCount++;
    return i;
 }
@@ -1669,6 +1748,7 @@ void TrackDrop(int i)
       g_tkRisk[j]      = g_tkRisk[j + 1];
       g_tkPeakMoney[j] = g_tkPeakMoney[j + 1];
       g_tkPeakTime[j]  = g_tkPeakTime[j + 1];
+      g_tkPeakBar[j]   = g_tkPeakBar[j + 1];
    }
    g_tkCount--;
 }
@@ -1684,7 +1764,7 @@ void Snapshot(Basket &b)
 {
    b.n = 0; b.nLong = 0; b.nShort = 0;
    b.lots = 0.0; b.netLots = 0.0; b.money = 0.0; b.wAvgEntry = 0.0;
-   b.bestR = 0.0; b.peakR = 0.0; b.oldestBars = 0; b.dir = 0;
+   b.bestR = 0.0; b.peakR = 0.0; b.oldestBars = 0; b.dir = 0; b.stall = 0;
    b.peakMoney = 0.0; b.givenBack = 0.0; b.sincePeakSec = 0;
 
    double num = 0.0;
@@ -1722,6 +1802,10 @@ void Snapshot(Basket &b)
          double rPk  = g_tkPeakPx[ti] / g_tkRisk[ti];
          if(rNow > b.bestR) b.bestR = rNow;
          if(rPk  > b.peakR) b.peakR = rPk;
+         // the basket's stall is the SMALLEST of its positions': if anything
+         // is still making new highs, the basket has not stopped working
+         int st = StallBars(ti);
+         if(b.stall == 0 || st < b.stall) b.stall = st;
       }
    }
 
@@ -1815,11 +1899,33 @@ double RoundTripCost()
 {
    double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
                  - SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double pt     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
-   double slip   = 2.0 * InpSlipPoints * pt;      // one per side
-   double mpp    = MoneyPerPricePerLot();
-   double comm   = (mpp > 0.0) ? InpCommPerLot / mpp : 0.0;
-   return spread + slip + comm;
+
+   // Slippage as a FRACTION OF THE SPREAD, not in points. (Audit finding 14.)
+   // Points are a digits-dependent unit: 5 points meant $0.05 on a 2-digit
+   // gold feed and $0.005 on a 3-digit one, so the same default was wrong by
+   // ten times depending on the broker's quote precision. A fraction of the
+   // live spread scales itself across every symbol and every digit count,
+   // and needs no per-broker tuning.
+   double slip = 2.0 * InpSlipSpreads * spread;
+
+   // Commission is quoted per lot in the ACCOUNT currency and has to be
+   // converted to price before it can be compared with a stop distance.
+   // If the symbol reports no tick value, commission would silently vanish
+   // from the cost gate - so refuse to pretend the trade is cheap.
+   double mpp = MoneyPerPricePerLot();
+   if(mpp <= 0.0)
+   {
+      static bool warned = false;
+      if(!warned)
+      {
+         warned = true;
+         Print("WARNING: this symbol reports no usable tick value, so "
+               "commission cannot be converted to price. The cost gate is "
+               "counting spread and slippage only and is UNDERSTATING cost.");
+      }
+      return spread + slip;
+   }
+   return spread + slip + InpCommPerLot / mpp;
 }
 
 // Kaufman efficiency ratio: net distance divided by the length of the path
@@ -1884,7 +1990,20 @@ int TrendRisk(string &why)
 //     price of letting a trade breathe; 30% of 6R is 1.8R and is the failure
 //     Veer is describing). This is the E-051 ratchet.
 //   - an old, stretched, crowded trend deserves less rope than a fresh one.
-double GiveBackAllowed(double peakR)
+// Bars since this position last made a new best. The whole of E-056.
+int StallBars(int ti)
+{
+   if(ti < 0 || ti >= g_tkCount || g_tkPeakBar[ti] == 0) return 0;
+   int b = iBarShift(_Symbol, _Period, g_tkPeakBar[ti], false);
+   return (b < 0) ? 0 : b;
+}
+
+// How much of a peak the EA will hand back, given how big the peak is, how
+// far the run has already gone, and - now - whether the trade is still
+// working. A trade making new highs gets ROPE; one that stopped climbing
+// twenty bars ago gets a leash. Measured: at stall 0-1 a trade gives it back
+// 24% of the time on GOLD 15m, at stall 25+ it is 62%.
+double GiveBackAllowed(double peakR, int stall)
 {
    double gb = InpGbBase;
    if(peakR >= InpGbTier2R) gb = InpGbTier2;
@@ -1895,6 +2014,19 @@ double GiveBackAllowed(double peakR)
    if(risk == 1)      gb *= 0.80;
    else if(risk == 2) gb *= 0.62;
    else if(risk >= 3) gb *= 0.45;
+
+   // E-056. Weighted to the measured gradient, not to taste: the 0-1 and
+   // 1-3 buckets were BETTER than base in 8 of 8 markets, so a trade still
+   // printing new highs is given more room, not less.
+   if(InpStallScales)
+   {
+      if(stall <= 1)       gb *= 1.35;
+      else if(stall <= 3)  gb *= 1.15;
+      else if(stall <= 6)  gb *= 1.00;
+      else if(stall <= 12) gb *= 0.85;
+      else if(stall <= 25) gb *= 0.70;
+      else                 gb *= 0.55;
+   }
 
    // NEVER SO TIGHT THAT THE EXIT COSTS MORE THAN IT SAVES. (Audit finding 8.)
    // At trend risk 3 the shipped tiers gave 18% x 0.45 = 8.1%, which on a
@@ -1965,6 +2097,7 @@ void UpdatePeaks()
       {
          g_tkPeakPx[ti]   = fav;
          g_tkPeakTime[ti] = TimeCurrent();
+         g_tkPeakBar[ti]  = iTime(_Symbol, _Period, 0);
       }
       if(adv > g_tkWorstPx[ti]) g_tkWorstPx[ti] = adv;
       if(prof > g_tkPeakMoney[ti]) g_tkPeakMoney[ti] = prof;
@@ -2020,8 +2153,9 @@ void ProtectPositions()
                               : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
       double rNow = (px - open) * dir / g_tkRisk[ti];
 
-      double gb   = GiveBackAllowed(peakR);
-      double keep = peakR * (1.0 - gb);
+      int    stall = StallBars(ti);
+      double gb    = GiveBackAllowed(peakR, stall);
+      double keep  = peakR * (1.0 - gb);
       if(rNow > keep) continue;
 
       // One close REQUEST at a time. Without this a requote produced a fresh
@@ -2387,9 +2521,10 @@ void DrawBox()
                              g_boxEff, g_boxFlips, InpChopFlipLen),
            (g_boxStop > 0 && g_boxCost / g_boxStop > InpMaxCostFrac)
            ? bad : InpBoxText);
-   BoxLine(r++, StringFormat("give-back allowance now %.0f%%",
-                             GiveBackAllowed(MathMax(b.peakR, 0.0)) * 100.0),
-           InpBoxText);
+   BoxLine(r++, StringFormat("give-back allowance now %.0f%%   stall %d bars",
+                             GiveBackAllowed(MathMax(b.peakR, 0.0), b.stall) * 100.0,
+                             b.stall),
+           (b.stall > 12 ? warn : InpBoxText));
 
    string lock = g_lockedPerm ? "LOCKED (max drawdown)"
                : (g_lockedDay ? "locked for today" : "trading");
