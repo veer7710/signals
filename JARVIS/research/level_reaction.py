@@ -622,7 +622,7 @@ def run_all():
         labs = [lab for _, _, lab in edges]
         print(f"    {'market':<14}" + "".join(f"{l:>12}" for l in labs))
         pos = [0] * len(labs); seen = [0] * len(labs); absrow = []
-        realpct = [[] for _ in labs]
+        realpct = [[] for _ in labs]; randpct = [[] for _ in labs]
         for name, (real, rres, ctrl, cres) in store.items():
             tr = tally(real, rres, edges, keyf)
             acc = {lab: [0, 0] for lab in labs}
@@ -635,7 +635,7 @@ def run_all():
                 if n < 25 or cn < 25:
                     cells.append(f"{'-':>12}"); continue
                 d = 100 * (k / n - ck / cn)
-                realpct[bi].append(100 * k / n)
+                realpct[bi].append(100 * k / n); randpct[bi].append(100 * ck / cn)
                 cells.append(f"{d:>+12.1f}")
                 seen[bi] += 1
                 if d > 0: pos[bi] += 1
@@ -654,6 +654,9 @@ def run_all():
               + "".join(f"{f'{pos[b]}/{seen[b]}':>12}" for b in range(len(labs))))
         print(f"    {'mean real %':<14}"
               + "".join(f"{(sum(realpct[b])/len(realpct[b]) if realpct[b] else 0):>12.1f}"
+                        for b in range(len(labs))))
+        print(f"    {'mean rand %':<14}"
+              + "".join(f"{(sum(randpct[b])/len(randpct[b]) if randpct[b] else 0):>12.1f}"
                         for b in range(len(labs))))
         nbuckets += sum(1 for b in range(len(labs)) if seen[b] > 0)
 
