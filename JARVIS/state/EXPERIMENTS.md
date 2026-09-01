@@ -1705,3 +1705,123 @@ continuing an old run, not about trading at all.
 15m and 1h only; **this repo still has no M1 or M5 data** and Veer trades
 M1/M5/M15. Base rates ran 45–55%, so none of these markets showed a large
 directional edge to begin with, consistent with E-050.
+
+---
+
+## E-053 — Sideways price action: the regime is real, the filter is not, and the actual problem is COST
+**Verdict on a chop filter: UNPROVEN — it shrinks the system rather than improving it**
+**Verdict on the cost explanation: SUPPORTED, and it is arithmetic rather than a fit**
+Script: `JARVIS/research/chop.py` — `python3 ... chop.py ALL`
+
+### What prompted it
+Veer's M1 XAUUSD screenshot, 20:04–20:28 on 1 Sep: roughly **16 SuperTrend
+signals in 24 minutes**, inside a range of about **$4.50**, oscillating around
+two level lines 22 cents apart. Then: *"u can [see] how we perform shit in
+sideways price action make sure we can limit loss on those"*.
+
+### A defect found on the way
+`SuperTrendSniper.mq5` line 67 states, in its own scenario map, that a signal
+fired into a chopping market is *"refused"*. **There is no chop code in the
+EA.** The Pine has a chop guard; the EA never had one and the comment claimed
+otherwise. Second: the Pine's guard was broken by my own timeframe conversion
+last session — `chopLen = chopMins / barMins` gives **750 bars on M1**, so
+"more than 3 flips in 750 M1 bars" is true essentially always. Flip density is
+a per-BAR property and should never have been converted to minutes.
+
+### Q1 — is sideways actually worse? Partly.
+8 market/timeframe combinations. Each bucket scored against that market's own
+base expectancy.
+
+| definition | bucket | markets below own base |
+|---|---|---|
+| efficiency ratio over 50 bars | **< 0.08** | **6 of 8** |
+| SuperTrend flips in last 20 bars | 2–3 | 7 of 8 |
+| SuperTrend flips in last 20 bars | 3–5 | **1 of 8 — i.e. 7 of 8 ABOVE** |
+| SuperTrend flips in last 20 bars | 5+ | 3 of 3 |
+
+The flip readings are **not** the chop story they look like. Few flips means a
+sustained one-way move, and that bucket being bad is E-052 again (an exhausted
+run), not chop. Only the 5+ bucket is chop, and only 3 markets had enough
+samples to say anything.
+
+### Q2 — does filtering it limit loss? NO, not in any way that survives.
+Total R before and after applying each rule, across all 8 markets:
+
+| rule | markets improved |
+|---|---|
+| skip er50 < 0.08 | **5 of 8** |
+| skip er50 < 0.08 OR flips20 ≥ 5 | **5 of 8** |
+| skip er20 < 0.10 | 5 of 8 |
+| skip flips20 ≥ 3 | 4 of 8 |
+| skip flips50 ≥ 6 | 3 of 8 |
+
+5 of 8 is a coin flip with one extra head. And the *pattern* of who it helps
+is the whole answer: `skip er50 < 0.08` takes **EURUSD 15m from −95.1R to
+−71.4R** and **GBPUSD 15m from −90.2R to −54.5R** — while taking **GOLD 1h
+from +124.9R to +91.8R** and **US500 1h from +19.6R to −3.2R**.
+
+It helps the losing systems and hurts the winning ones, because it does not
+select — it just removes trades roughly proportionally and scales the result
+toward zero. **This is E-041 restated: a filter moves a system toward zero, it
+does not move it past zero.** A chop filter is not a way to limit loss. It is
+a way to trade less.
+
+### THE ACTUAL FINDING: it is a cost problem, and that is why M1 is different
+New measurement — round-trip cost as a fraction of the 1.5-ATR stop, i.e. how
+much of each trade's risk is paid to the broker before the trade starts:
+
+| market | median cost/stop | stop is this many × cost | expectancy |
+|---|---|---|---|
+| GOLD 1h | 0.028 | 35.2× | **+0.335R** |
+| GOLD 15m | 0.039 | 25.9× | **+0.227R** |
+| US500 1h | 0.040 | 25.1× | +0.042R |
+| US500 15m | 0.067 | 14.9× | −0.319R |
+| GBPUSD 1h | 0.150 | 6.7× | −0.076R |
+| EURUSD 1h | 0.153 | 6.5× | +0.044R |
+| GBPUSD 15m | **0.412** | **2.4×** | **−0.344R** |
+| EURUSD 15m | **0.429** | **2.3×** | **−0.356R** |
+
+The ordering is almost perfect. Every market where the stop is more than ~15×
+the round trip is positive or near flat; both markets where it is under 2.5×
+lose about a third of a unit of risk per trade. `skip costfrac > 0.07` deletes
+**100%** of the EURUSD 15m and GBPUSD 15m samples — those systems are not
+strategies with a chop problem, they are spread payment schemes.
+
+### What that implies for GOLD M1, which is what Veer actually trades
+ATR scales roughly with the square root of bar duration, so cost/stop scales
+with its inverse:
+- from GOLD 15m: 0.0386 × √15 = **0.149**
+- from GOLD 1h: 0.0284 × √60 = **0.220**
+
+Both extrapolations land at **0.15–0.22**, four to six times the 15m figure,
+in the same band as EURUSD/GBPUSD 1h (0.15) where expectancy is 0.00 to −0.10.
+So on M1 gold roughly **15–22% of every trade's risk is paid before the trade
+begins**, against a raw entry that E-050 could not distinguish from random.
+
+**That is the mechanism behind the screenshot.** 16 signals in 24 minutes is
+not fatal because the market is sideways. It is fatal because on M1 each of
+those round trips costs a fifth of its own risk, and a $4.50 range does not
+contain enough movement to pay 16 of them. The same range on 15m is survivable
+with the identical logic, which is why this never showed up in any test so far.
+
+### Assumptions that must be checked against the real broker
+Costs assumed for GOLD: spread 0.30, slippage 0.05 per side, commission $7 per
+lot — about 0.47 in price per round trip. **If PU Prime's M1 gold spread is
+wider than 0.30 at the times Veer trades, every number above is optimistic.**
+The EA can settle this without any backtest: it reads the live spread.
+
+### What changes
+1. The EA's cost gate is rebuilt. It had `InpMaxSpreadAtr` (spread only,
+   0.15 × ATR ≈ 0.10 cost/stop) which ignored commission and slippage. It
+   becomes a true cost-to-stop gate including both.
+2. The chop guard the EA never had is added — and **defaults OFF**, because
+   5 of 8 is not evidence. It is present so it can be tested, not argued about.
+3. The Pine's `chopLen` reverts to bars.
+4. **No filter is claimed to fix this.** The honest levers on M1 are a wider
+   stop, a bigger required move, or a cheaper instrument/timeframe — all of
+   which reduce cost/stop directly. Filtering does not.
+
+### Caveats
+Still no M1 or M5 data (Dukascopy is blocked by this environment's network
+policy). The M1 numbers above are a √-time extrapolation from 15m and 1h, not
+a measurement, and they are labelled as such everywhere they appear.
