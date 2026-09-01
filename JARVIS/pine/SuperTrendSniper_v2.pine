@@ -113,8 +113,10 @@ plot(showDema ? dema : na, "DEMA", color.new(color.gray, 30), 1)
 
 // ---- the EA's gates, in the EA's order
 demaOk = not useDema or (flipUp ? dema > dema[2] : dema < dema[2])
-adxV   = ta.adx(14, 14)
-adxOk  = not useAdx or na(adxV) or adxV <= maxAdx
+// Pine has no ta.adx. ADX is the THIRD element of ta.dmi()'s tuple, and
+// assuming otherwise is what stopped this file compiling on 2026-09-01.
+[_diP, _diM, adxV] = ta.dmi(14, 14)
+adxOk = not useAdx or na(adxV) or adxV <= maxAdx
 
 // ---- run exhaustion (E-052): bars and distance since the last OPPOSITE signal
 var int   runStart = 0

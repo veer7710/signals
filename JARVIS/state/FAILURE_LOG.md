@@ -189,3 +189,42 @@ treated as a declaration (F-007), now function calls excluded from scanning.
 Each hole was invisible until a specific file fell into it, which is the
 argument for keeping every regression case rather than deleting them once
 green.
+
+---
+
+## F-009 — Shipped a non-compiling Pine for the fourth time. `ta.adx` does not exist.
+Date: 2026-09-01. Veer's screenshot: `SuperTrendSniper_v2.pine` line 116,
+**"Could not find function or function reference 'ta.adx' (CE10271)"**.
+
+Pine has no `ta.adx`. ADX comes out of `ta.dmi(diLength, adxSmoothing)` as the
+THIRD element of a tuple: `[diPlus, diMinus, adx] = ta.dmi(14, 14)`.
+
+### Why the checker passed it
+`check_pine.py` validated that `ta` was a known namespace and then accepted
+**anything** after the dot. Every `ta.<something>` was invisible to it.
+
+This is the same shape as F-006 and F-008 and it is the third time:
+- F-006: the continuation check matched `and|or|?|:` because those were in the
+  example, not because the rule was about operators. `*` slipped through.
+- F-008: the identifier regex skipped names followed by `(`, so every function
+  CALL was invisible and a call-before-definition shipped.
+- F-009: the namespace check stopped at the dot, so every member name was
+  invisible.
+
+**The pattern in all three: the checker verified the part of the expression it
+happened to parse and silently accepted the part it did not.** A checker that
+does not know it is ignoring something reports CLEAN with total confidence.
+
+### Fixed
+`check_namespace_members()` now validates the member names of `ta.`, `math.`
+and `str.` against explicit lists, and REPORTS an unknown one rather than
+assuming it is fine. The lists are not exhaustive and do not need to be: a
+false alarm costs one line in a list, a missed one costs a shipped file that
+does not compile. Confirmed by watching it fail on the real line before fixing
+the code.
+
+### The rule this should have followed the first time
+**Never let a checker's silence mean "valid".** If a check cannot parse part of
+an expression, that part must be reported as unchecked, not treated as correct.
+Three of the four shipped compile failures came from a checker being confidently
+quiet about something it never looked at.

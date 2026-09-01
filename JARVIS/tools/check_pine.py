@@ -275,6 +275,56 @@ def check_draw_in_ternary(src):
     return out
 
 
+# ---------------------------------------------------------------------------
+# NAMESPACE MEMBERS  (added 2026-09-01 after F-009)
+#
+# The checker validated that `ta` was a known namespace and then accepted
+# ANYTHING after the dot. So `ta.adx(14, 14)` passed here and failed in
+# TradingView with "Could not find function or function reference 'ta.adx'".
+# Pine has no ta.adx - ADX comes out of ta.dmi() as the third element of a
+# tuple. That is the fourth non-compiling Pine file shipped to Veer, and the
+# third time the cause was a rule this checker did not know rather than a
+# mistake it failed to spot.
+#
+# These lists are not exhaustive and do not need to be. An unknown member is
+# REPORTED, not ignored: a false alarm costs one line here, a missed one costs
+# a shipped file that will not compile.
+TA_MEMBERS = set("""
+alma atr barssince bb bbw cci change cmo cog correlation cross crossover
+crossunder cum dev dmi ema falling highest highestbars hma kc kcw linreg
+lowest lowestbars macd max median mfi min mode mom percentile_linear_interpolation
+percentile_nearest_rank percentrank pivot_point_levels pivothigh pivotlow
+range rci rising rma roc rsi sar sma stdev stoch supertrend swma tr tsi
+valuewhen variance vwap vwma wma wpr sum
+""".split())
+
+MATH_MEMBERS = set("""
+abs acos asin atan avg ceil cos exp floor log log10 max min pow random round
+round_to_mintick sign sin sqrt sum tan todegrees toradians e phi pi rphi
+""".split())
+
+STR_MEMBERS = set("""
+contains endswith format format_time length lower match pos repeat replace
+replace_all split startswith substring tonumber tostring trim upper
+""".split())
+
+NAMESPACE_MEMBERS = {"ta": TA_MEMBERS, "math": MATH_MEMBERS, "str": STR_MEMBERS}
+
+
+def check_namespace_members(src):
+    """`ta.adx(...)` compiles here and fails in TradingView. Catch it."""
+    out = []
+    for i, l in enumerate(src, 1):
+        code = l.split("//")[0]
+        for m in re.finditer(r'\b(ta|math|str)\.([a-zA-Z_]\w*)', code):
+            ns, name = m.group(1), m.group(2)
+            if name not in NAMESPACE_MEMBERS[ns]:
+                out.append((i, f"{ns}.{name} IS NOT A PINE FUNCTION",
+                            f"no such member of the '{ns}' namespace - "
+                            f"this will not compile"))
+    return out
+
+
 def check(path):
     src = open(path, encoding="utf-8").read().split("\n")
     declared, problems = set(BUILTIN), []
@@ -373,6 +423,7 @@ def check(path):
     problems += check_continuation(src)
     problems += check_var_offset(src)
     problems += check_order(src, declared)
+    problems += check_namespace_members(src)
     problems += check_arity(src)
     problems += check_tables(src)
     problems += check_draw_in_ternary(src)
