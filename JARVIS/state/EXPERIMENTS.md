@@ -2033,3 +2033,83 @@ one that peaked thirty bars ago. Those are measurably different trades.
 This is also the direct answer to Veer's actual question. When price reacts to
 the position but goes slow: the slowness itself is the signal, and it is worth
 between 20 and 38 percentage points of give-back probability.
+
+---
+
+## E-057 — After an impulse candle: bank the peak, yes. Trade the bounce, no.
+**Verdict: "close at the peak" SUPPORTED (weakly). "buy the bounce" and
+"wait for the pullback then continue" REJECTED as edges.**
+Script: `JARVIS/research/impulse.py`
+
+### The event
+Veer's M1 gold chart, 1 Sep 21:03. One M1 candle drops about $3 — roughly four
+times the M1 ATR — and prints the low. Three stacked shorts (0.01 at 4344.27,
+0.02 at 4341.35, 0.02 at 4339.22) are worth about **GBP10.30** at that low and
+show **GBP7.06** when he looks: **31% of the basket peak handed back**. The
+3xATR trail sits ~2.4 points behind price on M1, which is most of the move —
+his words, "sl nowhere near peak", are literally correct.
+
+His reading contains three separate claims and they have different answers:
+  A. the peak was worth banking
+  B. the bounce was worth buying
+  C. after the pullback, the short should resume
+
+### Why E-056 does not cover this
+Stall is counted in BARS. An impulse sets its extreme in ONE bar, so stall is
+0 or 1 at exactly the moment the give-back is largest — and E-056 measured
+stall 0-1 as the SAFEST bucket. After an impulse that is backwards, which is
+why this needed its own experiment rather than a wider threshold.
+
+### THE CONTROL, which is the whole result
+For every impulse, the identical statistics were computed at a randomly chosen
+NON-impulse bar, matched on range size and direction. K = 2 x ATR:
+
+| market | n | median giveback | CONTROL | exceeded the extreme | CONTROL |
+|---|---|---|---|---|---|
+| GOLD 1h | 673 | 1.21 | 1.02 | 86% | **89%** |
+| GOLD 15m | 164 | 1.07 | 0.92 | 87% | **87%** |
+| EURUSD 1h | 790 | 1.19 | 1.10 | 89% | **89%** |
+| EURUSD 15m | 183 | 1.29 | 1.13 | 87% | **87%** |
+| GBPUSD 1h | 760 | 1.23 | 1.10 | 90% | **89%** |
+| GBPUSD 15m | 169 | 1.36 | 1.06 | 89% | **91%** |
+| US500 1h | 876 | 1.35 | 1.11 | 88% | **91%** |
+| US500 15m | 197 | 1.31 | 0.93 | 88% | **88%** |
+
+**"Price eventually exceeds the extreme" is 86–90% after an impulse and
+87–91% after a random bar.** It is not a property of impulses. It is what
+price does past any level given thirty bars. Quoted without the control it
+would have looked like an 88% continuation edge and it is nothing.
+
+**What IS real:** the median give-back is larger after an impulse than after
+the control in **8 of 8 markets** — 1.07–1.36 of the range against 0.92–1.13.
+Modest, unanimous, and it points one way: after an impulse, the typical
+outcome hands back the whole move and then some.
+
+### The three claims, answered
+- **A. Bank the peak — SUPPORTED, weakly.** Median give-back exceeds 100% of
+  the impulse's own range and beats the control 8 of 8. Holding through is,
+  typically, giving the move back.
+- **B. Buy the bounce — REJECTED.** Nothing here distinguishes the bounce from
+  ordinary wandering. The continuation rate is the control rate.
+- **C. Pullback then resume — REJECTED as an edge.** The 70–74% resume rate,
+  conditioned on giving back half, sits below the 87–91% unconditional control
+  for exceeding a level. Conditioning on the pullback makes it *worse*, not
+  better. It is a real pattern in the sense that it happens; it is not an edge.
+
+### The gradient nobody would guess
+Bigger impulses give back proportionally LESS. Median give-back falls from
+1.07–1.36 at K=2 to 0.55–0.79 at K=4, and "gave back half first" falls from
+40–63% to 24–47%. Veer's candle was roughly 4–6 x ATR, i.e. the K=4 bucket —
+where the data leans toward continuation, not reversal. **n is 38–57 there and
+that is too few to act on**, but it is the opposite of the intuition and it is
+recorded so nobody later "discovers" the reverse.
+
+### What changes
+The give-back allowance tightens when the peak was set by an impulse bar. That
+is the one claim the control supports, at the size the control supports.
+Nothing is built for B or C.
+
+### Caveats
+15m and 1h only. HORIZON is 30 bars; a different horizon moves the
+unconditional rates, though it moves the control with them, which is the point
+of having one.

@@ -192,6 +192,8 @@ input group "=== STALL (E-056: the strongest result in this project) ==="
 // correlated sampling inside a trade cannot manufacture.
 input int    InpMaxStall      = 25;     // close a stalled trade after this many bars
 input bool   InpStallScales   = true;   // and tighten the give-back as it stalls
+input double InpImpulseAtr    = 2.0;    // a bar this many ATRs wide is an impulse
+input double InpImpulseTighten= 0.70;   // tighten the give-back by this after one
 input bool   InpUseTrail      = true;   // ON: measured best on SuperTrend entries
 input double InpTrailAtR      = 0.0;    // arm immediately. A wide trail needs no delay
 input double InpTrailAtrMult  = 3.0;    // 3 ATR. Wide on purpose - tight trails lost
@@ -447,6 +449,7 @@ double   g_tkPeakPx[MAX_TRACK];    // best favourable excursion, in price
 double   g_tkPeakPrev[MAX_TRACK];
 datetime g_tkCloseTry[MAX_TRACK];  // last close REQUEST, to stop tick-rate retries
 bool     g_tkGbDone[MAX_TRACK];    // the give-back partial has already fired
+bool     g_tkPeakImp[MAX_TRACK];   // the peak was set by an IMPULSE bar (E-057)
 double   g_tkWorstPx[MAX_TRACK];   // worst adverse excursion, in price
 double   g_tkRisk[MAX_TRACK];      // original risk distance, in price
 double   g_tkPeakMoney[MAX_TRACK]; // best floating profit, in account currency
@@ -551,7 +554,7 @@ int    TrackAdd(ulong tk, double risk);
 void   TrackDrop(int i);
 void   Snapshot(Basket &b);
 int    TrendRisk(string &why);
-double GiveBackAllowed(double peakR, int stall);
+double GiveBackAllowed(double peakR, int stall, bool afterImpulse);
 int    StallBars(int ti);
 void   UpdatePeaks();
 void   ProtectPositions();
@@ -1725,6 +1728,7 @@ int TrackAdd(ulong tk, double risk)
    g_tkPeakPrev[i]  = 0.0;
    g_tkCloseTry[i]  = 0;
    g_tkGbDone[i]    = false;
+   g_tkPeakImp[i]   = false;
    g_tkWorstPx[i]   = 0.0;
    g_tkRisk[i]      = risk;
    g_tkPeakMoney[i] = 0.0;
@@ -1744,6 +1748,7 @@ void TrackDrop(int i)
       g_tkPeakPrev[j]  = g_tkPeakPrev[j + 1];
       g_tkCloseTry[j]  = g_tkCloseTry[j + 1];
       g_tkGbDone[j]    = g_tkGbDone[j + 1];
+      g_tkPeakImp[j]   = g_tkPeakImp[j + 1];
       g_tkWorstPx[j]   = g_tkWorstPx[j + 1];
       g_tkRisk[j]      = g_tkRisk[j + 1];
       g_tkPeakMoney[j] = g_tkPeakMoney[j + 1];
@@ -2003,7 +2008,7 @@ int StallBars(int ti)
 // working. A trade making new highs gets ROPE; one that stopped climbing
 // twenty bars ago gets a leash. Measured: at stall 0-1 a trade gives it back
 // 24% of the time on GOLD 15m, at stall 25+ it is 62%.
-double GiveBackAllowed(double peakR, int stall)
+double GiveBackAllowed(double peakR, int stall, bool afterImpulse)
 {
    double gb = InpGbBase;
    if(peakR >= InpGbTier2R) gb = InpGbTier2;
@@ -2027,6 +2032,13 @@ double GiveBackAllowed(double peakR, int stall)
       else if(stall <= 25) gb *= 0.70;
       else                 gb *= 0.55;
    }
+
+   // E-057: an impulse gives back more of itself than an ordinary bar does,
+   // so a peak printed by one is worth less rope. This is the ONLY impulse
+   // behaviour the control supported - "buy the bounce" and "wait for the
+   // pullback then resume" both matched the control exactly and are not
+   // implemented anywhere in this EA.
+   if(afterImpulse) gb *= InpImpulseTighten;
 
    // NEVER SO TIGHT THAT THE EXIT COSTS MORE THAN IT SAVES. (Audit finding 8.)
    // At trend risk 3 the shipped tiers gave 18% x 0.45 = 8.1%, which on a
@@ -2098,6 +2110,14 @@ void UpdatePeaks()
          g_tkPeakPx[ti]   = fav;
          g_tkPeakTime[ti] = TimeCurrent();
          g_tkPeakBar[ti]  = iTime(_Symbol, _Period, 0);
+         // E-057. Was this peak printed by an impulse bar? Measured across 8
+         // of 8 markets, an impulse hands back MORE of its own range than a
+         // matched non-impulse bar does - median 1.07-1.36 against 0.92-1.13.
+         // Small, unanimous, and the only one of the three readings of an
+         // impulse that survived its control.
+         double aNow = ATR(1);
+         double rNow2 = iHigh(_Symbol, _Period, 1) - iLow(_Symbol, _Period, 1);
+         g_tkPeakImp[ti] = (aNow > 0.0 && rNow2 >= InpImpulseAtr * aNow);
       }
       if(adv > g_tkWorstPx[ti]) g_tkWorstPx[ti] = adv;
       if(prof > g_tkPeakMoney[ti]) g_tkPeakMoney[ti] = prof;
@@ -2154,7 +2174,7 @@ void ProtectPositions()
       double rNow = (px - open) * dir / g_tkRisk[ti];
 
       int    stall = StallBars(ti);
-      double gb    = GiveBackAllowed(peakR, stall);
+      double gb    = GiveBackAllowed(peakR, stall, g_tkPeakImp[ti]);
       double keep  = peakR * (1.0 - gb);
       if(rNow > keep) continue;
 
@@ -2522,7 +2542,7 @@ void DrawBox()
            (g_boxStop > 0 && g_boxCost / g_boxStop > InpMaxCostFrac)
            ? bad : InpBoxText);
    BoxLine(r++, StringFormat("give-back allowance now %.0f%%   stall %d bars",
-                             GiveBackAllowed(MathMax(b.peakR, 0.0), b.stall) * 100.0,
+                             GiveBackAllowed(MathMax(b.peakR, 0.0), b.stall, false) * 100.0,
                              b.stall),
            (b.stall > 12 ? warn : InpBoxText));
 
