@@ -170,7 +170,8 @@ gR       = "STOP"
 slBuf    = input.float(0.35,"Buffer beyond structure (ATR)", group = gR, step = 0.05)
 slMinAtr = input.float(1.5, "Minimum stop (ATR)", group = gR, step = 0.1)
 slMax    = input.float(4.0, "Maximum stop that still qualifies (points)", group = gR, step = 0.1)
-spread   = input.float(0.30,"Assumed spread (points)", group = gR, step = 0.05)
+spread   = input.float(0.46,"Assumed spread (points)", group = gR, step = 0.01,
+     tooltip = "MEASURED off your own screenshots (0.41 / 0.46 / 0.47 / 0.50), not assumed. Your 3.5 had 0.30 here, which made every net target on the chart look 0.32 points better than it was. On a Prime/ECN account set this to 0.20 and add the commission.")
 
 gD        = "DISPLAY"
 cBuy      = input.color(#00A6E8, "BUY colour",  group = gD)

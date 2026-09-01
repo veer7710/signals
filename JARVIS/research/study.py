@@ -25,7 +25,12 @@ REPORTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "report
 
 # Realistic retail costs, in PRICE units of the instrument.
 COSTS = {
-    "GOLD":   engine.Costs(spread=0.30, slippage=0.05, commission_per_lot=7.0,
+    # 0.46 MEASURED off Veer's live terminal (0.41 / 0.46 / 0.47 / 0.50), not
+    # the 0.30 assumed until 2026-09-01. Every cost/stop figure computed before
+    # that date is 53% optimistic - see E-059. Set commission to 0 for a
+    # Standard account; 7.0 is the Prime/ECN tier, which pairs with a ~0.20
+    # spread rather than this one.
+    "GOLD":   engine.Costs(spread=0.46, slippage=0.05, commission_per_lot=0.0,
                            value_per_point_per_lot=100.0),
     "US500":  engine.Costs(spread=0.50, slippage=0.10, commission_per_lot=5.0,
                            value_per_point_per_lot=50.0),

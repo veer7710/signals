@@ -2176,3 +2176,84 @@ table, the give-back was real and measurable, and closing nearer the peak is
 worth a quantified amount (E-051b, E-056, E-057). That is a genuine capture
 improvement. It is a different claim from GBP50/day being a floor, and only one
 of the two has numbers behind it.
+
+---
+
+## E-059 — The largest profitability lever in this project is the account form, not the strategy
+**Verdict: CONFIRMED — measured off Veer's own screenshots, arithmetic thereafter**
+Found because Veer asked "what broker is taking 1.11 commission on a 0.03" and
+the honest answer was that the number was mislabelled AND the input behind it
+was wrong.
+
+### First, the correction
+GBP 1.11 was the TOTAL round trip, not commission. Commission was GBP 0.17 of
+it. Presenting the total under a heading that made it read as commission was my
+error and Veer was right to stop on it.
+
+### Then, questioning the input — which is where the finding is
+Every cost figure in this project has assumed a **0.30** gold spread. Veer's
+own screenshots show the live spread in the SELL | nn | BUY boxes:
+
+| quote | spread | terminal |
+|---|---|---|
+| 4331.500 / 4332.000 | 0.50 | 50 points |
+| 4332.190 / 4332.650 | 0.46 | 46 points |
+| 4332.510 / 4332.980 | 0.47 | 47 points |
+| 4326.320 / 4326.730 | 0.41 | 41 points |
+
+**Average 0.46 — the assumption was 53% optimistic.** It has been sitting in
+`study.py COSTS` and in every experiment that used it, and in his own 3.5 Pine,
+where it made each net target read 0.32 points better than it was.
+
+### The lever
+PU Prime runs two account forms and they are not the same trade:
+
+| account | spread | commission | round trip at 0.03 lots |
+|---|---|---|---|
+| Standard | 0.46 | none | **GBP 1.33** |
+| Prime / ECN | ~0.20 | $7/lot round turn | **GBP 0.88** |
+
+**GBP 0.45 saved per round trip — 34% of the cost — for filling in a form.**
+
+| trades/day | saved per day | per month (21 days) |
+|---|---|---|
+| 50 | GBP 22.51 | GBP 473 |
+| 100 | GBP 45.03 | GBP 946 |
+| 200 | **GBP 90.06** | **GBP 1,891** |
+| 300 | GBP 135.09 | GBP 2,837 |
+
+### What it does to the thing that actually decides the account
+Break-even win rate, symmetric targets:
+
+| target | Standard | Prime/ECN | handed over |
+|---|---|---|---|
+| 1.0 pt | 78.0% | 68.5% | **9.5 points** |
+| 1.5 pt | 68.7% | 62.3% | 6.3 points |
+| 2.0 pt | 64.0% | 59.2% | 4.7 points |
+| 3.0 pt | 59.3% | 56.2% | 3.1 points |
+
+Nothing else measured in this project moves the break-even win rate by nine
+percentage points. E-052's run-exhaustion filter was worth three points of
+*outcome probability*; this is worth up to nine points of *required* win rate,
+it applies to every trade, and it cannot be curve-fit because it is not a
+model — it is a price list.
+
+### Why it matters most at Veer's stated design
+He wants hundreds of small positions a day. The cost is paid per round trip, so
+it scales linearly with trade count while the edge does not. **The higher the
+frequency, the larger this lever gets** — which is the exact opposite of every
+filter tried in E-053, all of which shrank the system.
+
+### What to check before acting
+Prime/ECN spread and commission should be confirmed against a live PU Prime
+account rather than taken from the numbers above, and the two accounts should
+be compared at the hours Veer actually trades. The 0.46 figure is his; the 0.20
+is the published tier and is the one number here he has not personally
+verified.
+
+### Also fixed
+`study.py COSTS` still carries 0.30 for GOLD. Every experiment that quoted a
+cost/stop ratio — E-053 in particular — is therefore optimistic, and the M1
+extrapolation of 0.15–0.22 becomes roughly **0.23–0.34** at the real spread.
+That makes E-053's conclusion stronger, not weaker: M1 gold on a Standard
+account pays about a third of its risk to the broker before the trade starts.
