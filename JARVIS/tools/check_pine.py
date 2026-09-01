@@ -348,7 +348,23 @@ def check(path):
             # - and every one of those names was invisible to this checker,
             # so any file using one drew a false "undeclared identifier".
             # Added 2026-09-01 after four such alarms on a correct file.
-            inner = code[code.index("(") + 1:code.rindex(")")] if "(" in code and ")" in code else ""
+            # Take the parameter list by BALANCING from the opening paren,
+            # not by finding the last ')' on the line: in a one-line function
+            # like `f_up(l) => ... (l - close) ...` the last ')' is in the
+            # BODY, and slicing to it produced a nonsense parameter list and a
+            # false alarm on a file that compiles. (Fixed 2026-09-01.)
+            inner = ""
+            op = code.find("(")
+            if op >= 0:
+                d = 0
+                for _k in range(op, len(code)):
+                    if code[_k] == "(":
+                        d += 1
+                    elif code[_k] == ")":
+                        d -= 1
+                        if d == 0:
+                            inner = code[op + 1:_k]
+                            break
             for prm in inner.split(","):
                 prm = prm.strip()
                 if "=" in prm:
@@ -388,7 +404,8 @@ def check(path):
         m = re.match(r'\s*(?:var\s+|varip\s+)?'
                      r'(?:int|float|bool|string|color|line|label|box|table|'
                      r'linefill|array|matrix|map|[A-Z]\w*)'
-                     r'(?:<[^>]*>)?\s+([a-zA-Z_]\w*)\s*(?:=|:=)', code)
+                     r'(?:<[^>]*>)?(?:\s*\[\s*\])?\s+([a-zA-Z_]\w*)\s*(?:=|:=)',
+                     code)
         if m:
             declared.add(m.group(1))
 

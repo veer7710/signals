@@ -228,3 +228,45 @@ the code.
 an expression, that part must be reported as unchecked, not treated as correct.
 Three of the four shipped compile failures came from a checker being confidently
 quiet about something it never looked at.
+
+---
+
+## F-010 — I filtered the EA into silence, twice, after being told not to
+Date: 2026-09-01. Veer: *"we are now not hitting same trades as before and
+having delayed entry"*.
+
+`InpMaxCostFrac` shipped at **0.10**. E-053, which I wrote the same day,
+measured M1 gold at **0.15–0.22** cost/stop. **The EA therefore refused
+essentially every M1 gold entry.** The identical mistake was in
+`SuperTrendSniper_v2.pine`, where the cost gate deleted the signals and the
+panel quietly said "refused by COST" — Veer reported that one first and I
+fixed the Pine without checking whether the EA had the same constant. It did.
+
+On top of it: a 15-bar same-direction re-entry cooldown, a trend-risk score
+that REFUSED entries at 3/3, and a chop guard. Four gates, stacked.
+
+### Why this is worse than a bug
+Two things I already knew said not to do it.
+1. **Veer, repeatedly, from his first message:** 100+ signals a day is FINE and
+   must not be reduced; the problem is execution AFTER entry, not signal count.
+2. **My own E-053:** filters improved total R in 5 of 8 markets — a coin flip —
+   and they hurt precisely the markets that were winning, because they do not
+   select, they just remove trades and drag the result toward zero.
+
+I measured that filters do not work, wrote it down, and then spent the
+afternoon adding filters.
+
+### Fixed
+- `InpMaxCostFrac` 0.10 → 0.30, i.e. it catches a blown-out spread and nothing
+  else. The cost problem is real; the answer to it is a wider stop or a
+  different timeframe, not refusing to trade.
+- `InpReentryCool` 15 → 3 bars, `InpReentryNeedsNewSignal` → false. Stops the
+  instant same-candle re-entry without deleting the day.
+- Trend risk now SIZES DOWN and never refuses. A three-percentage-point
+  measured effect is a discount, not a veto.
+
+### The rule
+**A gate that fires in normal conditions is not a gate, it is a switch that
+turns the strategy off.** Before shipping any threshold, compute where the
+live market actually sits relative to it — the number was already in E-053 and
+I did not look at it.

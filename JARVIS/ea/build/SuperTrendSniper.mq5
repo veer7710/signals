@@ -264,8 +264,13 @@ input group "=== AFTER A CLOSE ==="
 // So a same-direction entry has to WAIT after a close. The opposite direction
 // is free to fire immediately: that is a genuine change of mind by the market,
 // not the tail of the trade that just ended.
-input int    InpReentryCool   = 15;     // bars before re-entering the SAME way
-input bool   InpReentryNeedsNewSignal = true;  // ...and only after price makes a new extreme
+// 15 bars was too blunt. Veer has said from the start that 100+ signals a day
+// is FINE and the problem is what happens AFTER the entry, not the entry count
+// - and E-053 measured that filters shrink a system toward zero rather than
+// improving it. 3 bars stops the instant re-entry on the same candle he was
+// complaining about without deleting the day.
+input int    InpReentryCool   = 3;      // bars before re-entering the SAME way
+input bool   InpReentryNeedsNewSignal = false; // ...and only after price makes a new extreme
 
 input group "=== SIZE ==="
 input bool   InpUseFixedLots  = true;   // fixed size instead of % risk
@@ -299,7 +304,14 @@ input group "=== COST GATE (E-053: this is the real M1 problem) ==="
 // This gate is the one part of that the EA can settle WITHOUT a backtest,
 // because it reads the live spread at the moment of the decision.
 input bool   InpUseCostGate   = true;
-input double InpMaxCostFrac   = 0.10;   // refuse if round trip > this x the stop
+// 0.10 WAS A BUG AND IT SILENCED THE EA. E-053 measured M1 gold at 0.15-0.22
+// cost/stop, so a 0.10 ceiling refused essentially EVERY M1 entry - which is
+// exactly what Veer saw: "we are now not hitting same trades as before and
+// having delayed entry". A gate is supposed to catch a blown-out spread, not
+// to be the normal state of the market. 0.30 catches news and a broken feed
+// and nothing else. The cost problem is real (see E-053) but the answer to it
+// is a wider stop or a different timeframe, NOT refusing to trade.
+input double InpMaxCostFrac   = 0.30;   // refuse only when the spread is genuinely blown out
 input double InpCommPerLot    = 7.0;    // commission per lot, ROUND TURN, in the ACCOUNT currency
 input double InpSlipSpreads   = 0.25;   // expected slippage per side, as a FRACTION of the spread
 
@@ -1274,22 +1286,23 @@ void TryEntry()
    // expectation is zero.
    string trWhy = "";
    int trRisk = TrendRisk(trWhy);
-   bool sameWay = (g_lastEntryDir != 0 && g_lastEntryDir == (flipUp ? 1 : -1));
-   if(trRisk >= 3 && sameWay)
-   {
-      SkipLog(sdir, "trend risk 3/3 and this is another same-way entry: " + trWhy);
-      return;
-   }
-   if(trRisk == 2)
+   // TREND RISK SIZES DOWN. IT DOES NOT REFUSE.
+   // It used to refuse at 3/3, which was wrong twice over: the measured effect
+   // is about THREE PERCENTAGE POINTS (E-052), and a three-point penalty is a
+   // discount, not a veto. E-053 then measured what refusing actually buys -
+   // filters improved total R in 5 of 8 markets, i.e. a coin flip, and they
+   // hurt precisely the markets that were winning. Sizing down keeps the trade
+   // and prices the risk; refusing just trades less.
+   if(trRisk >= 3)
    {
       double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      double half = lots * 0.5;
-      if(step > 0) half = MathFloor(half / step) * step;
-      if(half >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
+      double cut  = lots * (trRisk >= 3 ? 0.34 : 0.5);
+      if(step > 0) cut = MathFloor(cut / step) * step;
+      if(cut >= SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN))
       {
-         Log(StringFormat("trend risk 2/3 (%s): sizing down %.2f -> %.2f",
-                          trWhy, lots, half));
-         lots = half;
+         Log(StringFormat("trend risk %d/3 (%s): sizing down %.2f -> %.2f",
+                          trRisk, trWhy, lots, cut));
+         lots = cut;
       }
    }
 
