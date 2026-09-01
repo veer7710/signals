@@ -251,7 +251,26 @@ input bool   InpSkipNoRoom    = true;   // refuse entries with a level in the wa
 input double InpMinRoomR      = 1.0;    // need at least this much room, in R
 
 input group "=== RISK ==="
-input double InpRiskPct       = 0.50;   // % of equity risked per trade
+input group "=== AFTER A CLOSE ==="
+// Veer: "when we finish a buy or a sell we do not need to immedtily look to
+// take a trade in the same direction can we understand that its causing us
+// loss m1 trends are not often big unless caused by liquidity sweep".
+//
+// He is describing the same thing E-052 measured from the other end: the far
+// end of a one-way run was worse in 7 of 8 markets. A SuperTrend flip back
+// into the direction you just closed is usually the same run continuing, not
+// a new one - and on M1 that run is usually already over.
+//
+// So a same-direction entry has to WAIT after a close. The opposite direction
+// is free to fire immediately: that is a genuine change of mind by the market,
+// not the tail of the trade that just ended.
+input int    InpReentryCool   = 15;     // bars before re-entering the SAME way
+input bool   InpReentryNeedsNewSignal = true;  // ...and only after price makes a new extreme
+
+input group "=== SIZE ==="
+input bool   InpUseFixedLots  = true;   // fixed size instead of % risk
+input double InpFixedLots     = 0.03;   // total size for one entry
+input double InpRiskPct       = 0.50;   // % of equity risked per trade (if not fixed)
 input double InpStopAtrMult   = 1.5;    // stop distance in ATR
 input double InpMaxSpreadAtr  = 0.15;   // skip entry if spread > this x ATR
 
@@ -373,6 +392,20 @@ input double InpBasketArmPct  = 0.60;   // arm once the basket is this % of equi
 input double InpBasketMinMoney= 2.00;   // ...and at least this much money
 input double InpBasketGiveBack= 0.35;   // close the basket after handing back this much
 input bool   InpBasketCloseAll= true;   // false = only close the losers, keep the winner
+// Veer: "what if everytime a trade goes above 1 pound 20 TOTAL we put sl there
+// although often it can hit that sl and then just run off".
+//
+// The second half of that sentence is the measured half. E-051 tested exactly
+// this family: moving the stop to break-even was the WORST exit rule on all
+// four markets, -0.161R to -0.308R, because it scratches out the trades that
+// were about to pay for the losers. He knows - he said it himself.
+//
+// So it is here, on, at HIS number, and it does the least damaging version of
+// the idea: it locks break-even plus the round-trip cost, so a trade that has
+// been worth GBP1.20 can no longer become a loser, and it does NOT try to bank
+// the GBP1.20 itself. Set InpLockAtMoney to 0 to switch it off entirely.
+input double InpLockAtMoney   = 1.20;   // once the basket is this green, stops go to break-even+
+input bool   InpLockOnlyOnce  = true;   // and are never pulled back afterwards
 input int    InpMaxStack      = 1;      // positions allowed at once. 1 = no stacking
 input int    InpStackCoolBars = 5;      // bars between adds
 input double InpMaxNetLots    = 0.0;    // hard cap on one-way exposure (0 = auto)
@@ -410,7 +443,10 @@ input bool   InpShowBox       = true;   // on-chart profit and execution panel
 input int    InpBoxCorner     = 0;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 18;
-input int    InpBoxSize       = 8;      // font size
+input int    InpBoxSize       = 9;      // font size
+input int    InpBoxWidth      = 330;    // backdrop width in pixels
+input color  InpBoxBg         = C'13,17,23';   // solid, so the panel is readable
+input color  InpBoxBorder     = C'48,54,61';
 input color  InpBoxHead       = clrGold;
 input color  InpBoxText       = clrGainsboro;
 
@@ -477,6 +513,7 @@ double   g_bkPeak      = 0.0;      // best TOTAL profit this basket saw
 datetime g_bkPeakTime  = 0;
 datetime g_bkStart     = 0;
 bool     g_bkArmed     = false;
+bool     g_bkLocked    = false;   // stops have been pushed to break-even+
 
 // Trend persistence. A "run" is the stretch of signals since the last one in
 // the OPPOSITE direction - which is what E-052 measured, and is not the same
@@ -506,6 +543,9 @@ int      g_lastSigDir    = 0;   // direction of the last signal that passed the 
 datetime g_runStartBar   = 0;   // bar of the first signal of this run
 double   g_runStartPx    = 0.0; // close at that bar
 int      g_lastEntryDir  = 0;
+int      g_lastCloseDir  = 0;   // direction of the last position that CLOSED
+datetime g_lastCloseBar  = 0;
+double   g_lastCloseExt  = 0.0; // the extreme price at that close
 datetime g_lastEntryBar  = 0;
 
 // Lifetime execution statistics - the numbers the box exists to show.
@@ -559,6 +599,7 @@ int    StallBars(int ti);
 void   UpdatePeaks();
 void   ProtectPositions();
 void   ProtectBasket();
+void   LockBasket();
 bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
 void   RegisterSignal(int dir);
@@ -953,6 +994,21 @@ bool RiskAllowsEntry(string &why)
 double LotFor(double stopDistPrice)
 {
    if(stopDistPrice <= 0) return 0.0;
+
+   // FIXED SIZE. Veer: "total lot size entering should be 0.03 unless stacking
+   // or sizing". Still clamped to the symbol's own min/max/step below, so an
+   // impossible size cannot be sent.
+   if(InpUseFixedLots)
+   {
+      double stepF = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double minF  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double maxF  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+      double lf    = InpFixedLots;
+      if(stepF > 0) lf = MathFloor(lf / stepF) * stepF;
+      lf = MathMax(lf, minF);
+      lf = MathMin(lf, maxF);
+      return NormalizeDouble(lf, 2);
+   }
    double eq       = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskCash = eq * InpRiskPct / 100.0;
    double tickVal  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
@@ -1086,6 +1142,36 @@ void TryEntry()
    // without bound, and a long that outlived a turn had its give-back
    // allowance LOOSENED from 13.5% back to 30% at exactly the moment it
    // should have tightened. The risk score was being applied backwards.
+   // ---- NOT STRAIGHT BACK IN THE SAME DIRECTION
+   int wantDir = flipUp ? 1 : -1;
+   if(InpReentryCool > 0 && g_lastCloseDir == wantDir && g_lastCloseBar > 0)
+   {
+      int sinceClose = iBarShift(_Symbol, _Period, g_lastCloseBar, false);
+      if(sinceClose < InpReentryCool)
+      {
+         SkipLog(sdir, StringFormat("closed a %s %d bars ago and this is the "
+                                    "same way again - waiting %d",
+                                    sdir, sinceClose, InpReentryCool));
+         return;
+      }
+      // and, optionally, only once price has actually gone somewhere new.
+      // Re-entering long below where the last long closed is buying the same
+      // ground twice.
+      if(InpReentryNeedsNewSignal && g_lastCloseExt > 0.0)
+      {
+         double px2 = (wantDir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                    : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         bool newGround = (wantDir > 0) ? (px2 > g_lastCloseExt)
+                                        : (px2 < g_lastCloseExt);
+         if(!newGround)
+         {
+            SkipLog(sdir, "same direction and price has not passed where the "
+                          "last one closed - this is the same trade again");
+            return;
+         }
+      }
+   }
+
    string sw = "";
    if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
 
@@ -1675,6 +1761,11 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    // close profitably. 0.5R is the threshold for "was genuinely green" -
    // below that a trade never really got going and calling it a give-back
    // would be counting spread noise.
+   // remember which way the trade that just finished was pointing
+   g_lastCloseDir = (dir == "long") ? 1 : -1;
+   g_lastCloseBar = iTime(_Symbol, _Period, 0);
+   g_lastCloseExt = px;
+
    if(peakR >= 0.5 && money <= 0.0)
    {
       g_stGreenRed++;
@@ -2136,6 +2227,7 @@ void UpdatePeaks()
       // the next one - a fresh basket has given nothing back yet.
       g_bkPeak = 0.0; g_bkPeakTime = 0; g_bkStart = 0; g_bkArmed = false;
       g_bkRealized = 0.0;
+      g_bkLocked   = false;
       return;
    }
    if(g_bkStart == 0) g_bkStart = TimeCurrent();
@@ -2230,6 +2322,58 @@ void ProtectPositions()
                  wholeThing ? vol : cut, 0, 0, money,
                  StringFormat("peak %.2fR kept %.2fR", peakR, rNow));
       }
+   }
+}
+
+// LOCK THE BASKET OUT OF LOSS once it has been worth InpLockAtMoney.
+// Not a profit target - a floor. See the note on InpLockAtMoney for why this
+// is the least damaging version of a rule that measured badly.
+void LockBasket()
+{
+   if(InpLockAtMoney <= 0.0) return;
+   if(g_bkLocked && InpLockOnlyOnce) return;
+
+   Basket b;
+   Snapshot(b);
+   if(b.n == 0) return;
+   if(b.money < InpLockAtMoney) return;
+
+   double cost = RoundTripCost();
+   double mn   = MinStopDist();
+   int    dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   int    moved = 0;
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      double tp   = PositionGetDouble(POSITION_TP);
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      // break-even PLUS the round trip, so the exit is not itself a loss
+      double lock = NormalizeDouble(open + dir * cost, dg);
+
+      bool better = (dir > 0) ? (lock > sl) : (lock < sl);
+      bool room   = (mn <= 0.0) || (MathAbs(px - lock) >= mn);
+      bool safe   = (dir > 0) ? (lock < px) : (lock > px);
+      if(better && room && safe && trade.PositionModify(tk, lock, tp))
+         moved++;
+   }
+
+   if(moved > 0)
+   {
+      g_bkLocked = true;
+      Log(StringFormat("basket reached %s - %d stop(s) moved to break-even "
+                       "plus costs. This basket can no longer lose.",
+                       Money(b.money), moved));
    }
 }
 
@@ -2431,6 +2575,30 @@ void RegisterEntry(int dir)
 // number that says whether the execution problem is fixed. GREEN->RED is the
 // second: trades that went into profit and did not close profitably. Those
 // two rows are Veer's complaint, as a measurement.
+// A panel over candles is unreadable without something behind it. This draws
+// one rectangle sized to the rows and puts every label on top of it.
+void BoxBackdrop(int rows)
+{
+   string nm = "STS_box_bg";
+   if(ObjectFind(0, nm) < 0)
+   {
+      ObjectCreate(0, nm, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
+      ObjectSetInteger(0, nm, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, nm, OBJPROP_BGCOLOR, InpBoxBg);
+      ObjectSetInteger(0, nm, OBJPROP_COLOR, InpBoxBorder);
+      ObjectSetInteger(0, nm, OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
+      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 0);
+   }
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX - 10);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY - 12);
+   ObjectSetInteger(0, nm, OBJPROP_XSIZE, InpBoxWidth);
+   ObjectSetInteger(0, nm, OBJPROP_YSIZE, rows * (InpBoxSize + 6) + 16);
+}
+
 void BoxLine(int idx, string txt, color c)
 {
    string nm = StringFormat("STS_box_%02d", idx);
@@ -2445,6 +2613,7 @@ void BoxLine(int idx, string txt, color c)
       ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
       ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, nm, OBJPROP_BACK, false);
+      ObjectSetInteger(0, nm, OBJPROP_ZORDER, 1);   // above the backdrop
       // right-hand corners read right-to-left, or the text runs off the chart
       if(InpBoxCorner == 1 || InpBoxCorner == 3)
          ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
@@ -2484,6 +2653,7 @@ void DrawBox()
    color ok   = clrLime, bad = clrTomato, warn = clrOrange;
    color pnlC = (b.money >= 0) ? ok : bad;
 
+   BoxBackdrop(20);
    int r = 0;
    BoxLine(r++, "== SNIPERBOT EXECUTION ==", InpBoxHead);
    BoxLine(r++, StringFormat("open        %d pos  %.2f lots  net %+.2f",
@@ -2555,6 +2725,14 @@ void DrawBox()
    // clear anything left over from a longer previous draw
    for(int i = r; i < 40; i++)
       ObjectDelete(0, StringFormat("STS_box_%02d", i));
+
+   // WITHOUT THIS THE BOX DOES NOT UPDATE.
+   // Veer: "the profit box is see thru and not good can't see clearly also it
+   // doesn't update at all". Object text changes are not shown until the chart
+   // is told to repaint; on a quiet chart that can be many seconds, and in the
+   // tester it never happens at all. Every value above was being computed
+   // correctly and thrown away.
+   ChartRedraw(0);
 }
 
 //===================================================================
@@ -2636,6 +2814,7 @@ void OnDeinit(const int reason)
 {
    SaveStats();
    BoxClear();
+   ObjectDelete(0, "STS_box_bg");
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    if(g_adxHandle != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
 }
@@ -2668,6 +2847,7 @@ void OnTick()
    CheckGuardsTick();      // before anything else: a breach outranks a rule
    UpdatePeaks();
    ProtectPositions();
+   LockBasket();          // a floor first, then the give-back rule
    ProtectBasket();
    DrawBox();
 

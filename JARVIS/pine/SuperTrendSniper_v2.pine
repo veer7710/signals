@@ -55,21 +55,32 @@ runOld  = input.int(100, "   run is old after (bars)", minval = 10, group = gR)
 runFar  = input.float(8.0, "   run is far after (x ATR)", minval = 1, step = 0.5, group = gR)
 
 gC = "COST  (E-053)"
-showCost= input.bool(true, "Warn when the spread is too big a share of the stop", group = gC)
-costMax = input.float(0.10, "   refuse above (cost / stop)", minval = 0.01, step = 0.01, group = gC)
+// THIS USED TO BLOCK SIGNALS AND THAT WAS WRONG.
+// On M1 gold the 1.5xATR stop is around 0.75, and an assumed 0.30 spread makes
+// cost/stop about 0.40 - four times the 0.10 ceiling. So the gate refused
+// essentially every signal, the panel quietly said "refused by COST", and Veer
+// saw a chart with no sells on it during an obvious sell. That is a chart's
+// job done backwards: an indicator should SHOW the setup and tell you it is
+// expensive. Refusing belongs in the EA, which reads the real live spread
+// rather than a guess typed into an input.
+showCost= input.bool(true, "Show the spread as a share of the stop", group = gC)
+blockOnCost = input.bool(false, "   and REFUSE signals above the ceiling", group = gC,
+     tooltip = "Off. The EA enforces this with the real spread; a chart guessing at it should not delete your signals.")
+costMax = input.float(0.10, "   ceiling (cost / stop)", minval = 0.01, step = 0.01, group = gC)
 spreadEst = input.float(0.30, "   assumed round-trip spread, in price", minval = 0.0, step = 0.01, group = gC,
      tooltip = "Pine cannot read your live spread. Put YOUR broker's typical gold spread here. On M1 this single number decides whether the strategy is viable: the stop is only about 5x the cost at M1 gold, against 26x at 15m.")
 
 gL = "LEVELS  (only the ones a trade could reach)"
 showLv  = input.bool(true, "Show levels", group = gL)
-lvSwing = input.int(8, "   swing size", minval = 2, group = gL)
-lvCount = input.int(4, "   how many, each side", minval = 1, maxval = 10, group = gL)
+lvSwing = input.int(12, "   swing size", minval = 2, group = gL,
+     tooltip = "Bigger than before. A swing of 8 on M1 finds a pivot every few bars and the chart fills with lines; 12 keeps the ones a trade could actually reach.")
+lvCount = input.int(2, "   how many, each side", minval = 1, maxval = 10, group = gL)
 
 gV = "LOOK"
 showSt   = input.bool(true, "SuperTrend line", group = gV)
 showDema = input.bool(true, "DEMA", group = gV)
 showImp  = input.bool(true, "Mark impulse bars", group = gV)
-showPan  = input.bool(true, "Panel", group = gV)
+showPan  = input.bool(false, "Panel (off - Veer asked for the chart, not a dashboard)", group = gV)
 cUp      = input.color(#089981, "Up", group = gV)
 cDn      = input.color(#f23645, "Down", group = gV)
 
@@ -138,7 +149,7 @@ runTired = useRun and (runBars >= runOld or runAtr >= runFar)
 // ---- cost gate (E-053)
 stopDist = 1.5 * atr14
 costFrac = stopDist > 0 ? spreadEst / stopDist : 1.0
-costOk   = not showCost or costFrac <= costMax
+costOk   = not blockOnCost or costFrac <= costMax
 
 // ---- the signal
 goLong  = rawSig and flipUp and costOk

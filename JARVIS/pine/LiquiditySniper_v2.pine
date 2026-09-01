@@ -41,8 +41,13 @@
 //  and it should stay labelled that way until the numbers say otherwise.
 // ============================================================================
 
+// max_bars_back MUST be declared. A level can be born 1500 bars ago and its
+// line is drawn from there, and without this Pine kills the script at runtime:
+// "The requested historical offset (1500) is beyond the historical buffer's
+// limit (1499)". That is why the indicator kept turning itself off.
 indicator("Liquidity Sniper v2", "LIQ v2", overlay = true,
-     max_lines_count = 500, max_boxes_count = 500, max_labels_count = 500)
+     max_lines_count = 500, max_boxes_count = 500, max_labels_count = 500,
+     max_bars_back = 5000)
 
 // ---------------------------------------------------------------- inputs ---
 gL = "LEVELS"
@@ -65,7 +70,7 @@ minReact = input.int(1, "Only draw levels with at least this many reactions", mi
 gZ = "ZONES  (the LuxAlgo clustering idea)"
 useZone  = input.bool(true, "Merge nearby levels into a zone", group = gZ)
 clustAtr = input.float(0.35, "   merge when within (x ATR)", minval = 0.05, maxval = 3.0, step = 0.05, group = gZ)
-minClust = input.int(2, "   a zone needs at least this many pivots", minval = 1, maxval = 10, group = gZ,
+minClust = input.int(3, "   a zone needs at least this many pivots", minval = 1, maxval = 10, group = gZ,
      tooltip = "LuxAlgo's Buyside & Sellside Liquidity requires three (count > 2). Whether the third pivot actually earns its place is being measured; until then this is adjustable and defaults to two.")
 
 gM = "HIGHER TIMEFRAMES  (M15 -> M5 -> M1)"
@@ -76,8 +81,8 @@ tf2      = input.timeframe("15", "   timeframe B", group = gM)
 
 gS = "SIGNALS"
 showSig  = input.bool(true, "BUY / SELL markers", group = gS)
-sigMode  = input.string("Follow the break", "On a level, act by", options = ["Follow the break", "Fade the rejection", "Both"], group = gS,
-     tooltip = "Follow is the default because it is the only one with evidence: it beat fading on 5 of 5 markets tested, and fading was worse than a coin flip. Fade is offered so it can be tested on your own fills, not because it is recommended.")
+sigMode  = input.string("Both", "On a level, act by", options = ["Follow the break", "Fade the rejection", "Both"], group = gS,
+     tooltip = "BOTH by default now, because Veer asked for a signal when price REACTS at a zone, not only when it breaks one - a zone hit three times and rejected should mark three times. Read the evidence row in the panel before sizing them the same: measured on 10,000+ sweeps, FOLLOWING the break won on 5 of 5 markets (54.1%) and FADING was worse than a coin flip (44.5% against 49.2%). Both are drawn; they are not equally good.")
 minScore = input.int(2, "Only signal at levels scoring at least", minval = 0, maxval = 10, group = gS)
 sigCool  = input.int(10, "Bars between signals", minval = 1, maxval = 200, group = gS)
 
@@ -115,9 +120,14 @@ posRate  = input.float(0.79, "   account currency per USD", minval = 0.01, step 
      tooltip = "Gold is quoted in USD. 0.01 lots is 1 ounce, so a $1 move is $1. This converts that to your account currency for the box.")
 
 gV = "LOOK"
-showZone = input.bool(true, "Zones", group = gV)
-showLine = input.bool(true, "Level lines", group = gV)
-showLab  = input.bool(true, "Labels", group = gV)
+// ONLY WHAT THE LUXALGO SCRIPTS DRAW.
+// The first version drew a line for every remembered price - forty of them -
+// and Veer's chart disappeared under them. LuxAlgo's Buyside & Sellside
+// Liquidity draws a zone ONLY where three or more pivots cluster, and nothing
+// else. That is the default here now: zones on, bare level lines OFF.
+showZone = input.bool(true, "Liquidity zones (3+ pivots clustered)", group = gV)
+showLine = input.bool(false, "Every remembered level (noisy - off)", group = gV)
+showLab  = input.bool(true, "Zone labels", group = gV)
 showNear = input.bool(true, "Warn when price is near a remembered level", group = gV)
 showPan  = input.bool(true, "Panel", group = gV)
 cSup     = input.color(color.new(#089981, 0), "Support", group = gV)
@@ -394,6 +404,11 @@ if array.size(LV) > 0
                 // FADE the rejection. Off by default: fading measured WORSE
                 // than a coin flip on every market tested. Present to be
                 // tested, not because it is recommended.
+                // NOTE: no SMC gate here on purpose. Displacement and a gap
+                // describe a BREAK; a rejection is the opposite event and
+                // requiring a displacement candle would silence exactly the
+                // signal Veer is asking for - price arriving at a zone and
+                // turning away from it.
                 if showSig and (sigMode != "Follow the break")
                     if scoreOf(L.reacts, L.members, L.best, false) >= minScore
                      and n - lastSigBar >= sigCool
@@ -508,10 +523,11 @@ if barstate.islast and array.size(LV) > 0
         color c = colOf(L.dir, L.broken)
 
         if showLine and worth
+            int x1 = math.max(L.born, n - 4800)   // never past the buffer
             if na(L.ln)
-                L.ln := line.new(L.born, L.px, n + 6, L.px, color = c, width = 1)
+                L.ln := line.new(x1, L.px, n + 6, L.px, color = c, width = 1)
             else
-                line.set_xy1(L.ln, L.born, L.px)
+                line.set_xy1(L.ln, x1, L.px)
                 line.set_xy2(L.ln, n + 6, L.px)
                 line.set_color(L.ln, c)
                 line.set_width(L.ln, sc >= 3 ? 2 : 1)
@@ -519,11 +535,12 @@ if barstate.islast and array.size(LV) > 0
         if showZone and useZone and worth and L.members >= minClust
             float top = L.px + tol
             float bot = L.px - tol
+            int bx1 = math.max(L.born, n - 4800)
             if na(L.bz)
-                L.bz := box.new(L.born, top, n + 6, bot,
+                L.bz := box.new(bx1, top, n + 6, bot,
                      border_color = color.new(c, 70), bgcolor = color.new(c, 88))
             else
-                box.set_lefttop(L.bz, L.born, top)
+                box.set_lefttop(L.bz, bx1, top)
                 box.set_rightbottom(L.bz, n + 6, bot)
                 box.set_bgcolor(L.bz, color.new(c, L.broken ? 94 : 88))
                 box.set_border_color(L.bz, color.new(c, 70))
@@ -613,18 +630,25 @@ pBest  = pPeak * oz * posRate
 pBack  = (pPeak - pNow) * oz * posRate
 pKept  = pPeak > 0 ? 100.0 * pNow / pPeak : 0.0
 
-var table B = table.new(position.bottom_left, 2, 8, border_width = 1)
+// SOLID and READABLE. The first version used transparent cells and tiny text
+// and Veer could not read it off the screen: "that position box is so blurry",
+// "the profit box is see thru and not good". A panel you have to squint at is
+// a panel that does not exist.
+var table B = table.new(position.bottom_left, 2, 8, border_width = 1,
+     bgcolor = #0d1117, frame_color = color.new(color.teal, 20),
+     frame_width = 2, border_color = #30363d)
 
 f_b(int r, string a, string b, color c) =>
-    table.cell(B, 0, r, a, text_color = color.silver, text_size = size.tiny)
-    table.cell(B, 1, r, b, text_color = c, text_size = size.tiny)
+    table.cell(B, 0, r, a, text_color = #8b949e, text_size = size.normal,
+         text_halign = text.align_left, bgcolor = #0d1117)
+    table.cell(B, 1, r, b, text_color = c, text_size = size.normal,
+         text_halign = text.align_right, bgcolor = #0d1117)
 
 if showPos and barstate.islast
     table.cell(B, 0, 0, "POSITION", text_color = color.white,
-         bgcolor = color.new(color.teal, 40), text_size = size.small)
+         bgcolor = #1f6feb, text_size = size.normal)
     table.cell(B, 1, 0, pActive ? (pDir == 1 ? "LONG" : "SHORT") : "flat",
-         text_color = color.white, bgcolor = color.new(color.teal, 40),
-         text_size = size.small)
+         text_color = color.white, bgcolor = #1f6feb, text_size = size.normal)
 
     f_b(1, "entry", pActive ? str.tostring(pEntry, format.mintick) : "-",
          color.white)
@@ -652,7 +676,9 @@ alertcondition(nearCount > 0, "LIQ v2 near a remembered level",
      "Price is at a level it has reacted to before")
 
 // ---------------------------------------------------------------- panel ----
-var table P = table.new(position.top_right, 2, 8, border_width = 1)
+var table P = table.new(position.top_right, 2, 8, border_width = 1,
+     bgcolor = #0d1117, frame_color = #30363d, frame_width = 1,
+     border_color = #30363d)
 
 if showPan and barstate.islast
     int nLv = array.size(LV)
