@@ -26,13 +26,25 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine, strategies, exits, study
 
 
+ENTRY = "donchian_trend"     # overridden from the command line
+
+
+def _entry(s):
+    """The entry set the exits are compared ON. This used to be hardcoded to
+    donchian_trend, which meant E-051's headline - 'the give-back rule beat
+    the 3xATR trail on 5 of 5 markets' - was measured on entries the EA does
+    not take. The comparison between exits was still fair, but it was never a
+    statement about SuperTrendSniper. Caught by the EA audit, 2026-09-01."""
+    return getattr(strategies, ENTRY)(s)
+
+
 def paired(s, costs, names):
     """Run each policy over identical entries and index the results by the
     bar the trade opened on, so trade i of one policy can be compared with
     trade i of another rather than with an average."""
     out = {}
     for n in names:
-        tr = exits.simulate(s, strategies.donchian_trend(s), exits.POLICIES[n],
+        tr = exits.simulate(s, _entry(s), exits.POLICIES[n],
                             costs, warmup=300, allow_overlap=True)
         d = {}
         for t in tr:
@@ -124,6 +136,8 @@ def run(symbol="GOLD", tf="1h", risk_pct=0.02):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 4:
+        ENTRY = sys.argv[4]
     run(sys.argv[1] if len(sys.argv) > 1 else "GOLD",
         sys.argv[2] if len(sys.argv) > 2 else "1h",
         float(sys.argv[3]) if len(sys.argv) > 3 else 0.02)

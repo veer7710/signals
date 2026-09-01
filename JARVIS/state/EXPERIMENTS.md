@@ -1825,3 +1825,73 @@ The EA can settle this without any backtest: it reads the live spread.
 Still no M1 or M5 data (Dukascopy is blocked by this environment's network
 policy). The M1 numbers above are a √-time extrapolation from 15m and 1h, not
 a measurement, and they are labelled as such everywhere they appear.
+
+---
+
+## E-051b — AMENDMENT TO E-051. The headline was measured on the wrong entries.
+**This corrects E-051. Read this before quoting it.**
+
+### What was wrong
+E-051 concluded that the peak-give-back exit "beat the 3xATR trail this EA
+ships on 5 of 5 markets", and that conclusion was used to make
+`InpUseGiveBack` the EA's default profit protection. The comparison between
+exit rules was fair and correctly controlled — but it ran on
+`strategies.donchian_trend` entries. **SuperTrendSniper does not take Donchian
+entries.** E-051 was a true statement about exit rules in general and was
+never a statement about this EA. It was presented as though it were.
+
+Found by the independent MQL5 audit of 2026-09-01, which noticed that the
+EA's own comment cited "identical entries" while `giveback_study.py:35` called
+`donchian_trend`. `giveback_study.py` now takes the entry strategy as an
+argument so this cannot recur silently.
+
+### Re-run on `supertrend_sniper_ea`, the entries the EA actually takes
+Risk 2% of equity. Same exits, same costs, same tie rules.
+
+| market | trail 3xATR | giveback 30% arm@1R | better |
+|---|---|---|---|
+| **GOLD 1h** | **+0.488R** | +0.158R | **trail, by a mile** |
+| **GOLD 15m** | **+0.051R** | +0.015R | **trail** |
+| GBPUSD 15m | −0.371R | −0.393R | trail |
+| EURUSD 15m | −0.541R | −0.433R | giveback |
+| US500 15m | −0.215R | −0.101R | giveback |
+
+**2 of 5, and both wins are on systems that lose either way.** On GOLD — the
+instrument actually traded — the trail earns roughly three times as much.
+
+This is the same shape as E-053's chop filter: the rule helps losing systems
+and hurts winning ones, because cutting a fat right tail costs most where the
+tail is worth most. On GOLD 1h the best single trade was +24.35R on the trail;
+the give-back rule sells that trade early, every time.
+
+### What survives, and it is not nothing
+The give-back rule still buys a large reduction in drawdown risk:
+
+| GOLD 1h | expectancy | real max DD | P(DD > 30%) |
+|---|---|---|---|
+| trail 3xATR | +0.488R | 42% | **57%** |
+| giveback 30% | +0.158R | 40% | **39%** |
+| **half gb + half trail** | **+0.323R** | 38% | **29%** |
+
+The 50/50 blend — bank half at the give-back trigger, leave the rest on the
+trail — keeps **66% of the trail's expectancy for half its probability of a
+30% drawdown**. On GOLD 15m it is the same story in miniature (P(DD>30%) 59%
+→ 38%). That blend is computable exactly rather than estimated, because the
+partial does not change how the remainder is managed, so it is the average of
+the two policies trade by trade.
+
+### What changes in the EA
+`InpGbClosePart` is added, defaulting to **0.5**. The give-back rule no longer
+CLOSES a position — it banks half of it, once, and the remainder rides the
+trail. That is the measured blend rather than either extreme, and it is also
+what Veer described wanting: the pennies and the big move out of the same
+signal.
+
+`InpUseGiveBack` stays on. The rule that fires is now the one that was
+measured on his entries, not on somebody else's.
+
+### The lesson, which is not a new one
+E-050 retracted a headline for want of a random control. This retracts one for
+want of the right entries. Both failures are the same failure: a number was
+carried further than the thing it was computed on. **A result is a statement
+about the exact configuration that produced it and about nothing else.**

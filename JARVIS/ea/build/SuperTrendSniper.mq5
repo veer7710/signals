@@ -28,9 +28,17 @@
 //  (NoiseFloorPts armed at one band and gave back one band), which is why
 //  peaks summed GBP110 and handed back GBP73.
 //
-//  So this EA defaults to: NO break-even move, NO early trail, a fixed R
-//  target, and a time cap. Every one of those defaults is the option that
-//  measured best. They are all switchable if you want to test otherwise.
+//  So this EA defaults to: NO break-even move, a WIDE trail armed
+//  immediately, a fixed R target, and a 50-bar time cap.
+//
+//  CORRECTED 2026-09-01 by audit. This paragraph used to say "NO early trail"
+//  and "hold 20 bars <- BEST" while the file shipped InpTrailAtR = 0.0 (the
+//  trail arms at once) and InpMaxBars = 50. Both defaults are deliberate and
+//  both measured better on THIS strategy's entries; the summary above was
+//  quoting a Donchian-entry table and was simply describing a different EA.
+//  A wide trail armed early is not the same habit as break-even: the trail
+//  rides 3 ATR behind and only ratchets, break-even parks the stop at entry
+//  and gets scratched out. That distinction is the whole finding.
 //
 //  WHY YOUR BACKTESTS DID NOT MATCH LIVE
 //  Three causes, all fixed here:
@@ -99,7 +107,21 @@ CTrade trade;
 //   holds means the runner's trail takes it out near the high. There is no
 //   configuration of a single all-or-nothing exit that wins both cases.
 //
-//  EXIT
+//  EXIT - IN THE ORDER THEY ACTUALLY FIRE
+//   guard breach .... every tick. A daily-loss or max-drawdown breach closes
+//                     everything (InpFlattenOnBreach) and locks the EA. It
+//                     outranks every rule below it.
+//   give-back ....... every tick. Once a trade has been at least 1R good,
+//                     handing back the allowed fraction of that best BANKS
+//                     HALF (InpGbClosePart) and leaves the rest on the trail.
+//                     Fires once per position.
+//   basket protect .. every tick. The same idea on the TOTAL of every open
+//                     position plus what this basket has already realised.
+//                     Four trades can each behave and still round-trip the
+//                     total; nothing but a total-level rule sees that.
+//   partial at level. bank half approaching a level, let the rest run
+//   trail ........... 3 ATR behind, ratchets only, bar close
+//   time cap ........ closed after InpMaxBars
 //   target .......... capped just SHORT of the next level, so it fills rather
 //                     than watching price turn a tick away from it
 //   stop ............ attached at OrderSend, never held in EA memory only
@@ -128,6 +150,11 @@ input group "=== EXIT (measured on THIS strategy, out-of-sample) ==="
 //   fixed 3R      in-sample +0.183R   out-of-sample +0.394R
 //   time 50 bars  in-sample +0.293R   out-of-sample +0.506R
 //   trail 3xATR   in-sample +0.248R   out-of-sample +0.505R   <- default
+// Re-measured 2026-09-01 on the full sample with supertrend_sniper_ea entries
+// (E-051b): trail 3xATR = +0.488R on GOLD 1h, +0.051R on GOLD 15m. The 0.505
+// figure above is an out-of-sample slice and is consistent with it. Do NOT
+// confuse either with E-051's +0.077R for the same rule - that number is from
+// DONCHIAN entries and does not describe this EA.
 //   BE@1R + trail in-sample +0.110R   out-of-sample lower      <- still off
 // A WIDE trail is not the same thing as moving to break-even. The trail rides
 // 3 ATR behind price and only ever ratchets in your favour; break-even parks
@@ -251,6 +278,7 @@ input double InpDailyLossPct  = 3.0;    // stop for the day at this % equity los
 input double InpMaxDDPct      = 6.0;    // stop permanently at this % from peak
 input int    InpMaxTradesDay  = 20;     // hard cap on entries per day
 input int    InpResetHourUTC  = 0;      // daily reset hour, UTC
+input bool   InpFlattenOnBreach = true; // close open positions when a limit breaks
 
 input group "=== SAFETY ==="
 input bool   InpDemoOnly      = true;   // refuse to run on a live account
@@ -262,18 +290,37 @@ input group "=== PROFIT PROTECTION (E-051: measured, not guessed) ==="
 // This is the answer to "we need to stop watching profit disappear", and it
 // is NOT a fixed take profit. A fixed TP decides in advance how big the move
 // will be, which nobody knows. This rule decides nothing in advance: it
-// remembers the best the trade ever was and leaves when a fixed fraction of
+// remembers the best the trade ever was and acts when a fixed fraction of
 // that best has been handed back.
 //
-// MEASURED, on identical entries, only the exit changing (E-051):
-//   vs the 3xATR trail this EA used to ship, it was BETTER on 5 of 5
-//   market/timeframe combinations tested (GOLD 1h/15m, EURUSD 1h, US500 1h,
-//   GBPUSD 1h), and cut GOLD 1h max drawdown from 92% to 63% at 2% risk.
-//   "Went 1R green and still closed at or below zero" fell from 32% of such
-//   trades to 1%.
+// MEASURED ON THIS EA'S OWN ENTRIES (E-051b). An earlier version of this
+// comment cited E-051's "beat the trail on 5 of 5 markets". That number was
+// real but it was computed on DONCHIAN entries, not on this strategy's, and
+// citing it here was wrong. Re-run on supertrend_sniper_ea:
+//
+//   market       trail 3xATR   give-back 30%   expectancy winner
+//   GOLD 1h        +0.488R        +0.158R        TRAIL, by three times
+//   GOLD 15m       +0.051R        +0.015R        trail
+//   GBPUSD 15m     -0.371R        -0.393R        trail
+//   EURUSD 15m     -0.541R        -0.433R        give-back
+//   US500 15m      -0.215R        -0.101R        give-back
+//
+// So on gold the trail EARNS MORE and closing on give-back is the wrong
+// trade. What the give-back rule buys is a much kinder path:
+//
+//   GOLD 1h            expectancy   max DD   P(DD > 30%)
+//   trail 3xATR          +0.488R      42%        57%
+//   give-back only       +0.158R      40%        39%
+//   HALF AND HALF        +0.323R      38%        29%   <- what this ships
+//
+// Banking HALF at the give-back trigger and leaving the rest on the trail
+// keeps two thirds of the trail's expectancy for half its chance of a 30%
+// drawdown. That is why InpGbClosePart defaults to 0.5 rather than 1.0: the
+// rule below does not close the trade, it banks part of it, once.
+//
 // WHAT IT IS NOT: it did not beat a random entry on GOLD 1h (E-050), and
-//   EURUSD/GBPUSD stay negative under every exit rule tested. It makes the
-//   equity path survivable. It does not manufacture an edge.
+//   EURUSD/GBPUSD stay negative under every exit rule tried. It shapes the
+//   equity path. It does not manufacture an edge.
 input bool   InpUseGiveBack   = true;   // leave when profit is handed back
 input double InpGbArmR        = 1.0;    // only after the trade got this good
 input double InpGbBase        = 0.30;   // give back this much of the peak
@@ -282,6 +329,7 @@ input double InpGbTier2       = 0.24;   // ...allow only this much give-back
 input double InpGbTier3R      = 4.0;    // and past this...
 input double InpGbTier3       = 0.18;   // ...this much. Big peaks are protected harder
 input double InpGbMinMoney    = 0.0;    // ignore the rule below this profit (0 = off)
+input double InpGbClosePart   = 0.5;    // fraction to bank (1.0 = close it all)
 
 input group "=== BASKET (manage the TOTAL, not one trade) ==="
 // Veer's actual failure was never one trade: "the basket reached ~GBP12 and
@@ -359,6 +407,16 @@ bool     g_stReady     = false;
 #define MAX_TRACK 64
 ulong    g_tkId[MAX_TRACK];        // position ticket
 double   g_tkPeakPx[MAX_TRACK];    // best favourable excursion, in price
+// The peak as it stood BEFORE this tick. E-051 deliberately computed its
+// trigger from the previous bar's peak, because using the same bar's high to
+// place a trigger inside that bar assumes the high printed before the
+// retrace - an assumption worth roughly a third of the measured result. The
+// EA was raising the exit floor with the current tick and then testing the
+// same tick against it, which is that assumption wearing a different hat.
+// (Audit finding 7.) Testing against the previous tick's peak restores it.
+double   g_tkPeakPrev[MAX_TRACK];
+datetime g_tkCloseTry[MAX_TRACK];  // last close REQUEST, to stop tick-rate retries
+bool     g_tkGbDone[MAX_TRACK];    // the give-back partial has already fired
 double   g_tkWorstPx[MAX_TRACK];   // worst adverse excursion, in price
 double   g_tkRisk[MAX_TRACK];      // original risk distance, in price
 double   g_tkPeakMoney[MAX_TRACK]; // best floating profit, in account currency
@@ -367,7 +425,21 @@ int      g_tkCount = 0;
 
 // Basket-level. A "basket" is every position this EA has open on this symbol,
 // treated as one trade, because that is how the account experiences it.
-double   g_bkPeak      = 0.0;      // best TOTAL floating profit this basket saw
+// BLOCKER 2, found by audit 2026-09-01. g_bkPeak only reset when FLAT, so
+// money BANKED by a partial close was recorded as money GIVEN BACK. At the
+// shipped defaults the arithmetic closed the runner every time: the basket
+// arms at max(equity x 0.60%, GBP2) which is 1.2R at 0.5% risk, the level
+// partial halves the floating profit, and the protection floor is 65% of the
+// peak - and a half is always below 65%. So the trade reached a level, banked
+// half exactly as designed, and the next tick liquidated the rest. That
+// destroyed the "bank half, let the rest ride" design the scenario map calls
+// the central answer to wanting both the pennies and the big moves.
+//
+// The fix is to define basket profit as FLOATING PLUS REALISED-SINCE-THE-
+// BASKET-OPENED. A partial then moves money from one column to the other and
+// leaves the total untouched, which is what actually happened.
+double   g_bkRealized  = 0.0;     // banked by partials while the basket is open
+double   g_bkPeak      = 0.0;      // best TOTAL profit this basket saw
 datetime g_bkPeakTime  = 0;
 datetime g_bkStart     = 0;
 bool     g_bkArmed     = false;
@@ -382,6 +454,20 @@ int      g_barsInTrend   = 0;   // bars in the current SuperTrend leg (display)
 #define MAX_FLIPHIST 256
 uchar    g_flipHist[MAX_FLIPHIST];
 int      g_flipHistN     = 0;
+
+// The panel's readings are all closed-bar-only and therefore CONSTANT within
+// a bar, but DrawBox recomputed them on every tick: EfficiencyRatio(50) alone
+// is 103 iClose calls, and on an active M1 that was roughly 3,000 per second
+// for a display that feeds no decision. (Audit finding 13.) Cached per bar;
+// the money figures below still update on every tick, which is the only part
+// a person actually watches move.
+datetime g_boxBar        = 0;
+double   g_boxEff        = 0.0;
+int      g_boxFlips      = 0;
+int      g_boxRisk       = 0;
+string   g_boxRiskWhy    = "";
+double   g_boxCost       = 0.0;
+double   g_boxStop       = 0.0;
 int      g_lastSigDir    = 0;   // direction of the last signal that passed the filters
 datetime g_runStartBar   = 0;   // bar of the first signal of this run
 double   g_runStartPx    = 0.0; // close at that bar
@@ -449,6 +535,9 @@ void   BoxLine(int idx, string txt, color c);
 void   BoxClear();
 void   DrawBox();
 void   SaveStats();
+void   LoadGuards();
+double MinStopDist();
+void   CheckGuardsTick();
 void   LoadStats();
 
 
@@ -502,6 +591,46 @@ void GSet(string field, double v)
 {
    if(!GuardsPersist()) return;
    GlobalVariableSet(GKey(field), v);
+}
+
+// BLOCKER 1, found by audit 2026-09-01. PersistGuards() WROTE these values
+// and nothing ever read them back. OnInit re-seeded g_peakEq to current
+// equity and left both locks false, so a parameter change, a recompile on
+// reconnect or a timeframe switch cleared the max-drawdown lock and moved the
+// drawdown baseline down to the already-drawn-down equity - exactly the fault
+// the comment above claimed had been fixed. The comment was written; the
+// reader never was.
+//
+// The daily figures are only restored if the stored day is TODAY. Restoring
+// yesterday's daily loss would lock a fresh day for no reason.
+void LoadGuards()
+{
+   if(!GuardsPersist()) return;
+
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   double pk = GGet("peakEq", 0.0);
+   if(pk > 0.0) g_peakEq = MathMax(pk, eq);
+
+   g_lockedPerm = (GGet("lockPerm", 0.0) > 0.5);
+
+   int storedDay = (int)GGet("dayStamp", -1.0);
+   if(storedDay == DayStamp())
+   {
+      double ds = GGet("dayStartEq", 0.0);
+      if(ds > 0.0) g_dayStartEq = ds;
+      g_tradesToday = (int)GGet("tradesDay", 0.0);
+      g_lockedDay   = (GGet("lockDay", 0.0) > 0.5);
+   }
+
+   if(g_lockedPerm)
+      Print("RESTORED STATE: the permanent max-drawdown lock is SET. This EA "
+            "will not open new positions. Clear it deliberately by deleting "
+            "the terminal global variable " + GKey("lockPerm") + ".");
+   if(g_lockedDay)
+      PrintFormat("RESTORED STATE: locked for today, %d trades already taken, "
+                  "day started at %.2f, peak equity %.2f",
+                  g_tradesToday, g_dayStartEq, g_peakEq);
 }
 
 void PersistGuards()
@@ -882,11 +1011,6 @@ void TryEntry()
 
    string sdir = flipUp ? "long" : "short";
 
-   // STACKING. Default InpMaxStack=1 means this is still "one position at a
-   // time" and nothing about the EA's exposure has changed. Turning it up
-   // opens the gates in StackAllows, not the floodgates.
-   string sw = "";
-   if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
 
    string why = "";
    if(!RiskAllowsEntry(why)) { SkipLog(sdir, why); return; }
@@ -918,6 +1042,16 @@ void TryEntry()
    // ceiling, which is exactly how E-052 defined a signal. Record it against
    // the run BEFORE anything reads the risk score.
    RegisterSignal(flipUp ? 1 : -1);
+
+   // STACKING IS TESTED *AFTER* THE SIGNAL IS RECORDED. (Audit finding 12.)
+   // It used to sit before RegisterSignal, and at InpMaxStack=1 it rejected
+   // every signal while a position was open - so the opposite-direction
+   // signals that should RESET the run were never seen, RunBars() climbed
+   // without bound, and a long that outlived a turn had its give-back
+   // allowance LOOSENED from 13.5% back to 30% at exactly the moment it
+   // should have tightened. The risk score was being applied backwards.
+   string sw = "";
+   if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
 
    // CHOP GUARD. Off by default - see the input group for why the measurement
    // does not support turning it on. Left switchable so the journal can
@@ -956,8 +1090,20 @@ void TryEntry()
 
    double atr = ATR(1);
    if(atr <= 0) return;
+   int dg0 = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
    double stopDist = InpStopAtrMult * atr;
+
+   // The broker's floor. Widen to it and let LotFor re-derive the size, so
+   // the risk in money is unchanged and only the distance moves.
+   double minStop = MinStopDist();
+   if(minStop > 0.0 && stopDist < minStop * 1.2)
+   {
+      Log(StringFormat("stop %.*f is inside the broker minimum %.*f, widening "
+                       "to %.*f and resizing so the risk is unchanged",
+                       dg0, stopDist, dg0, minStop, dg0, minStop * 1.2));
+      stopDist = minStop * 1.2;
+   }
 
    // COST GATE. The one thing here that needs no backtest: the EA reads the
    // spread that exists right now. If the whole round trip eats more than
@@ -1362,7 +1508,11 @@ void ManagePosition()
                               : price + InpTrailAtrMult * atr;
          t = NormalizeDouble(t, dg);
          bool better = (dir > 0) ? (t > sl) : (t < sl);
-         if(better) { trade.PositionModify(tk, t, tp); }
+         // A modify inside the broker's stop level is rejected, silently and
+         // repeatedly. Leave the stop where it is rather than spam the server.
+         double mn = MinStopDist();
+         bool room = (mn <= 0.0) || (MathAbs(price - t) >= mn);
+         if(better && room) { trade.PositionModify(tk, t, tp); }
       }
    }
 }
@@ -1410,8 +1560,22 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    // Only a FULL close counts as a finished trade. A partial produces an
    // out-deal too, and counting those would inflate the trade count and make
    // every ratio in the box wrong.
+   // Every out-deal, partial or full, is money this basket has realised.
+   g_bkRealized += money;
+
    ulong pid = (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID);
-   if(PositionSelectByTicket(pid)) return;      // still open: this was a partial
+   if(PositionSelectByTicket(pid))
+   {
+      // A PARTIAL. The position lives on, so it is not a finished trade - but
+      // the money is real and KEPT OF PEAK is the headline number in the box.
+      // Counting the peak later while never counting this cash biased that
+      // figure LOW every time a level partial fired, and the level partial is
+      // on by default. (Audit finding 11.)
+      g_stRealized    += money;
+      g_stDayRealized += money;
+      SaveStats();
+      return;
+   }
 
    int ti = TrackFind(pid);
    double peakMoney = (ti >= 0) ? g_tkPeakMoney[ti] : MathMax(money, 0.0);
@@ -1480,6 +1644,9 @@ int TrackAdd(ulong tk, double risk)
    int i = g_tkCount;
    g_tkId[i]        = tk;
    g_tkPeakPx[i]    = 0.0;
+   g_tkPeakPrev[i]  = 0.0;
+   g_tkCloseTry[i]  = 0;
+   g_tkGbDone[i]    = false;
    g_tkWorstPx[i]   = 0.0;
    g_tkRisk[i]      = risk;
    g_tkPeakMoney[i] = 0.0;
@@ -1495,6 +1662,9 @@ void TrackDrop(int i)
    {
       g_tkId[j]        = g_tkId[j + 1];
       g_tkPeakPx[j]    = g_tkPeakPx[j + 1];
+      g_tkPeakPrev[j]  = g_tkPeakPrev[j + 1];
+      g_tkCloseTry[j]  = g_tkCloseTry[j + 1];
+      g_tkGbDone[j]    = g_tkGbDone[j + 1];
       g_tkWorstPx[j]   = g_tkWorstPx[j + 1];
       g_tkRisk[j]      = g_tkRisk[j + 1];
       g_tkPeakMoney[j] = g_tkPeakMoney[j + 1];
@@ -1558,6 +1728,9 @@ void Snapshot(Basket &b)
    if(b.lots > 0.0) b.wAvgEntry = num / b.lots;
    if(b.netLots > 0.0) b.dir = 1; else if(b.netLots < 0.0) b.dir = -1;
    if(oldest > 0) b.oldestBars = iBarShift(_Symbol, _Period, oldest, false);
+   // realised-so-far is part of what this basket has made. Without it, taking
+   // profit looks identical to losing it.
+   b.money    += g_bkRealized;
    b.peakMoney = g_bkPeak;
    b.givenBack = MathMax(0.0, g_bkPeak - b.money);
    if(g_bkPeakTime > 0) b.sincePeakSec = (int)(TimeCurrent() - g_bkPeakTime);
@@ -1570,13 +1743,16 @@ void Snapshot(Basket &b)
 //  it can be risky, trends don't always last forever."
 //
 // Three independent readings, each worth one point:
-//   AGE      - how long this SuperTrend direction has already lasted
-//   STRETCH  - how far price has travelled from its own DEMA, in ATRs
-//   CROWDING - how many same-direction entries have been taken in a row
+//   RUN AGE  - bars since the last signal in the OPPOSITE direction
+//   RUN FAR  - how far price has travelled since that signal, in ATRs
+//   ADX      - trend strength at entry (the weakest of the three)
 //
-// A trend can be old without being stretched (a slow grind) or stretched
-// without being old (a news spike), and those are different risks. Adding
-// them means the EA only becomes really cautious when several agree.
+// CORRECTED 2026-09-01. This header used to name AGE / STRETCH / CROWDING.
+// Stretch and crowding were DISPROVED in E-052 and deleted from the code
+// weeks-of-work ago; the header describing them survived. Run age and run
+// distance are two measurements of one thing - the far end of a one-way run -
+// which is why they agree, and why they are trusted more than three
+// independent-looking readings would be.
 //
 // The score is not a prediction that the trend will end. It is a statement
 // that the PAYOFF for staying has got worse: late-trend entries measured
@@ -1618,6 +1794,23 @@ void RegisterSignal(int dir)
 // lot in account currency and has to be converted before it can be compared
 // with a stop distance; leaving it out was what made the old spread-only gate
 // understate the real cost by about 55% on gold.
+// BLOCKER 3. Nothing in this EA asked the broker what its minimum stop
+// distance was. On M1 (D-010) a 1.5 x ATR(7) stop on gold can fall below it,
+// and the symptom is a silent stream of 10016 rejections with no journal row
+// to explain them - the EA simply looks like it stopped trading.
+//
+// The response is to WIDEN the stop to the broker's minimum and let LotFor
+// re-derive the lot from the wider distance, so the money at risk is
+// unchanged and only the geometry moves. Refusing the trade instead would
+// silently delete whole sessions on exactly the timeframe Veer trades.
+double MinStopDist()
+{
+   long   lvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double pt  = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(lvl <= 0 || pt <= 0.0) return 0.0;
+   return (double)lvl * pt;
+}
+
 double RoundTripCost()
 {
    double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
@@ -1703,8 +1896,24 @@ double GiveBackAllowed(double peakR)
    else if(risk == 2) gb *= 0.62;
    else if(risk >= 3) gb *= 0.45;
 
-   // never so tight that ordinary noise closes a trade the moment it arms
-   return MathMax(gb, 0.08);
+   // NEVER SO TIGHT THAT THE EXIT COSTS MORE THAN IT SAVES. (Audit finding 8.)
+   // At trend risk 3 the shipped tiers gave 18% x 0.45 = 8.1%, which on a
+   // 1.5R peak is a 0.12R retrace - INSIDE E-053's 0.15-0.22R round-trip cost
+   // for M1 gold. An exit that fires inside its own spread is a fee, not a
+   // rule. The allowance is therefore floored so the give-back it permits is
+   // always at least twice the round trip.
+   double floorGb = 0.08;
+   double a = ATR(1);
+   if(a > 0.0 && peakR > 0.0)
+   {
+      double stopDist = InpStopAtrMult * a;
+      if(stopDist > 0.0)
+      {
+         double costR = RoundTripCost() / stopDist;   // cost expressed in R
+         floorGb = MathMax(floorGb, (2.0 * costR) / peakR);
+      }
+   }
+   return MathMax(gb, MathMin(floorGb, 0.60));
 }
 
 //===================================================================
@@ -1747,6 +1956,9 @@ void UpdatePeaks()
          if(ti < 0) continue;
       }
 
+      // snapshot BEFORE the update: this is what ProtectPositions tests against
+      g_tkPeakPrev[ti] = g_tkPeakPx[ti];
+
       double fav = (px - open) * dir;
       double adv = (open - px) * dir;
       if(fav > g_tkPeakPx[ti])
@@ -1770,6 +1982,7 @@ void UpdatePeaks()
       // flat: the basket is over, so its peak resets. Nothing is carried into
       // the next one - a fresh basket has given nothing back yet.
       g_bkPeak = 0.0; g_bkPeakTime = 0; g_bkStart = 0; g_bkArmed = false;
+      g_bkRealized = 0.0;
       return;
    }
    if(g_bkStart == 0) g_bkStart = TimeCurrent();
@@ -1794,8 +2007,9 @@ void ProtectPositions()
 
       int ti = TrackFind(tk);
       if(ti < 0 || g_tkRisk[ti] <= 0.0) continue;
+      if(g_tkGbDone[ti]) continue;      // banks once, then the trail has it
 
-      double peakR = g_tkPeakPx[ti] / g_tkRisk[ti];
+      double peakR = g_tkPeakPrev[ti] / g_tkRisk[ti];   // NOT this tick's high
       if(peakR < InpGbArmR) continue;                 // never got good enough
       if(InpGbMinMoney > 0.0 && g_tkPeakMoney[ti] < InpGbMinMoney) continue;
 
@@ -1810,17 +2024,56 @@ void ProtectPositions()
       double keep = peakR * (1.0 - gb);
       if(rNow > keep) continue;
 
+      // One close REQUEST at a time. Without this a requote produced a fresh
+      // close attempt, a Log line and a full FileOpen/Write/Close journal row
+      // on every tick, because a failed close does not change the trigger.
+      // (Audit findings 5 and 6.)
+      if(TimeCurrent() - g_tkCloseTry[ti] < 3) continue;
+      g_tkCloseTry[ti] = TimeCurrent();
+
       double money = PositionGetDouble(POSITION_PROFIT)
                    + PositionGetDouble(POSITION_SWAP);
-      if(trade.PositionClose(tk))
+      double vol   = PositionGetDouble(POSITION_VOLUME);
+
+      // BANK PART, DO NOT CLOSE. E-051b: on gold the trail out-earns the
+      // give-back rule roughly three to one, so closing here sells the runner
+      // that pays for everything. Banking half keeps two thirds of the
+      // trail's expectancy for half its chance of a 30% drawdown, and it is
+      // also the "pennies AND the big move out of one signal" that this EA
+      // was asked for. InpGbClosePart = 1.0 restores the close-it-all rule.
+      double part = MathMin(MathMax(InpGbClosePart, 0.0), 1.0);
+      double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double vmin = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double cut  = vol * part;
+      if(step > 0.0) cut = MathFloor(cut / step) * step;
+
+      // If half is not a tradeable size, the choice is all or nothing. Take
+      // it all: the rule fired, and leaving a position the rule wanted out of
+      // because the lot arithmetic was awkward is the worst of both.
+      bool wholeThing = (part >= 1.0) || (cut < vmin) || (vol - cut < vmin);
+      bool ok = wholeThing ? trade.PositionClose(tk)
+                           : trade.PositionClosePartial(tk, cut);
+      if(!ok)
       {
+         Log(StringFormat("give-back %s REJECTED, retcode %d - will retry",
+                          wholeThing ? "close" : "partial",
+                          trade.ResultRetcode()));
+      }
+      else
+      {
+         g_tkGbDone[ti] = true;
          double back = g_tkPeakMoney[ti] - money;
          if(back > g_stWorstGB) g_stWorstGB = back;
-         Log(StringFormat("GIVE-BACK exit: peaked %.2fR (%s), now %.2fR (%s), "
-                          "allowed give-back %.0f%%",
+         Log(StringFormat("GIVE-BACK: peaked %.2fR (%s), now %.2fR (%s), "
+                          "allowance %.0f%% - %s",
                           peakR, Money(g_tkPeakMoney[ti]), rNow, Money(money),
-                          gb * 100.0));
-         Journal("GIVEBACK", dir > 0 ? "long" : "short", px, 0, 0, 0, money,
+                          gb * 100.0,
+                          wholeThing
+                          ? "closed in full"
+                          : StringFormat("banked %.2f of %.2f, rest rides the trail",
+                                         cut, vol)));
+         Journal("GIVEBACK", dir > 0 ? "long" : "short", px,
+                 wholeThing ? vol : cut, 0, 0, money,
                  StringFormat("peak %.2fR kept %.2fR", peakR, rNow));
       }
    }
@@ -1893,6 +2146,62 @@ void ProtectBasket()
    Journal("BASKET", b.dir > 0 ? "long" : "short", b.wAvgEntry, b.lots,
            0, 0, b.money, StringFormat("peak %s given back %s",
                                        Money(g_bkPeak), Money(back)));
+}
+
+// BLOCKER 4. The daily-loss and max-drawdown locks lived inside
+// RiskAllowsEntry, which has exactly one call site: TryEntry, reached only on
+// a bar close, only after the flip test. So a limit could be breached and
+// nothing would notice until the next signal - and nothing would ever close
+// the positions doing the damage. A limit that only declines new trades is
+// not a limit, it is a preference.
+//
+// This runs on every tick. It sets the locks the moment they are breached,
+// persists them so a restart cannot clear them (see BLOCKER 1), and - if
+// InpFlattenOnBreach is on - closes what is open, because on a prop account
+// the breach IS the failure and holding through it does not undo it.
+void CheckGuardsTick()
+{
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   bool   hit = false;
+   string why = "";
+
+   if(!g_lockedPerm && g_peakEq > 0.0)
+   {
+      double ddPct = 100.0 * (g_peakEq - eq) / g_peakEq;
+      if(ddPct >= InpMaxDDPct)
+      {
+         g_lockedPerm = true; hit = true;
+         why = StringFormat("MAX DRAWDOWN %.2f%% from peak %.2f - PERMANENT LOCK",
+                            ddPct, g_peakEq);
+      }
+   }
+   if(!g_lockedDay && g_dayStartEq > 0.0)
+   {
+      double dayPct = 100.0 * (g_dayStartEq - eq) / g_dayStartEq;
+      if(dayPct >= InpDailyLossPct)
+      {
+         g_lockedDay = true; hit = true;
+         why = StringFormat("DAILY LOSS %.2f%% from %.2f - locked for today",
+                            dayPct, g_dayStartEq);
+      }
+   }
+
+   if(!hit) return;
+
+   Log(why);
+   PersistGuards();
+
+   if(!InpFlattenOnBreach) return;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+      if(trade.PositionClose(tk))
+         Log("closed on guard breach: " + IntegerToString((int)tk));
+   }
+   Journal("GUARD", "-", 0, 0, 0, 0, eq, why);
 }
 
 //===================================================================
@@ -2003,8 +2312,20 @@ void DrawBox()
    Basket b;
    Snapshot(b);
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   string tw = "";
-   int risk = TrendRisk(tw);
+
+   // recompute the closed-bar readings once per bar, not once per tick
+   datetime bnow = iTime(_Symbol, _Period, 0);
+   if(bnow != g_boxBar)
+   {
+      g_boxBar     = bnow;
+      g_boxEff     = EfficiencyRatio(InpChopErLen);
+      g_boxFlips   = FlipsIn(InpChopFlipLen);
+      g_boxRisk    = TrendRisk(g_boxRiskWhy);
+      g_boxCost    = RoundTripCost();
+      g_boxStop    = InpStopAtrMult * ATR(1);
+   }
+   string tw  = g_boxRiskWhy;
+   int    risk = g_boxRisk;
 
    color ok   = clrLime, bad = clrTomato, warn = clrOrange;
    color pnlC = (b.money >= 0) ? ok : bad;
@@ -2061,14 +2382,11 @@ void DrawBox()
    BoxLine(r++, StringFormat("       supertrend leg %s, %d bars",
                              (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
                              g_barsInTrend), InpBoxText);
-   double cst = RoundTripCost();
-   double atrNow = ATR(1);
-   double stpNow = InpStopAtrMult * atrNow;
    BoxLine(r++, StringFormat("cost %.1f%% of stop   efficiency %.2f   flips %d/%d",
-                             (stpNow > 0 ? 100.0 * cst / stpNow : 0.0),
-                             EfficiencyRatio(InpChopErLen),
-                             FlipsIn(InpChopFlipLen), InpChopFlipLen),
-           (stpNow > 0 && cst / stpNow > InpMaxCostFrac) ? bad : InpBoxText);
+                             (g_boxStop > 0 ? 100.0 * g_boxCost / g_boxStop : 0.0),
+                             g_boxEff, g_boxFlips, InpChopFlipLen),
+           (g_boxStop > 0 && g_boxCost / g_boxStop > InpMaxCostFrac)
+           ? bad : InpBoxText);
    BoxLine(r++, StringFormat("give-back allowance now %.0f%%",
                              GiveBackAllowed(MathMax(b.peakR, 0.0)) * 100.0),
            InpBoxText);
@@ -2088,8 +2406,14 @@ void DrawBox()
 //  MODULE: STATISTICS PERSISTENCE
 //===================================================================
 // The box is worthless if a terminal restart zeroes it, so the counters live
-// in GlobalVariables, which survive restarts and are keyed per symbol and
-// timeframe so two charts do not overwrite each other.
+// in GlobalVariables, which survive restarts. GKey() keys them on ACCOUNT
+// LOGIN + MAGIC NUMBER - not on symbol or timeframe. Two charts running this
+// EA on the same magic therefore SHARE one set of counters, which is correct
+// for the prop-firm guards (the daily loss limit is an account-level rule)
+// and is a deliberate choice, not an oversight. Give each chart its own
+// InpMagic if you want them counted separately. An earlier version of this
+// comment claimed per-symbol keying and contradicted the comment on GKey
+// itself twenty lines above.
 void SaveStats()
 {
    GSet("st_trades",  (double)g_stTrades);
@@ -2138,6 +2462,11 @@ int OnInit()
    g_peakEq     = eq;
    g_dayStamp   = DayStamp();
 
+   // AFTER the defaults are set, never before: LoadGuards only overwrites
+   // what it actually finds stored, and a restart must not be able to erase
+   // a lock or move the drawdown baseline.
+   LoadGuards();
+
    PrintFormat("SuperTrendSniper started. ST(%d, %.2f) DEMA(%d) risk %.2f%% "
                "target %.1fR  BE=%s trail=%s",
                InpStAtrLen, InpStMult, InpDemaLen, InpRiskPct, InpTargetR,
@@ -2181,6 +2510,7 @@ void OnTick()
    // while nothing acts; on M1 a bar-close-only exit is allowed to look once
    // a minute. Entries stay on bar close - that is what keeps the backtest
    // and the live account the same system.
+   CheckGuardsTick();      // before anything else: a breach outranks a rule
    UpdatePeaks();
    ProtectPositions();
    ProtectBasket();

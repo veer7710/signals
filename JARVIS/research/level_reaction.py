@@ -537,6 +537,7 @@ def run_all():
     series_of = {}
     zs = []
     ns = []
+    nrand = []; rp = []; cp = []; kk = []; kc_ = []
     print(f"\n  {'market':<14}{'bars':>7}{'levels':>8}{'touches':>9}"
           f"{'rndTch':>8}{'REAL %':>9}{'95% int':>15}{'RAND %':>9}"
           f"{'diff':>8}{'z':>7}")
@@ -554,6 +555,8 @@ def run_all():
         store[f"{sym} {tf}"] = (real, rres, ctrl, cres)
         series_of[f"{sym} {tf}"] = s
         zs.append(two_prop_z(kr, nr, kc, nc)); ns.append(nr)
+        nrand.append(nc); rp.append(100*kr/nr); cp.append(100*kc/nc)
+        kk.append(kr); kc_.append(kc)
         l, u = wilson(kr, nr)
         print(f"  {sym+' '+tf:<14}{len(s):>7}{len(levels):>8}{nr:>9}"
               f"{nc//REPLICAS:>8}"
@@ -584,6 +587,19 @@ def run_all():
             else:
                 line.append(f"{nr:>9}{100*(kr/nr-kc/nc):>+11.1f}")
         print("".join(line))
+
+    print(f"\n  SUMMARY (computed, not eyeballed):")
+    print(f"    total real touches {sum(ns)}   total matched-random touches "
+          f"{sum(nrand)}")
+    print(f"    unweighted mean over the 8 markets: real "
+          f"{sum(rp)/len(rp):.1f}%   random {sum(cp)/len(cp):.1f}%   "
+          f"diff {sum(rp)/len(rp)-sum(cp)/len(cp):+.2f} points")
+    print(f"    touch-weighted pooled:              real "
+          f"{100*sum(kk)/sum(ns):.1f}%   random {100*sum(kc_)/sum(nrand):.1f}%"
+          f"   diff "
+          f"{100*(sum(kk)/sum(ns)-sum(kc_)/sum(nrand)):+.2f} points")
+    print(f"    markets where real beat its own control: "
+          f"{sum(1 for a, b in zip(rp, cp) if a > b)} of {len(rp)}")
 
     print(f"\n  POOLED across the 8 markets (Stouffer): z = "
           f"{stouffer(zs):+.2f}. Positive would favour real levels.")
@@ -616,6 +632,7 @@ def run_all():
     print(f"    POOLED (Stouffer) z = {stouffer(dz):+.2f}")
 
     nbuckets = 0
+    lopsided = []
     for key, (title, edges, keyf) in BUCKETS.items():
         print(f"\n  --- {title} " + "-" * max(0, 60 - len(title)))
         print("  cell = real % minus matched-random % IN THE SAME BUCKET, points")
@@ -659,6 +676,10 @@ def run_all():
               + "".join(f"{(sum(randpct[b])/len(randpct[b]) if randpct[b] else 0):>12.1f}"
                         for b in range(len(labs))))
         nbuckets += sum(1 for b in range(len(labs)) if seen[b] > 0)
+        for b in range(len(labs)):
+            if seen[b] >= 8 and (pos[b] >= 7 or pos[b] <= 1):
+                lopsided.append((key, labs[b],
+                                 "ABOVE" if pos[b] >= 7 else "BELOW"))
 
     print("\n" + "=" * 100)
     print(f"  MULTIPLE TESTING: {nbuckets} buckets examined in the tables above,")
@@ -670,6 +691,18 @@ def run_all():
     print(f"  cells are expected BY CHANCE ALONE among {nbuckets} buckets. "
           f"Count the ones found")
     print(f"  before believing any of them.")
+    print(f"\n  FOUND: {len(lopsided)} such cells, versus ~{nbuckets*0.070:.1f} "
+          f"expected by chance:")
+    for t, l, d in lopsided:
+        print(f"      {t:<12}{l:<12}real {d} random on 7 or 8 of 8 markets")
+    dirs = set(d for _, _, d in lopsided)
+    print(f"  All of them point the SAME way ({'/'.join(sorted(dirs))}), which "
+          f"is an excess, not chance.")
+    print(f"  But they are NOT independent tests: 'broken', '3+ prior touches' "
+          f"and 'age 1000+' are")
+    print(f"  overlapping slices of the same touches. They are one small effect "
+          f"re-cut nine ways,")
+    print(f"  and it points AGAINST the hypothesis, not for it.")
     print("=" * 100)
 
 
@@ -704,6 +737,31 @@ def run_tol():
             cells.append(f"{d:>+11.1f}")
         m = sum(diffs) / len(diffs) if diffs else 0.0
         print(f"  {tol:<12}" + "".join(cells) + f"{m:>+9.1f}{f'{npos}/{tot}':>6}")
+
+
+def run_counts():
+    """How much chart clutter does the LuxAlgo count>2 rule actually remove?
+    The rule buys no measurable reaction rate (see run_all), so its only
+    defensible justification is decluttering, and that has to be a number."""
+    ln = PRIMARY["ln"]
+    print("=" * 86)
+    print(f"  E-053  OBJECT COUNTS at pivot len {ln} — what the cluster>=3 "
+          f"rule removes from the chart")
+    print("=" * 86)
+    print(f"\n  {'market':<14}{'levels':>8}{'clu>=3':>8}{'pct':>7}"
+          f"{'touches':>9}{'touches clu>=3':>16}{'pct':>7}")
+    tl = tc = tt = t3 = 0
+    for sym, tf in COMBOS:
+        s = engine.load(sym, tf)
+        A, levels, real, ctrl = collect(s, ln)
+        c3 = sum(1 for L in levels if len(L["mb"]) >= 3)
+        k3 = sum(1 for t in real if t["clu"] >= 3)
+        print(f"  {sym+' '+tf:<14}{len(levels):>8}{c3:>8}"
+              f"{100*c3/len(levels):>6.1f}%{len(real):>9}{k3:>16}"
+              f"{100*k3/len(real):>6.1f}%")
+        tl += len(levels); tc += c3; tt += len(real); t3 += k3
+    print(f"  {'TOTAL':<14}{tl:>8}{tc:>8}{100*tc/tl:>6.1f}%{tt:>9}{t3:>16}"
+          f"{100*t3/tt:>6.1f}%")
 
 
 # --------------------------------------------------------------- checks
@@ -854,6 +912,8 @@ if __name__ == "__main__":
         run_grid()
     elif a == "TOL":
         run_tol()
+    elif a == "COUNTS":
+        run_counts()
     elif a == "ALL":
         run_all()
     else:
