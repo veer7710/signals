@@ -97,3 +97,36 @@ Consequences that follow and are not to be re-argued:
    things. Both products must scale their defaults by timeframe.
 3. Any claim about M1 or M5 performance is currently INFERENCE. It must be
    labelled as such until the data exists.
+
+---
+
+## D-010 — Timeframes: M1 for the EA, M15/M5/M1 for liquidity, H1/H4 are context only
+Date: 2026-09-01. Stated by Veer, verbatim: *"we don't even run h1 the supertrend
+ea is for m1 and liquidity entries are based on m15 5 and 1 we do look at 1 and
+4 hour but not act on it"*.
+
+**Settled. Do not present an H1 result as a recommendation again.**
+
+- SuperTrend EA: **M1 only.**
+- Liquidity: entries on **M15 → M5 → M1**, in that cascade.
+- H1 and H4: read for context, never acted on.
+
+### What this costs, stated plainly
+Every experiment in this repository (E-001 to E-053) ran on 15m and 1h,
+because that is the only data here. The two positive expectancies ever
+measured — GOLD 1h +0.335R and GOLD 15m +0.227R — are on timeframes Veer does
+not trade or barely trades. **The timeframe he actually trades has never been
+tested.** 1h results remain useful as evidence about the strategy FAMILY and
+about mechanisms that are scale-free (cost arithmetic, exit behaviour, run
+exhaustion). They are not evidence about his account and must not be quoted
+as though they were.
+
+### The fix, and it is not a research task
+Dukascopy is blocked by this environment's network policy, so M1 cannot be
+downloaded here. But the data is not missing — it is in Veer's terminal.
+`JARVIS/ea/tools/ExportHistory.mq5` writes M1/M5/M15 straight out of MT5 in
+the exact JSON the engine loads. Once those files are in `data/`, every study
+in the repo re-runs on the real timeframes with no code changes.
+
+**Until that happens, every M1 claim in this project is an extrapolation and
+must be labelled as one.**

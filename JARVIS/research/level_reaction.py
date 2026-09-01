@@ -101,7 +101,9 @@ import engine, study
 from engine import Series
 
 # ----------------------------------------------------------------- config
-MARGIN   = 1.45     # LuxAlgo default 10/6.9; band half-width = ATR/MARGIN
+MARGIN   = 1.45     # LuxAlgo default 10/6.9; CLUSTER band half-width = ATR/MARGIN
+CLU_PIV  = 20       # LuxAlgo scans a bounded set of recent pivots, not all history
+TOUCH_TOL = 0.15    # touch tolerance in ATR -- see note below
 K_COOL   = 20       # bars before the same level can be touched again
 Y_INVAL  = 0.25     # close beyond the level by this many ATR = invalidated
 WARMUP   = 250      # no touch is recorded before this bar
@@ -110,6 +112,7 @@ REPLICAS = 3        # random control replicates
 
 PRIMARY  = dict(ln=5, N=10, X=1.0)   # the config the bucket tables use
 GRID_LEN = [3, 5, 7, 10]
+GRID_TOL = [0.05, 0.15, 0.30, 0.69]   # sensitivity on the touch tolerance
 GRID_N   = [5, 10, 20]
 GRID_X   = [0.5, 1.0, 1.5]
 
@@ -161,38 +164,50 @@ def find_pivots(s: Series, ln: int):
     return out
 
 
-def build_levels(s: Series, A, ln: int, margin=MARGIN):
+def build_levels(s: Series, A, ln: int, margin=MARGIN, clu_piv=CLU_PIV):
     """Turn confirmed pivots into level objects, clustering as LuxAlgo does.
 
-    A pivot joins the nearest active same-type level whose band contains it;
-    otherwise it starts a new level. Everything here is done in confirmation
-    order, so no level ever knows about a pivot from its future.
+    A pivot joins the nearest same-type level whose CLUSTER band (+-ATR/margin,
+    the LuxAlgo margin) contains it, PROVIDED that level's most recent member
+    is within the last `clu_piv` confirmed pivots of that type. LuxAlgo scans a
+    bounded set of recent pivots, not all of history; without that bound every
+    price on the chart eventually merges into a handful of mega-clusters and
+    both the age and the cluster-size analyses become meaningless.
+
+    Everything is done in confirmation order, so no level ever knows about a
+    pivot from its future. The anchor price is the FIRST member's price and is
+    never revised, so a level's location never changes after it is drawn.
     """
     piv = find_pivots(s, ln)
     levels = []
     byty = {+1: ([], []), -1: ([], [])}   # sorted prices, parallel objects
+    rank = {+1: 0, -1: 0}
     for (p, typ, price, conf) in piv:
         a = A[conf]
         if a is None or a <= 0:
             continue
-        tol = a / margin
+        rank[typ] += 1
+        r = rank[typ]
+        cb = a / margin                      # cluster band half-width
         prices, objs = byty[typ]
-        # nearest existing level whose OWN band contains this pivot price
         best, bestd = None, None
-        lo = bisect.bisect_left(prices, price - 5 * tol)
-        hi = bisect.bisect_right(prices, price + 5 * tol)
+        lo = bisect.bisect_left(prices, price - 5 * cb)
+        hi = bisect.bisect_right(prices, price + 5 * cb)
         for k in range(lo, hi):
             L = objs[k]
             if L["conf"] >= conf:            # not yet active: cannot be joined
                 continue
+            if r - L["rank"] > clu_piv:      # too far back in the pivot list
+                continue
             d = abs(L["p"] - price)
-            if d <= L["t"] and (bestd is None or d < bestd):
+            if d <= L["cb"] and (bestd is None or d < bestd):
                 best, bestd = L, d
         if best is not None:
             best["mb"].append(conf)          # cluster grows; anchor unchanged
+            best["rank"] = r
             continue
-        L = {"p": price, "t": tol, "typ": typ, "pivot": p, "conf": conf,
-             "mb": [conf], "id": len(levels)}
+        L = {"p": price, "cb": cb, "typ": typ, "pivot": p, "conf": conf,
+             "mb": [conf], "rank": r, "id": len(levels)}
         levels.append(L)
         idx = bisect.bisect_left(prices, price)
         prices.insert(idx, price); objs.insert(idx, L)
@@ -205,6 +220,9 @@ def randomise(levels, A, s: Series, seed: int):
     The offset (price - close[conf]) / ATR[conf] is shuffled among levels of
     the same type, which preserves the ATR-scaled distance-from-market
     distribution and destroys the fact that the price was ever a pivot.
+    A pivot high always sits above close[conf] by construction (the `ln` bars
+    after it all have lower highs), so the sign of the offset is preserved
+    automatically and a random buyside level is still above the market.
     """
     rng = random.Random(seed)
     out = []
@@ -214,23 +232,30 @@ def randomise(levels, A, s: Series, seed: int):
         rng.shuffle(offs)
         for L, off in zip(grp, offs):
             out.append({"p": s.c[L["conf"]] + off * A[L["conf"]],
-                        "t": L["t"], "typ": typ, "pivot": L["pivot"],
+                        "cb": L["cb"], "typ": typ, "pivot": L["pivot"],
                         "conf": L["conf"], "mb": list(L["mb"]),
-                        "id": L["id"]})
+                        "rank": L["rank"], "id": L["id"]})
     out.sort(key=lambda L: L["conf"])
     return out
 
 
 # ---------------------------------------------------------------- touches
-def scan_touches(s: Series, A, levels, warmup=WARMUP, K=K_COOL):
+def scan_touches(s: Series, A, levels, warmup=WARMUP, K=K_COOL,
+                 tol_atr=TOUCH_TOL):
     """One forward pass. At bar i: activate levels confirmed at i-1, record
-    touches using state as of i-1, THEN update swept/broken with bar i."""
+    touches using state as of i-1, THEN update swept/broken with bar i.
+
+    The touch tolerance is tol_atr * ATR[i] -- deliberately NOT the LuxAlgo
+    cluster band. The cluster band is +-0.69 ATR wide, so a bar merely entering
+    it need not have come anywhere near the level, and "move 1 ATR away from
+    the level" would then be satisfied by a 0.31 ATR drift. A touch has to mean
+    price actually arrived at the level.
+    """
     n = len(s)
     by_conf = {}
     for L in levels:
         by_conf.setdefault(L["conf"], []).append(L)
     prices, objs = [], []
-    tolmax = 0.0
     state = {}          # id -> 0 intact, 1 swept, 2 broken
     ntouch = {}         # id -> touches so far
     lastt = {}          # id -> bar of last registered touch
@@ -241,21 +266,22 @@ def scan_touches(s: Series, A, levels, warmup=WARMUP, K=K_COOL):
             idx = bisect.bisect_left(prices, L["p"])
             prices.insert(idx, L["p"]); objs.insert(idx, L)
             state[L["id"]] = 0; ntouch[L["id"]] = 0; lastt[L["id"]] = None
-            if L["t"] > tolmax:
-                tolmax = L["t"]
         if not prices:
             continue
         hi, lo, pc = s.h[i], s.l[i], s.c[i - 1]
         a = A[i]
-        q0 = bisect.bisect_left(prices, lo - tolmax)
-        q1 = bisect.bisect_right(prices, hi + tolmax)
-        record = (i >= warmup and a is not None and a > 0 and i >= TREND_N + 1)
+        if a is None or a <= 0:
+            continue
+        T = tol_atr * a
+        q0 = bisect.bisect_left(prices, lo - T)
+        q1 = bisect.bisect_right(prices, hi + T)
+        record = (i >= warmup and i >= TREND_N + 1)
         trend = 0
         if record:
             d = s.c[i] - s.c[i - TREND_N]
             trend = 1 if d > 0 else (-1 if d < 0 else 0)
         for k in range(q0, q1):
-            L = objs[k]; P = L["p"]; T = L["t"]; lid = L["id"]
+            L = objs[k]; P = L["p"]; lid = L["id"]
             if record and hi >= P - T and lo <= P + T:
                 ad = 1 if pc < P - T else (-1 if pc > P + T else 0)
                 lt = lastt[lid]
