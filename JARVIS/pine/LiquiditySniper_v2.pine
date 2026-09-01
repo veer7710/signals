@@ -1,0 +1,424 @@
+//@version=6
+// ============================================================================
+//  LIQUIDITY SNIPER v2  —  reaction memory
+//  Levels · clustered zones · sweep vs break · "price has been here before"
+// ============================================================================
+//
+//  WHAT THIS ANSWERS
+//  Veer: "we can be able to react to previous levels we need to see if price
+//  is near a price where it previously reacted too".
+//
+//  Almost every liquidity indicator draws a line at a swing and forgets it.
+//  This one keeps a MEMORY of what happened at each price: how many times
+//  price arrived there, how many of those arrivals produced a real move away,
+//  how big that move was, and whether the level has since been cut through.
+//  A price that has turned the market three times is a different object from
+//  a random swing high, and only one of them deserves a line on the chart.
+//
+//  WHAT IT INHERITS FROM THE TWO LUXALGO SCRIPTS
+//   - "Buyside & Sellside Liquidity": a zone is only drawn where SEVERAL
+//     pivots cluster together, and it is drawn with WIDTH rather than as a
+//     line. Price reacts near a level, not on it.
+//   - "Liquidity Sweeps": a WICK through a level (pierced, closed back) and a
+//     CLOSE through it are different events and are tracked separately.
+//  Both are CC BY-NC-SA 4.0, (c) LuxAlgo. The ideas are theirs; the code here
+//  is written from scratch and the reaction memory is not in either of them.
+//
+//  WHAT IS MEASURED AND WHAT IS NOT — read before trusting a signal
+//  Already measured in this project, on 10,000+ sweep events across GOLD,
+//  US500, EURUSD and GBPUSD, first-touch resolution, ties counted as losses:
+//      FADE the sweep (the retail assumption) : 44.5% win at 1R, GOLD 15m
+//      a coin flip at the same bars           : 49.2%
+//      FOLLOW the sweep                       : 54.1%
+//  FOLLOW beat FADE on 5 of 5 markets. Fading was WORSE THAN RANDOM. That is
+//  why this script defaults to follow-the-break and treats a rejection as the
+//  weaker of the two signals rather than the headline.
+//
+//  NOT yet measured: whether the reaction memory below actually predicts
+//  anything. Reaction counts, cluster sizes and level ages are being tested
+//  as this ships. Until those numbers exist the scoring here is a HYPOTHESIS
+//  drawn on the chart, not a finding. It is labelled UNPROVEN in the panel
+//  and it should stay labelled that way until the numbers say otherwise.
+// ============================================================================
+
+indicator("Liquidity Sniper v2", "LIQ v2", overlay = true,
+     max_lines_count = 500, max_boxes_count = 500, max_labels_count = 500)
+
+// ---------------------------------------------------------------- inputs ---
+gL = "LEVELS"
+swing    = input.int(5, "Swing size (bars either side)", minval = 1, maxval = 50, group = gL,
+     tooltip = "A pivot needs this many bars on both sides. It therefore CONFIRMS this many bars late, which is not a delay that can be removed - it is what makes the pivot real rather than provisional.")
+maxLv    = input.int(40, "Most levels to keep", minval = 5, maxval = 120, group = gL)
+tolAtr   = input.float(0.25, "Near a level means within (x ATR)", minval = 0.02, maxval = 3.0, step = 0.01, group = gL,
+     tooltip = "Price reacts NEAR a level, not on it. An exact-touch rule fires almost never and misses the reaction it was built to catch.")
+brkAtr   = input.float(0.20, "Broken once closed this far past (x ATR)", minval = 0.0, maxval = 3.0, step = 0.05, group = gL)
+ageBars  = input.int(1500, "Forget a level after this many bars", minval = 50, maxval = 20000, group = gL,
+     tooltip = "In BARS, deliberately. Flip and pivot density are per-bar properties; converting this to minutes made an equivalent setting meaningless on M1 once already.")
+
+gR = "REACTION MEMORY"
+reactAtr = input.float(1.0, "A reaction is a move away of (x ATR)", minval = 0.2, maxval = 6.0, step = 0.1, group = gR)
+reactWin = input.int(12, "   ...within this many bars of the touch", minval = 2, maxval = 100, group = gR)
+touchCool= input.int(6, "Bars before the same level can be touched again", minval = 1, maxval = 100, group = gR,
+     tooltip = "Without this, one slow approach across eight bars is counted as eight separate touches and the memory becomes meaningless.")
+minReact = input.int(1, "Only draw levels with at least this many reactions", minval = 0, maxval = 10, group = gR)
+
+gZ = "ZONES  (the LuxAlgo clustering idea)"
+useZone  = input.bool(true, "Merge nearby levels into a zone", group = gZ)
+clustAtr = input.float(0.35, "   merge when within (x ATR)", minval = 0.05, maxval = 3.0, step = 0.05, group = gZ)
+minClust = input.int(2, "   a zone needs at least this many pivots", minval = 1, maxval = 10, group = gZ,
+     tooltip = "LuxAlgo's Buyside & Sellside Liquidity requires three (count > 2). Whether the third pivot actually earns its place is being measured; until then this is adjustable and defaults to two.")
+
+gM = "HIGHER TIMEFRAMES  (M15 -> M5 -> M1)"
+useMtf   = input.bool(true, "Pull levels from higher timeframes", group = gM,
+     tooltip = "Veer's cascade: M15 finds the liquidity, M5 frames the setup, M1 times the entry. On an M1 chart this adds M5 and M15 pivots to the same memory, tagged by origin.")
+tf1      = input.timeframe("5",  "   timeframe A", group = gM)
+tf2      = input.timeframe("15", "   timeframe B", group = gM)
+
+gS = "SIGNALS"
+showSig  = input.bool(true, "BUY / SELL markers", group = gS)
+sigMode  = input.string("Follow the break", "On a level, act by", options = ["Follow the break", "Fade the rejection", "Both"], group = gS,
+     tooltip = "Follow is the default because it is the only one with evidence: it beat fading on 5 of 5 markets tested, and fading was worse than a coin flip. Fade is offered so it can be tested on your own fills, not because it is recommended.")
+minScore = input.int(2, "Only signal at levels scoring at least", minval = 0, maxval = 10, group = gS)
+sigCool  = input.int(10, "Bars between signals", minval = 1, maxval = 200, group = gS)
+
+gV = "LOOK"
+showZone = input.bool(true, "Zones", group = gV)
+showLine = input.bool(true, "Level lines", group = gV)
+showLab  = input.bool(true, "Labels", group = gV)
+showNear = input.bool(true, "Warn when price is near a remembered level", group = gV)
+showPan  = input.bool(true, "Panel", group = gV)
+cSup     = input.color(color.new(#089981, 0), "Support", group = gV)
+cRes     = input.color(color.new(#f23645, 0), "Resistance", group = gV)
+cDead    = input.color(color.new(#787b86, 60), "Broken", group = gV)
+
+// ------------------------------------------------------------------ core ---
+atr = ta.atr(14)
+tol = atr * tolAtr
+n   = bar_index
+
+// --------------------------------------------------------------- the type ---
+// One remembered price. `reacts` is the field the whole script exists for:
+// how many times price arrived here and was actually turned away.
+type Lvl
+    float px
+    int   born
+    int   dir        // +1 from a high (resistance), -1 from a low (support)
+    int   src        // 0 chart, 1 timeframe A, 2 timeframe B
+    int   members    // pivots merged into this level
+    int   touches
+    int   reacts
+    float best       // biggest move it ever produced, in ATR
+    bool  swept      // wicked through and closed back
+    bool  broken     // closed through
+    int   lastTouch
+    int   pendBar    // bar the current approach started, -1 if none
+    float pendExt    // extreme reached during that approach
+    line  ln
+    box   bz
+    label lb
+
+var array<Lvl> LV = array.new<Lvl>()
+
+// ------------------------------------------------------------- functions ---
+// Pine is single pass: every function must be defined before it is called.
+
+// How good is this remembered price? Deliberately simple and deliberately
+// additive - a score built from three readings that can each be checked
+// against the chart by eye, rather than a weighting nobody can audit.
+scoreOf(int reacts, int members, float best, bool broken) =>
+    int sc = 0
+    sc := sc + math.min(reacts, 3)
+    sc := sc + (members >= minClust ? 1 : 0)
+    sc := sc + (best >= reactAtr * 2 ? 1 : 0)
+    broken ? 0 : sc
+
+colOf(int dir, bool broken) =>
+    broken ? cDead : (dir > 0 ? cRes : cSup)
+
+// Merge a newly confirmed pivot into an existing level if it lands within
+// clustAtr of one, otherwise return -1. This is the clustering idea from
+// LuxAlgo's Buyside & Sellside Liquidity, done incrementally as pivots
+// arrive instead of by rescanning a fixed history every bar.
+findNear(float px, int dir) =>
+    int hit = -1
+    if array.size(LV) > 0
+        for i = 0 to array.size(LV) - 1
+            Lvl L = array.get(LV, i)
+            if hit == -1 and L.dir == dir and not L.broken
+                if math.abs(L.px - px) <= atr * clustAtr
+                    hit := i
+    hit
+
+// ------------------------------------------------------------ new pivots ---
+ph = ta.pivothigh(swing, swing)
+pl = ta.pivotlow(swing, swing)
+
+// The move a pivot produced in the bars immediately after it. Available at
+// confirmation time because those bars have already closed - the pivot is
+// confirmed `swing` bars late, and this reads exactly those `swing` bars.
+hiRun = ta.highest(high, swing)
+loRun = ta.lowest(low, swing)
+
+f_mtf() =>
+    [ta.pivothigh(swing, swing), ta.pivotlow(swing, swing), ta.atr(14)]
+
+[ph1, pl1, a1] = request.security(syminfo.tickerid, tf1, f_mtf(), lookahead = barmerge.lookahead_off)
+[ph2, pl2, a2] = request.security(syminfo.tickerid, tf2, f_mtf(), lookahead = barmerge.lookahead_off)
+
+addLevel(float px, int dir, int src, float strength) =>
+    int at = findNear(px, dir)
+    if at >= 0
+        Lvl L = array.get(LV, at)
+        L.members := L.members + 1
+        L.px := (L.px * (L.members - 1) + px) / L.members
+        L.best := math.max(L.best, strength)
+    else
+        array.unshift(LV, Lvl.new(px, n, dir, src, 1, 0, 0, strength,
+             false, false, -9999, -1, na, na, na, na))
+    true
+
+// A pivot high's strength is how far price fell away from it in the bars that
+// confirmed it; a pivot low's is how far it rose. Divided by ATR so the number
+// means the same thing on M1 as on M15.
+strHi = atr > 0 ? (ph - loRun) / atr : 0.0
+strLo = atr > 0 ? (hiRun - pl) / atr : 0.0
+
+if not na(ph)
+    addLevel(ph, 1, 0, strHi)
+if not na(pl)
+    addLevel(pl, -1, 0, strLo)
+
+if useMtf
+    if not na(ph1) and ph1 != ph1[1]
+        addLevel(ph1, 1, 1, 0.0)
+    if not na(pl1) and pl1 != pl1[1]
+        addLevel(pl1, -1, 1, 0.0)
+    if not na(ph2) and ph2 != ph2[1]
+        addLevel(ph2, 1, 2, 0.0)
+    if not na(pl2) and pl2 != pl2[1]
+        addLevel(pl2, -1, 2, 0.0)
+
+// -------------------------------------------------- the state machine ------
+// Every level, every bar: has price arrived, has it been turned away, has it
+// been cut through. All three are decided on bars that have already closed.
+var int  lastSigBar = -9999
+var bool sigBuy  = false
+var bool sigSell = false
+var int  nearCount = 0
+var float nearPx = na
+var int  nearScore = 0
+
+sigBuy := false
+sigSell := false
+nearCount := 0
+nearPx := na
+nearScore := 0
+
+if array.size(LV) > 0
+    for i = array.size(LV) - 1 to 0
+        Lvl L = array.get(LV, i)
+
+        // ---- retire: too old, or too far behind price to matter
+        bool stale = (n - L.born) > ageBars
+        if stale
+            if not na(L.ln)
+                line.delete(L.ln)
+            if not na(L.bz)
+                box.delete(L.bz)
+            if not na(L.lb)
+                label.delete(L.lb)
+            array.remove(LV, i)
+            continue
+
+        // ---- BROKEN: a CLOSE through it, by more than noise
+        bool closedThru = L.dir > 0 ? (close > L.px + atr * brkAtr) : (close < L.px - atr * brkAtr)
+        if closedThru and not L.broken
+            L.broken := true
+            L.pendBar := -1
+            // FOLLOW the break. This is the direction with evidence behind it.
+            if showSig and (sigMode != "Fade the rejection")
+                if scoreOf(L.reacts, L.members, L.best, false) >= minScore
+                 and n - lastSigBar >= sigCool
+                    if L.dir > 0
+                        sigBuy := true
+                    else
+                        sigSell := true
+                    lastSigBar := n
+
+        // ---- SWEPT: a WICK through it that closed back on the original side
+        bool wickThru = L.dir > 0 ? (high > L.px and close < L.px) : (low < L.px and close > L.px)
+        if wickThru and not L.broken
+            L.swept := true
+
+        // ---- TOUCH: price entered the tolerance band, not too soon after
+        //      the last time it did. Without the cooldown one slow approach
+        //      across eight bars counts as eight touches.
+        bool inBand = (high >= L.px - tol) and (low <= L.px + tol)
+        if inBand and not L.broken and (n - L.lastTouch) >= touchCool
+            L.touches := L.touches + 1
+            L.lastTouch := n
+            L.pendBar := n
+            L.pendExt := L.dir > 0 ? high : low
+
+        // ---- REACTION: did that touch actually turn price away?
+        if L.pendBar >= 0 and not L.broken
+            L.pendExt := L.dir > 0 ? math.max(L.pendExt, high) : math.min(L.pendExt, low)
+            float away = L.dir > 0 ? (L.px - low) : (high - L.px)
+            if atr > 0 and away >= reactAtr * atr
+                L.reacts := L.reacts + 1
+                L.best := math.max(L.best, away / atr)
+                L.pendBar := -1
+                // FADE the rejection. Off by default: fading measured WORSE
+                // than a coin flip on every market tested. Present to be
+                // tested, not because it is recommended.
+                if showSig and (sigMode != "Follow the break")
+                    if scoreOf(L.reacts, L.members, L.best, false) >= minScore
+                     and n - lastSigBar >= sigCool
+                        if L.dir > 0
+                            sigSell := true
+                        else
+                            sigBuy := true
+                        lastSigBar := n
+            else if (n - L.pendBar) > reactWin
+                L.pendBar := -1
+
+        // ---- is price near a remembered price RIGHT NOW?
+        int sc = scoreOf(L.reacts, L.members, L.best, L.broken)
+        if not L.broken and L.reacts >= minReact
+            if math.abs(close - L.px) <= tol
+                nearCount := nearCount + 1
+                if sc > nearScore
+                    nearScore := sc
+                    nearPx := L.px
+
+        array.set(LV, i, L)
+
+// ------------------------------------------------------------- trimming ----
+// Keep the best, not the newest. A level that has turned price three times is
+// worth more chart space than one that confirmed twenty bars ago.
+if array.size(LV) > maxLv
+    int worstAt = 0
+    int worstSc = 99
+    for i = 0 to array.size(LV) - 1
+        Lvl L = array.get(LV, i)
+        int sc = scoreOf(L.reacts, L.members, L.best, L.broken)
+        if sc < worstSc
+            worstSc := sc
+            worstAt := i
+    Lvl W = array.get(LV, worstAt)
+    if not na(W.ln)
+        line.delete(W.ln)
+    if not na(W.bz)
+        box.delete(W.bz)
+    if not na(W.lb)
+        label.delete(W.lb)
+    array.remove(LV, worstAt)
+
+// ------------------------------------------------------------- drawing -----
+// Drawings are created and then MUTATED, never created inside a ternary:
+// Pine evaluates both branches of a ternary, so a drawing in one leaks an
+// object every bar. That bug has already been fixed once in this project.
+if barstate.islast and array.size(LV) > 0
+    for i = 0 to array.size(LV) - 1
+        Lvl L = array.get(LV, i)
+        int sc = scoreOf(L.reacts, L.members, L.best, L.broken)
+        bool worth = sc >= 0 and L.reacts >= minReact
+        color c = colOf(L.dir, L.broken)
+
+        if showLine and worth
+            if na(L.ln)
+                L.ln := line.new(L.born, L.px, n + 6, L.px, color = c, width = 1)
+            else
+                line.set_xy1(L.ln, L.born, L.px)
+                line.set_xy2(L.ln, n + 6, L.px)
+                line.set_color(L.ln, c)
+                line.set_width(L.ln, sc >= 3 ? 2 : 1)
+
+        if showZone and useZone and worth and L.members >= minClust
+            float top = L.px + tol
+            float bot = L.px - tol
+            if na(L.bz)
+                L.bz := box.new(L.born, top, n + 6, bot,
+                     border_color = color.new(c, 70), bgcolor = color.new(c, 88))
+            else
+                box.set_lefttop(L.bz, L.born, top)
+                box.set_rightbottom(L.bz, n + 6, bot)
+                box.set_bgcolor(L.bz, color.new(c, L.broken ? 94 : 88))
+                box.set_border_color(L.bz, color.new(c, 70))
+
+        if showLab and worth and sc >= 2
+            string txt = str.tostring(L.reacts) + "x"
+                 + (L.members >= minClust ? " z" + str.tostring(L.members) : "")
+                 + (L.src == 1 ? " " + tf1 : (L.src == 2 ? " " + tf2 : ""))
+                 + (L.swept and not L.broken ? " swept" : "")
+            if na(L.lb)
+                L.lb := label.new(n + 6, L.px, txt, style = label.style_label_left,
+                     color = color.new(c, 85), textcolor = c, size = size.tiny)
+            else
+                label.set_xy(L.lb, n + 6, L.px)
+                label.set_text(L.lb, txt)
+                label.set_textcolor(L.lb, c)
+                label.set_color(L.lb, color.new(c, 85))
+
+        array.set(LV, i, L)
+
+// -------------------------------------------------------------- signals ----
+plotshape(showSig and sigBuy, "BUY", shape.labelup, location.belowbar,
+     color.new(cSup, 0), text = "BUY", textcolor = color.white, size = size.small)
+plotshape(showSig and sigSell, "SELL", shape.labeldown, location.abovebar,
+     color.new(cRes, 0), text = "SELL", textcolor = color.white, size = size.small)
+
+// A quiet marker, not an arrow: price is sitting on a price it has been
+// turned away from before. It is information, not an instruction.
+plotshape(showNear and nearCount > 0 and not sigBuy and not sigSell,
+     "at a remembered level", shape.circle, location.absolute,
+     color.new(color.orange, 40), size = size.tiny)
+
+alertcondition(sigBuy, "LIQ v2 BUY", "Liquidity Sniper v2: BUY")
+alertcondition(sigSell, "LIQ v2 SELL", "Liquidity Sniper v2: SELL")
+alertcondition(nearCount > 0, "LIQ v2 near a remembered level",
+     "Price is at a level it has reacted to before")
+
+// ---------------------------------------------------------------- panel ----
+var table P = table.new(position.top_right, 2, 8, border_width = 1)
+
+if showPan and barstate.islast
+    int nLv = array.size(LV)
+    int nZone = 0
+    int nStrong = 0
+    if nLv > 0
+        for i = 0 to nLv - 1
+            Lvl L = array.get(LV, i)
+            if L.members >= minClust and not L.broken
+                nZone := nZone + 1
+            if scoreOf(L.reacts, L.members, L.best, L.broken) >= 3
+                nStrong := nStrong + 1
+
+    table.cell(P, 0, 0, "LIQUIDITY SNIPER v2", text_color = color.white,
+         bgcolor = color.new(color.blue, 40), text_size = size.small)
+    table.cell(P, 1, 0, timeframe.period, text_color = color.white,
+         bgcolor = color.new(color.blue, 40), text_size = size.small)
+
+    table.cell(P, 0, 1, "levels remembered", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 1, str.tostring(nLv), text_color = color.white, text_size = size.tiny)
+
+    table.cell(P, 0, 2, "clustered zones", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 2, str.tostring(nZone), text_color = color.white, text_size = size.tiny)
+
+    table.cell(P, 0, 3, "scoring 3+", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 3, str.tostring(nStrong),
+         text_color = nStrong > 0 ? color.lime : color.silver, text_size = size.tiny)
+
+    table.cell(P, 0, 4, "price at a known level", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 4, nearCount > 0 ? str.tostring(nearCount) + " (score "
+         + str.tostring(nearScore) + ")" : "no",
+         text_color = nearCount > 0 ? color.orange : color.silver, text_size = size.tiny)
+
+    table.cell(P, 0, 5, "acting by", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 5, sigMode, text_color = color.white, text_size = size.tiny)
+
+    table.cell(P, 0, 6, "evidence", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 6, "follow 54.1% vs fade 44.5%", text_color = color.white, text_size = size.tiny)
+
+    table.cell(P, 0, 7, "reaction scoring", text_color = color.silver, text_size = size.tiny)
+    table.cell(P, 1, 7, "UNPROVEN - being tested", text_color = color.orange, text_size = size.tiny)

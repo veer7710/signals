@@ -5,6 +5,35 @@ here, nothing measured can honestly describe what you actually do — and that
 is the single biggest gap in the whole project, bigger than any indicator
 setting.
 
+## The easy way — no Python, no install (added 2026-09-01)
+
+`JARVIS/ea/tools/ExportHistory.mq5` does the same job from inside MT5 itself.
+
+1. Put `ExportHistory.mq5` in **MQL5/Scripts/** and press **F7** to compile.
+2. Open a **XAUUSD** chart. Press **Home** and hold it for a few seconds on
+   each of M1, M5 and M15 — MT5 only exports bars it has actually downloaded,
+   and the script prints how many it found so you can tell if it worked.
+3. **Drag the script onto the chart.** Tick "Allow" if it asks.
+4. Files appear in **MQL5/Files/** (reach it with *File > Open Data Folder*)
+   named `GOLD_M1.json`, `GOLD_M5.json`, `GOLD_M15.json`. Send those.
+
+They are already in the exact format `JARVIS/research/engine.py` loads, so
+they drop straight into `data/` and every study in the repo re-runs on the
+timeframes you actually trade — with no code changes.
+
+**Why this matters more than any indicator setting:** every experiment in this
+project, E-001 through E-053, ran on 15m and 1h. You trade M1. Every M1 number
+I have given you is an extrapolation and is labelled as one. This file ends
+that.
+
+## The other way — Python, and it also gets your REAL broker costs
+
+Worth doing as well, because it reads the live spread and commission from
+your PU Prime account. E-053 showed that round-trip cost as a fraction of the
+stop separates the winning markets from the losing ones almost perfectly, and
+the gold cost I have been assuming (spread 0.30, $7/lot) is an estimate. If
+PU Prime is worse than that at the hours you trade, several conclusions move.
+
 ## Do this
 
 1. Open MetaTrader 5 and log in. Leave it open.

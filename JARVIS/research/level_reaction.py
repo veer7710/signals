@@ -34,16 +34,25 @@ CLUSTER   the LuxAlgo "Buyside & Sellside Liquidity" idea Veer runs: a zone
           is only drawn when THREE OR MORE pivots sit within +-(ATR/margin)
           of each other, margin 1.45 (their default is 10/6.9 = 1.449).
           Implemented here as: a newly-confirmed pivot JOINS the nearest
-          active same-type level whose band contains it, otherwise it
-          creates a new level. Cluster size at bar i = the number of member
-          pivots CONFIRMED ON OR BEFORE bar i-1. Cluster size 1 is a bare
-          pivot, which LuxAlgo would not draw.
+          same-type level whose +-ATR/1.45 band contains it AND whose most
+          recent member is within the last 20 confirmed pivots of that type;
+          otherwise it creates a new level. The 20-pivot bound is LuxAlgo's
+          own bounded scan; without it every price merges into a handful of
+          mega-clusters after a year and the analysis becomes meaningless.
+          Cluster size at bar i = member pivots CONFIRMED ON OR BEFORE i-1.
+          Cluster size 1 is a bare pivot, which LuxAlgo would not draw.
 
-TOUCH     bar i's range intersects the band [P-T, P+T] (P = level price,
-          T = its tolerance), AND close[i-1] was strictly OUTSIDE that band
-          (so we know which side price approached from), AND no touch of the
-          SAME level was registered in the previous K=20 bars (so one
-          approach is not counted as twenty touches).
+TOUCH     bar i's range intersects [P-T, P+T] where T = 0.15*ATR[i], AND
+          close[i-1] was strictly OUTSIDE that band (so we know which side
+          price approached from), AND no touch of the SAME level was
+          registered in the previous K=20 bars (so one approach is not
+          counted as twenty touches).
+          T is deliberately NOT the LuxAlgo cluster band. The cluster band is
+          +-0.69 ATR; with a band that wide a "touch" can happen 0.69 ATR away
+          from the level and "move 1 ATR away from the level" is then a 0.31
+          ATR drift, which happens 79% of the time and measures nothing. The
+          first version of this script made exactly that mistake. T is varied
+          over 0.05/0.15/0.30/0.69 ATR in run_tol() so the choice is visible.
 
 REACTION  the direction price came FROM is the rejection direction. Within N
           bars AFTER the touch bar, price moves at least X*ATR AWAY from the
@@ -273,8 +282,14 @@ def scan_touches(s: Series, A, levels, warmup=WARMUP, K=K_COOL,
         if a is None or a <= 0:
             continue
         T = tol_atr * a
-        q0 = bisect.bisect_left(prices, lo - T)
-        q1 = bisect.bisect_right(prices, hi + T)
+        # The window must also cover levels a GAP jumped over: a level between
+        # the previous close and this bar's range is crossed even though the
+        # bar's own range does not reach it. Missing those left such levels
+        # permanently marked 'intact' after price had closed straight through
+        # them. The touch test below is a separate, narrower condition, so
+        # widening this window cannot create a touch.
+        q0 = bisect.bisect_left(prices, min(lo, pc) - T)
+        q1 = bisect.bisect_right(prices, max(hi, pc) + T)
         record = (i >= warmup and i >= TREND_N + 1)
         trend = 0
         if record:
@@ -336,14 +351,15 @@ def score(s: Series, touches, N: int, X: float, Y: float = Y_INVAL):
 
 
 # ------------------------------------------------------------ collection
-def collect(s: Series, ln: int, seeds=REPLICAS):
+def collect(s: Series, ln: int, seeds=REPLICAS, tol=TOUCH_TOL):
     """Real touches, and REPLICAS sets of matched-random touches."""
     A = engine.atr(s, 14)
     levels = build_levels(s, A, ln)
-    real = scan_touches(s, A, levels)
+    real = scan_touches(s, A, levels, tol_atr=tol)
     ctrl = []
     for r in range(seeds):
-        ctrl.append(scan_touches(s, A, randomise(levels, A, s, 1000 + r)))
+        ctrl.append(scan_touches(s, A, randomise(levels, A, s, 1000 + r),
+                                 tol_atr=tol))
     return A, levels, real, ctrl
 
 
@@ -379,6 +395,29 @@ def tally(touches, res, edges, keyf):
                 n += 1; k += r
         out.append((lab, n, k))
     return out
+
+
+def dedup_bars(touches, s: Series):
+    """Keep at most ONE touch per bar — the level nearest that bar's close.
+
+    Without this, a bar that pushes into a shelf of five levels contributes
+    five outcomes driven by the SAME price action, which inflates n without
+    adding information and makes every interval too narrow. Applied
+    identically to the real and the control arms.
+    """
+    best = {}
+    for t in touches:
+        d = abs(t["P"] - s.c[t["i"]])
+        cur = best.get(t["i"])
+        if cur is None or d < cur[0]:
+            best[t["i"]] = (d, t)
+    return [v[1] for _, v in sorted(best.items())]
+
+
+def stouffer(zs):
+    """Combine per-market z scores. Markets are not independent either (FX
+    pairs share USD), so this too is optimistic."""
+    return sum(zs) / math.sqrt(len(zs)) if zs else 0.0
 
 
 def market_rows(sym, tf, ln, N, X):
@@ -495,8 +534,15 @@ def run_all():
     print("=" * 100)
 
     store = {}
+    series_of = {}
+    zs = []
+    ns = []
     print(f"\n  {'market':<14}{'bars':>7}{'levels':>8}{'touches':>9}"
-          f"{'REAL %':>9}{'95% int':>15}{'RAND %':>9}{'diff':>8}{'z':>7}")
+          f"{'rndTch':>8}{'REAL %':>9}{'95% int':>15}{'RAND %':>9}"
+          f"{'diff':>8}{'z':>7}")
+    print("  'touches' vs 'rndTch' (per replicate) is itself a result: if real "
+          "levels were\n  MAGNETS they would be visited more often than random "
+          "prices at the same distance.")
     for sym, tf in COMBOS:
         s, levels, real, rres, ctrl, cres = market_rows(sym, tf, ln, N, X)
         kr, nr = sum(rres), len(rres)
@@ -506,11 +552,68 @@ def run_all():
                   f"{'too few':>9}")
             continue
         store[f"{sym} {tf}"] = (real, rres, ctrl, cres)
+        series_of[f"{sym} {tf}"] = s
+        zs.append(two_prop_z(kr, nr, kc, nc)); ns.append(nr)
         l, u = wilson(kr, nr)
         print(f"  {sym+' '+tf:<14}{len(s):>7}{len(levels):>8}{nr:>9}"
+              f"{nc//REPLICAS:>8}"
               f"{100*kr/nr:>8.1f}%{f'{100*l:.1f}-{100*u:.1f}%':>15}"
               f"{100*kc/nc:>8.1f}%{100*(kr/nr-kc/nc):>+8.1f}"
               f"{two_prop_z(kr,nr,kc,nc):>+7.2f}")
+
+    # ---- period split: an effect that only exists in one half of the data
+    # is a regime story, and an absent effect that appears in one half is the
+    # multiple-comparison problem in miniature.
+    print("\n  --- PERIOD SPLIT (first half / second half of each series) "
+          + "-" * 8)
+    print("  cell = real % minus matched-random %, points")
+    print(f"    {'market':<14}{'n 1st':>9}{'1st half':>11}{'n 2nd':>9}"
+          f"{'2nd half':>11}")
+    for name, (real, rres, ctrl, cres) in store.items():
+        mid = (real[0]["i"] + real[-1]["i"]) // 2 if real else 0
+        line = [f"    {name:<14}"]
+        for lohi in (lambda t: t["i"] <= mid, lambda t: t["i"] > mid):
+            kr = nr = kc = nc = 0
+            for t, r in zip(real, rres):
+                if lohi(t): nr += 1; kr += r
+            for c, cr in zip(ctrl, cres):
+                for t, r in zip(c, cr):
+                    if lohi(t): nc += 1; kc += r
+            if nr < 30 or nc < 30:
+                line.append(f"{nr:>9}{'-':>11}")
+            else:
+                line.append(f"{nr:>9}{100*(kr/nr-kc/nc):>+11.1f}")
+        print("".join(line))
+
+    print(f"\n  POOLED across the 8 markets (Stouffer): z = "
+          f"{stouffer(zs):+.2f}. Positive would favour real levels.")
+    print(f"  Sum of touches {sum(ns)}. This z is OPTIMISTIC twice over: "
+          f"touches inside a market\n  overlap heavily, and the 4 FX/index "
+          f"series are not independent of each other.")
+
+    # ---- de-duplicated arm: one touch per bar, nearest level to the close
+    print("\n  --- ROBUSTNESS: at most ONE touch per bar " + "-" * 26)
+    print(f"    {'market':<14}{'n real':>9}{'REAL %':>9}{'RAND %':>9}"
+          f"{'diff':>8}{'z':>7}")
+    dz = []
+    for name, (real, rres, ctrl, cres) in store.items():
+        ss = series_of[name]
+        rr = [(t, r) for t, r in zip(real, rres)]
+        keep = set(id(t) for t in dedup_bars(real, ss))
+        kr = sum(r for t, r in rr if id(t) in keep)
+        nr = sum(1 for t, r in rr if id(t) in keep)
+        kc = nc = 0
+        for c, cr in zip(ctrl, cres):
+            kp = set(id(t) for t in dedup_bars(c, ss))
+            for t, r in zip(c, cr):
+                if id(t) in kp:
+                    nc += 1; kc += r
+        if nr < 30 or nc < 30:
+            continue
+        z = two_prop_z(kr, nr, kc, nc); dz.append(z)
+        print(f"    {name:<14}{nr:>9}{100*kr/nr:>8.1f}%{100*kc/nc:>8.1f}%"
+              f"{100*(kr/nr-kc/nc):>+8.1f}{z:>+7.2f}")
+    print(f"    POOLED (Stouffer) z = {stouffer(dz):+.2f}")
 
     nbuckets = 0
     for key, (title, edges, keyf) in BUCKETS.items():
@@ -518,7 +621,7 @@ def run_all():
         print("  cell = real % minus matched-random % IN THE SAME BUCKET, points")
         labs = [lab for _, _, lab in edges]
         print(f"    {'market':<14}" + "".join(f"{l:>12}" for l in labs))
-        pos = [0] * len(labs); seen = [0] * len(labs)
+        pos = [0] * len(labs); seen = [0] * len(labs); absrow = []
         realpct = [[] for _ in labs]
         for name, (real, rres, ctrl, cres) in store.items():
             tr = tally(real, rres, edges, keyf)
@@ -537,6 +640,16 @@ def run_all():
                 seen[bi] += 1
                 if d > 0: pos[bi] += 1
             print(f"    {name:<14}" + "".join(cells))
+            if key == "age":
+                absrow.append((name, [(lab, n, k) for lab, n, k in tr]))
+        if key == "age":
+            print("\n    ABSOLUTE real reaction % by age (the question as Veer "
+                  "asked it):")
+            print(f"    {'market':<14}" + "".join(f"{l:>12}" for l in labs))
+            for name, tr in absrow:
+                print(f"    {name:<14}" + "".join(
+                    (f"{100*k/n:>12.1f}" if n >= 25 else f"{'-':>12}")
+                    for lab, n, k in tr))
         print(f"    {'real ABOVE rand':<14}"
               + "".join(f"{f'{pos[b]}/{seen[b]}':>12}" for b in range(len(labs))))
         print(f"    {'mean real %':<14}"
@@ -546,14 +659,48 @@ def run_all():
 
     print("\n" + "=" * 100)
     print(f"  MULTIPLE TESTING: {nbuckets} buckets examined in the tables above,")
-    print(f"  plus 36 parameter configurations in run_grid(). Under the null a "
-          f"bucket lands")
+    print(f"  plus 36 parameter configurations in run_grid() and 4 touch "
+          f"tolerances in run_tol().")
+    print(f"  Under the null a bucket lands")
     print(f"  >=7 of 8 on one side with probability 2*9/256 = 7.0%, so about "
           f"{nbuckets*0.070:.1f} such")
     print(f"  cells are expected BY CHANCE ALONE among {nbuckets} buckets. "
           f"Count the ones found")
     print(f"  before believing any of them.")
     print("=" * 100)
+
+
+def run_tol():
+    """Sensitivity to the one definitional choice that is not in the brief:
+    how close price must come for it to count as a touch. 4 more configs."""
+    ln, N, X = PRIMARY["ln"], PRIMARY["N"], PRIMARY["X"]
+    print("=" * 100)
+    print("  E-053  TOUCH-TOLERANCE SENSITIVITY — cell = real % minus "
+          "matched-random %, points")
+    print(f"  pivot len {ln}, reaction {X} ATR within {N} bars. "
+          f"0.69 ATR is the full LuxAlgo cluster band.")
+    print("=" * 100)
+    print(f"\n  {'tol (ATR)':<12}" + "".join(f"{sym[:4]+tf:>11}"
+                                            for sym, tf in COMBOS)
+          + f"{'  mean':>9}{' pos':>6}")
+    for tol in GRID_TOL:
+        cells, diffs, npos, tot = [], [], 0, 0
+        for sym, tf in COMBOS:
+            s = engine.load(sym, tf)
+            A, levels, real, ctrl = collect(s, ln, tol=tol)
+            rres = score(s, real, N, X)
+            kr, nr = sum(rres), len(rres)
+            kc = nc = 0
+            for c in ctrl:
+                cr = score(s, c, N, X); kc += sum(cr); nc += len(cr)
+            if nr < 30 or nc < 30:
+                cells.append(f"{'-':>11}"); continue
+            d = 100 * (kr / nr - kc / nc)
+            diffs.append(d); tot += 1
+            if d > 0: npos += 1
+            cells.append(f"{d:>+11.1f}")
+        m = sum(diffs) / len(diffs) if diffs else 0.0
+        print(f"  {tol:<12}" + "".join(cells) + f"{m:>+9.1f}{f'{npos}/{tot}':>6}")
 
 
 # --------------------------------------------------------------- checks
@@ -620,20 +767,28 @@ def selfcheck():
           f"within {K_COOL} bars  ({bad} violations)")
     fails += bool(bad)
 
-    # 5. the scoring window never reads bar i or earlier.
-    #    Proven by construction (range starts at i+1); re-proven empirically by
-    #    scoring with the touch bar's own data blanked out.
-    import copy
-    s2 = Series(list(s.ts), list(s.o), list(s.h), list(s.l), list(s.c))
-    base = score(s, real, PRIMARY["N"], PRIMARY["X"])
+    # 5. score() must never read a bar at or before the touch bar. Proven by
+    #    construction (the loop starts at i+1) and re-proven here by recording
+    #    every index score() actually touches, through a tracking list.
+    class _Track(list):
+        def __init__(self, v, log):
+            super().__init__(v); self.log = log
+        def __getitem__(self, k):
+            self.log.append(k); return list.__getitem__(self, k)
+    log = []
+    st = Series(s.ts, s.o, _Track(s.h, log), _Track(s.l, log), _Track(s.c, log))
+    worst = None
     for t in real:
-        i = t["i"]
-        s2.h[i] = s2.l[i] = s2.c[i] = s2.o[i] = float("nan")
-    alt = score(s2, real, PRIMARY["N"], PRIMARY["X"])
-    same = sum(1 for a, b in zip(base, alt) if a == b)
-    print(f"  [{'PASS' if same == len(base) else 'FAIL'}]  blanking the touch "
-          f"bar's own OHLC changes 0 outcomes  ({len(base)-same} changed)")
-    fails += (same != len(base))
+        log.clear()
+        score(st, [t], PRIMARY["N"], PRIMARY["X"])
+        if log:
+            d = min(log) - t["i"]
+            if worst is None or d < worst:
+                worst = d
+    ok5 = (worst is None or worst >= 1)
+    print(f"  [{'PASS' if ok5 else 'FAIL'}]  score() never reads a bar at or "
+          f"before the touch bar  (earliest read = touch bar {worst:+d})")
+    fails += (not ok5)
 
     # 6. state at touch is as of i-1: recompute state independently
     bad = 0
@@ -654,14 +809,14 @@ def selfcheck():
     fails += bool(bad)
 
     # 7. RANDOM-WALK NULL — the important one
-    print("\n  RANDOM-WALK NULL (driftless GBM, 3 seeds). Pivots there carry no")
+    print("\n  RANDOM-WALK NULL (driftless GBM, 8 seeds). Pivots there carry no")
     print("  information, so real-minus-random MUST be ~0. Whatever it is, is")
     print("  the bias of this machinery and every real number must be read")
     print("  against it, not against zero.")
     print(f"    {'seed':<8}{'n real':>9}{'real %':>9}{'n rand':>9}"
           f"{'rand %':>9}{'diff':>8}")
     ds = []
-    for sd in (7, 8, 9):
+    for sd in (7, 8, 9, 10, 11, 12, 13, 14):
         rs = _rw(seed=sd)
         RA = engine.atr(rs, 14)
         lv = build_levels(rs, RA, ln)
@@ -676,7 +831,12 @@ def selfcheck():
         ds.append(d)
         print(f"    {sd:<8}{len(rr):>9}{100*sum(rr)/len(rr):>8.1f}%"
               f"{nc:>9}{100*kc/nc:>8.1f}%{d:>+8.1f}")
-    print(f"    mean null offset: {sum(ds)/len(ds):+.2f} points")
+    mu = sum(ds) / len(ds)
+    sd_ = math.sqrt(sum((d - mu) ** 2 for d in ds) / (len(ds) - 1))
+    print(f"    NULL OFFSET: {mu:+.2f} points  (sd {sd_:.2f}, "
+          f"se {sd_/math.sqrt(len(ds)):.2f})")
+    print("    Every real-market difference must be read against THIS, not "
+          "against zero.")
 
     print("\n  " + ("ALL LOOK-AHEAD CHECKS PASSED" if fails == 0
                     else f"{fails} CHECK(S) FAILED — DO NOT TRUST ANY NUMBER"))
@@ -689,6 +849,8 @@ if __name__ == "__main__":
         sys.exit(1 if selfcheck() else 0)
     elif a == "GRID":
         run_grid()
+    elif a == "TOL":
+        run_tol()
     elif a == "ALL":
         run_all()
     else:

@@ -273,6 +273,7 @@ def check_draw_in_ternary(src):
 def check(path):
     src = open(path, encoding="utf-8").read().split("\n")
     declared, problems = set(BUILTIN), []
+    in_type = [False]   # mutable so the loop body can flip it
 
     # pass 1: collect every name this file defines
     for l in src:
@@ -291,6 +292,35 @@ def check(path):
             declared.add(n)
         # loop variables
         m = re.match(r'\s*for\s+([a-zA-Z_]\w*)\s*=', code)
+        if m:
+            declared.add(m.group(1))
+        # ---- USER-DEFINED TYPES (Pine v5+). Added 2026-09-01 after this
+        # checker reported three false alarms on a file that was correct.
+        # A false alarm is not harmless: a checker that cries wolf is a
+        # checker that gets ignored, and being ignored is how F-006 shipped
+        # five times. Three shapes have to be understood:
+        #   type Lvl            -> declares the type name
+        #       float px        -> declares a field name
+        #   Lvl L = array.get() -> an explicitly typed local declaration
+        m = re.match(r'\s*type\s+([A-Za-z_]\w*)\s*$', code)
+        if m:
+            declared.add(m.group(1))
+            in_type[0] = True
+            continue
+        if in_type[0]:
+            # a type body is indented; the first unindented line ends it
+            if code.strip() and not code[:1].isspace():
+                in_type[0] = False
+            else:
+                m = re.match(r'\s+(?:\w+(?:<[^>]*>)?)\s+([A-Za-z_]\w*)', code)
+                if m:
+                    declared.add(m.group(1))
+                continue
+        # an explicitly typed declaration, including a user type
+        m = re.match(r'\s*(?:var\s+|varip\s+)?'
+                     r'(?:int|float|bool|string|color|line|label|box|table|'
+                     r'linefill|array|matrix|map|[A-Z]\w*)'
+                     r'(?:<[^>]*>)?\s+([a-zA-Z_]\w*)\s*(?:=|:=)', code)
         if m:
             declared.add(m.group(1))
 
