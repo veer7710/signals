@@ -64,9 +64,16 @@ showSt   = input.bool(true, "Draw the SuperTrend line", group = gS)
 gC = "CHOP GUARD  (the thing that costs the most money)"
 skipChop = input.bool(true, "Do not trade when the market is chopping", group = gC,
      tooltip = "SuperTrend(7, 1.2) is deliberately tight, which is why it catches moves early - and it is also why it whipsaws when price is going nowhere. A run of flips in a short window is not a series of signals, it is one range being cut up. Every one of those trades pays the spread and most pay the stop. This counts the flips and refuses to trade while they are stacking up.")
-chopMins = input.int(750, "   look back this many MINUTES", minval = 30, maxval = 20000, group = gC)
-chopRaw  = input.int(50, "   or a fixed bar count (auto off)", minval = 10, maxval = 2000, group = gC)
-chopLen  = autoTf ? math.max(10, math.round(chopMins / barMins)) : chopRaw
+// THIS WINDOW IS IN BARS AND MUST STAY IN BARS.
+// Every other length in this script is expressed in minutes and converted,
+// because a 200-period DEMA means 200 minutes on M1 and 50 hours on M15 and
+// those are different indicators. Flip density is the opposite case: the
+// SuperTrend flips at a similar rate PER BAR whatever the timeframe, so
+// converting this one to minutes made it meaningless. At 750 minutes it
+// became a 750-BAR window on M1, and "more than 3 flips in 750 M1 bars" is
+// true essentially always - the guard would have refused every M1 trade.
+// Fixed 2026-09-01. Do not "make this consistent" with the others.
+chopLen  = input.int(50, "Chop window, in BARS (not minutes - see note)", minval = 10, maxval = 2000, group = gC)
 chopMax  = input.int(3,  "   choppy if more than this many flips in that window", minval = 1, maxval = 15, group = gC)
 
 gFl = "FILTERS  (these held out-of-sample)"

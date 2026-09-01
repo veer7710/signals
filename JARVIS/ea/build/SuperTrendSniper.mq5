@@ -64,8 +64,16 @@ CTrade trade;
 //  ENTRY
 //   signal fires, open air ahead ....... take it
 //   signal fires, level in the way ..... REFUSED (InpSkipNoRoom), reason logged
-//   signal fires, market chopping ...... refused; a run of flips is one range
-//                                        being sliced, not a run of setups
+//   signal fires, market chopping ...... refused ONLY if InpUseChopGuard is
+//                                        on, and it is OFF by default. Until
+//                                        2026-09-01 this line claimed a
+//                                        refusal the EA did not implement at
+//                                        all. The guard now exists; the
+//                                        measurement (E-053) does not support
+//                                        switching it on, so it is not on.
+//   spread eats the trade .............. REFUSED (InpUseCostGate). The whole
+//                                        round trip, not just the spread,
+//                                        measured against the stop
 //   want a better price ................ rest a limit InpPullAtr back
 //                                        (InpUseLimitEntry). Measured +0.451R
 //                                        vs +0.321R out-of-sample on GOLD 1h
@@ -187,6 +195,56 @@ input group "=== RISK ==="
 input double InpRiskPct       = 0.50;   // % of equity risked per trade
 input double InpStopAtrMult   = 1.5;    // stop distance in ATR
 input double InpMaxSpreadAtr  = 0.15;   // skip entry if spread > this x ATR
+
+input group "=== COST GATE (E-053: this is the real M1 problem) ==="
+// The old gate looked at the SPREAD only. That is not the cost of a trade -
+// it ignores the commission and both slippages, which on gold add roughly 55%
+// on top of the spread. This gate measures the whole round trip against the
+// stop distance, which is the number that actually separated the winning
+// markets from the losing ones:
+//
+//   market       cost/stop   stop is N x cost   expectancy
+//   GOLD 1h        0.028         35.2x            +0.335R
+//   GOLD 15m       0.039         25.9x            +0.227R
+//   US500 15m      0.067         14.9x            -0.319R
+//   GBPUSD 1h      0.150          6.7x            -0.076R
+//   GBPUSD 15m     0.412          2.4x            -0.344R
+//   EURUSD 15m     0.429          2.3x            -0.356R
+//
+// Extrapolated to M1 gold by the square root of bar duration, cost/stop is
+// 0.15 to 0.22 - four to six times the 15m figure, and level with the FX
+// markets that lose. That is the arithmetic behind "we perform shit in
+// sideways price action": a 24-minute $4.50 range does not contain enough
+// movement to pay for sixteen round trips that each cost a fifth of their
+// own risk. It is not the range that is fatal, it is the toll.
+//
+// This gate is the one part of that the EA can settle WITHOUT a backtest,
+// because it reads the live spread at the moment of the decision.
+input bool   InpUseCostGate   = true;
+input double InpMaxCostFrac   = 0.10;   // refuse if round trip > this x the stop
+input double InpCommPerLot    = 7.0;    // YOUR broker's commission, per lot, round turn
+input double InpSlipPoints    = 5.0;    // expected slippage per side, in points
+
+input group "=== CHOP GUARD (present so it can be tested, not argued about) ==="
+// DEFAULT OFF, and the reason is the measurement, not caution. Across 8
+// market/timeframe combinations, skipping the lowest-efficiency bucket
+// improved total R in 5 of 8 - a coin flip with one extra head. Worse, the
+// PATTERN of who it helps is damning: it took EURUSD 15m from -95.1R to
+// -71.4R and GBPUSD 15m from -90.2R to -54.5R, while taking GOLD 1h from
+// +124.9R to +91.8R and US500 1h from +19.6R to -3.2R.
+//
+// It helps losing systems and hurts winning ones, because it does not select
+// - it removes trades roughly proportionally and drags the result toward
+// zero. A chop filter is not a way to limit loss. It is a way to trade less.
+//
+// It is here because Veer asked for it and because GOLD 15m, the nearest
+// thing to his instrument, did improve (+13.2R). Turn it on to test it on
+// the journal, not because this comment recommends it.
+input bool   InpUseChopGuard  = false;
+input int    InpChopErLen     = 50;     // BARS, never minutes - flip density is per bar
+input double InpMinEffRatio   = 0.08;   // skip below this efficiency ratio
+input int    InpChopFlipLen   = 20;     // bars to count SuperTrend flips over
+input int    InpChopMaxFlips  = 5;      // skip at this many flips or more
 
 input group "=== PROP FIRM GUARDS ==="
 input double InpDailyLossPct  = 3.0;    // stop for the day at this % equity loss
@@ -319,6 +377,11 @@ bool     g_bkArmed     = false;
 // as the current SuperTrend leg (the leg is fresh at every flip, and on M1
 // there are dozens of flips inside one directional run).
 int      g_barsInTrend   = 0;   // bars in the current SuperTrend leg (display)
+// Flip history, newest first. Written by UpdateSuperTrend, read by the chop
+// guard. 256 entries is far more than any window the guard can ask for.
+#define MAX_FLIPHIST 256
+uchar    g_flipHist[MAX_FLIPHIST];
+int      g_flipHistN     = 0;
 int      g_lastSigDir    = 0;   // direction of the last signal that passed the filters
 datetime g_runStartBar   = 0;   // bar of the first signal of this run
 double   g_runStartPx    = 0.0; // close at that bar
@@ -378,6 +441,9 @@ bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
 void   RegisterSignal(int dir);
 int    RunBars();
+double EfficiencyRatio(int len);
+int    FlipsIn(int len);
+double RoundTripCost();
 double RunMoveAtr();
 void   BoxLine(int idx, string txt, color c);
 void   BoxClear();
@@ -565,6 +631,9 @@ void UpdateSuperTrend()
       else if(dir == -1 && c < fLower) dir = 1;    // flip bearish
 
       if(dir != dirPrev) run = 0; else run++;
+
+      // s == 0 is the last CLOSED bar, so g_flipHist[0] is the most recent.
+      if(s < MAX_FLIPHIST) g_flipHist[s] = (dir != dirPrev) ? (uchar)1 : (uchar)0;
    }
 
    if(!seeded) return;
@@ -574,6 +643,7 @@ void UpdateSuperTrend()
    g_stDir       = dir;
    g_stDirPrev   = dirPrev;
    g_barsInTrend = run;
+   g_flipHistN   = MathMin(warm, MAX_FLIPHIST);
    g_stReady     = true;
 }
 
@@ -849,6 +919,29 @@ void TryEntry()
    // the run BEFORE anything reads the risk score.
    RegisterSignal(flipUp ? 1 : -1);
 
+   // CHOP GUARD. Off by default - see the input group for why the measurement
+   // does not support turning it on. Left switchable so the journal can
+   // settle it on Veer's own fills instead of on my 15m data.
+   if(InpUseChopGuard)
+   {
+      double er = EfficiencyRatio(InpChopErLen);
+      if(er < InpMinEffRatio)
+      {
+         SkipLog(sdir, StringFormat("efficiency %.3f over %d bars is below "
+                                    "%.3f - the market is going nowhere",
+                                    er, InpChopErLen, InpMinEffRatio));
+         return;
+      }
+      int fl = FlipsIn(InpChopFlipLen);
+      if(fl >= InpChopMaxFlips)
+      {
+         SkipLog(sdir, StringFormat("%d flips in %d bars - one range being "
+                                    "sliced, not %d setups",
+                                    fl, InpChopFlipLen, fl));
+         return;
+      }
+   }
+
    // --- session filter
    if(InpUseSession)
    {
@@ -865,6 +958,23 @@ void TryEntry()
    if(atr <= 0) return;
 
    double stopDist = InpStopAtrMult * atr;
+
+   // COST GATE. The one thing here that needs no backtest: the EA reads the
+   // spread that exists right now. If the whole round trip eats more than
+   // InpMaxCostFrac of the stop, the trade is mostly a fee and is refused.
+   if(InpUseCostGate)
+   {
+      double cost = RoundTripCost();
+      double frac = (stopDist > 0.0) ? cost / stopDist : 1.0;
+      if(frac > InpMaxCostFrac)
+      {
+         SkipLog(sdir, StringFormat("cost %.5f is %.1f%% of the %.5f stop, "
+                                    "over the %.1f%% ceiling",
+                                    cost, 100.0 * frac, stopDist,
+                                    100.0 * InpMaxCostFrac));
+         return;
+      }
+   }
 
    // NO ROOM, NO TRADE. A signal pointing straight into a level a few points
    // away is not the same trade as one with open air ahead of it, and taking
@@ -1501,6 +1611,49 @@ void RegisterSignal(int dir)
    }
 }
 
+//===================================================================
+//  MODULE: COST AND CHOP
+//===================================================================
+// The true round trip, in PRICE, not in spread alone. Commission arrives per
+// lot in account currency and has to be converted before it can be compared
+// with a stop distance; leaving it out was what made the old spread-only gate
+// understate the real cost by about 55% on gold.
+double RoundTripCost()
+{
+   double spread = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                 - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double pt     = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double slip   = 2.0 * InpSlipPoints * pt;      // one per side
+   double mpp    = MoneyPerPricePerLot();
+   double comm   = (mpp > 0.0) ? InpCommPerLot / mpp : 0.0;
+   return spread + slip + comm;
+}
+
+// Kaufman efficiency ratio: net distance divided by the length of the path
+// walked to get there. 1.0 is a straight line, 0.0 is pure noise. Reads only
+// closed bars, so it is available at the moment of the decision.
+double EfficiencyRatio(int len)
+{
+   if(len < 2) return 1.0;
+   if(Bars(_Symbol, _Period) < len + 3) return 1.0;
+   double net = MathAbs(iClose(_Symbol, _Period, 1)
+                      - iClose(_Symbol, _Period, 1 + len));
+   double path = 0.0;
+   for(int k = 1; k <= len; k++)
+      path += MathAbs(iClose(_Symbol, _Period, k) - iClose(_Symbol, _Period, k + 1));
+   return (path > 0.0) ? net / path : 0.0;
+}
+
+// SuperTrend direction changes in the last `len` CLOSED bars.
+int FlipsIn(int len)
+{
+   int n = MathMin(len, g_flipHistN);
+   int c = 0;
+   for(int k = 0; k < n; k++)
+      if(g_flipHist[k] != 0) c++;
+   return c;
+}
+
 int TrendRisk(string &why)
 {
    why = "";
@@ -1908,6 +2061,14 @@ void DrawBox()
    BoxLine(r++, StringFormat("       supertrend leg %s, %d bars",
                              (g_stDir == -1 ? "UP" : (g_stDir == 1 ? "DOWN" : "-")),
                              g_barsInTrend), InpBoxText);
+   double cst = RoundTripCost();
+   double atrNow = ATR(1);
+   double stpNow = InpStopAtrMult * atrNow;
+   BoxLine(r++, StringFormat("cost %.1f%% of stop   efficiency %.2f   flips %d/%d",
+                             (stpNow > 0 ? 100.0 * cst / stpNow : 0.0),
+                             EfficiencyRatio(InpChopErLen),
+                             FlipsIn(InpChopFlipLen), InpChopFlipLen),
+           (stpNow > 0 && cst / stpNow > InpMaxCostFrac) ? bad : InpBoxText);
    BoxLine(r++, StringFormat("give-back allowance now %.0f%%",
                              GiveBackAllowed(MathMax(b.peakR, 0.0)) * 100.0),
            InpBoxText);
