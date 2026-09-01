@@ -1586,7 +1586,14 @@ if array.size(trDir) > 0
             array.push(hRsk, risk)
             array.push(hSet, array.get(trSet, k))
             array.push(hWhy, exWhy)
-            while array.size(hDir) > 30
+            // 500, not 30. E-046 computed what the scoreboard actually costs:
+            // 53 completed trades PER SETUP TYPE to detect a catastrophically
+            // bad one. At 30 total across eight types that is under 4 each, so
+            // the scoreboard could never answer anything at any trade rate.
+            // 500 gives roughly 62 per type - enough for the one question that
+            // is reachable. Pine handles arrays this size without difficulty;
+            // the old number was a guess, not a constraint.
+            while array.size(hDir) > 500
                 array.shift(hDir)
                 array.shift(hEnt)
                 array.shift(hExt)
@@ -2176,13 +2183,19 @@ if showBoard and not cleanMode and barstate.islast and array.size(hSet) > 0
         col  = cnt == 0 ? dimc
              : sm > 0 ? accBull : sm < 0 ? accBear : color.new(chart.fg_color, 45)
         bCell(0, ki + 1, kd, cnt == 0 ? dimc : chart.fg_color, false)
-        bCell(1, ki + 1, cnt == 0 ? "-" : str.tostring(cnt), col, false)
+        // amber until the count can support a conclusion
+        bCell(1, ki + 1, cnt == 0 ? "-" : str.tostring(cnt),
+             cnt == 0 ? dimc : cnt < 53 ? color.new(#FFB300, 0) : col, false)
         bCell(2, ki + 1, cnt == 0 ? "-"
              : str.tostring(math.round(100.0 * wn / cnt)) + "%", col, false)
         bCell(3, ki + 1, cnt == 0 ? "-" : str.tostring(sr, "#.#"), col, false)
         bCell(4, ki + 1, cnt == 0 ? "-"
              : (sm >= 0 ? "+" : "") + str.tostring(sm, "#.##"), col, false)
-    bCell(0, 9, "keep the green ones", color.new(chart.fg_color, 30), true)
+    // E-046: 53 trades per type before "this one is catastrophic" is
+    // distinguishable from noise, and 371 before "this one makes +0.25R" is.
+    // Showing the count without that context invites reading four trades as a
+    // verdict, which is how a scoreboard becomes worse than no scoreboard.
+    bCell(0, 9, "need 53+ each to judge", color.new(chart.fg_color, 30), true)
     bCell(1, 9, "", chart.fg_color, true)
     bCell(2, 9, "", chart.fg_color, true)
     bCell(3, 9, "", chart.fg_color, true)

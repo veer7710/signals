@@ -84,6 +84,44 @@ any of 8 pairs).
    ATR as a sizing input; measure whether it improves risk-adjusted return
 4. M1 data (blocked on Veer running `JARVIS/tools/export_mt5_data.py`)
 
+## Session close 2026-08-31 — what changed and what it means
+
+Six results landed. Read these before doing anything else:
+
+- **E-050 THE MISSING CONTROL, and a retraction.** A random entry on the same
+  bars with the same 3R/1R/50-bar payoff returns +0.202R median on GOLD 1h
+  (95th +0.424). The SuperTrend signal returns +0.321R. **The signal sits
+  inside the random band.** The project's one positive number was the payoff
+  structure, not the signal, and E-035's pullback comparison is uncontrolled by
+  the same argument. Standing rule: every claim now needs a random arm on the
+  same payoff.
+- **E-043 non-directional payoff REJECTED**, with the mechanism (see L-013).
+- **L-013 WHY NOTHING WORKS, mathematically.** A spot payoff is linear in price
+  and every exit is a stopping time, so by optional stopping ANY
+  non-anticipating exit has zero expected gross on a martingale - and E-037
+  measured these series to be martingales at 15m/1h. Not one exit rule failing;
+  the whole class. Monetising volatility needs convexity and spot cannot buy it.
+  **The argument does not cover M1**, which was never measured.
+- **L-012 every backtest here is optimistic** (intrabar stop overshoot), but the
+  E-050 conclusion survives slippage up to 0.80 - sixteen times default.
+- **E-040 the cost floor.** GOLD covers its cost 8.0x per 15m bar; EURUSD 15m
+  covers it 0.8x. FX at short holds is retired.
+- **E-046 the scoreboard could not have worked.** 53 completed trades per setup
+  type to spot a catastrophic one, 371 for +0.25R - against a 30-trade ring
+  buffer shared by eight types. Raised to 500 and the count now shows amber
+  below 53. Even so: it can identify a LOSER in ~21 weeks; it cannot rank
+  winners this decade. **Ranking must come from the EA's CSV journal, which
+  persists, not from Pine state, which does not survive a chart reload.**
+
+## D-009 changed the priority order
+Target timeframes are M1, M5 and M15. Only M15 has data. Both Pine files now
+express lengths in MINUTES and convert per chart, because DEMA(200) is 200
+minutes on M1 and 50 hours on M15 - that mismatch is also the mechanical
+explanation for the 121-signals-a-day flood.
+
+**M1/M5 data is now the binding constraint on the entire project**, and L-013
+sharpens why: the theorem that closes spot trading was only verified at 15m/1h.
+
 ## What the products should do RIGHT NOW, given the evidence
 The live chart says the SuperTrend product loses -0.58R per trade with zero
 take-profits in twelve. Nothing in this repo has cleared the significance bar.
