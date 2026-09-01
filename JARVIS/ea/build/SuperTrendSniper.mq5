@@ -273,10 +273,38 @@ input int    InpReentryCool   = 3;      // bars before re-entering the SAME way
 input bool   InpReentryNeedsNewSignal = false; // ...and only after price makes a new extreme
 
 input group "=== SIZE ==="
-input bool   InpUseFixedLots  = true;   // fixed size instead of % risk
+// OFF by default since E-063. The stop now widens itself when the spread is
+// large relative to ATR, and a fixed lot against a wider stop simply risks
+// more money - on M1 gold that is GBP 4.74 a trade instead of GBP 1.78, which
+// is 4.2% of a GBP 112 account. Percent-risk sizing keeps the money constant
+// and lets the geometry move, which is the point. Set it back to true only if
+// you want a fixed 0.03 regardless of what the stop is doing.
+input bool   InpUseFixedLots  = false;  // fixed size instead of % risk
 input double InpFixedLots     = 0.03;   // total size for one entry
 input double InpRiskPct       = 0.50;   // % of equity risked per trade (if not fixed)
 input double InpStopAtrMult   = 1.5;    // stop distance in ATR
+// THE COST FLOOR ON THE STOP. E-063, and it is the most important line in
+// this file.
+//
+// Veer's measured gold spread is 0.46. His M1 bars run 0.3-0.8, so ATR(7) is
+// about 0.5 and a 1.5 x ATR stop is 0.75 POINTS. The round trip is 0.56.
+// That means cost/stop is 0.75 and THE SPREAD ALONE IS 61% OF THE DISTANCE TO
+// THE STOP - every trade is filled 0.46 in the red on a 0.75 stop and has to
+// travel three quarters of its own risk to reach zero.
+//
+// E-053 measured that every market under 0.07 cost/stop was positive and both
+// markets over 0.40 lost about a third of a unit of risk per trade. M1 gold at
+// the shipped settings was 0.75, off the end of that table.
+//
+// So the stop is now the LARGER of the ATR distance and this many round trips.
+// It is self-adjusting: on 15m and 1h the ATR term wins and nothing changes;
+// on M1 the cost term takes over and the stop widens to where the trade is not
+// mostly fee. No per-timeframe tuning, no guessing.
+//
+// IT MOVES THE RISK. A 4 x ATR M1 stop is 2.0 points = GBP 4.74 at 0.03 lots
+// against GBP 1.78 before. Turn InpUseFixedLots OFF so InpRiskPct carries the
+// sizing once the stop is honest, or the wider stop simply risks more money.
+input double InpMinStopCostX   = 4.0;   // stop must be at least this many round trips
 input double InpMaxSpreadAtr  = 0.15;   // skip entry if spread > this x ATR
 
 input group "=== COST GATE (E-053: this is the real M1 problem) ==="
@@ -1227,6 +1255,24 @@ void TryEntry()
    int dg0 = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
 
    double stopDist = InpStopAtrMult * atr;
+
+   // THE COST FLOOR (E-063). A stop the spread has already half-consumed is
+   // not a stop. This is checked BEFORE the broker minimum, because the two
+   // are different constraints and the wider of them has to win.
+   if(InpMinStopCostX > 0.0)
+   {
+      double needed = InpMinStopCostX * RoundTripCost();
+      if(stopDist < needed)
+      {
+         Log(StringFormat("stop %.*f is only %.1f round trips wide - the spread "
+                          "alone would be %.0f%% of it. Widening to %.*f.",
+                          dg0, stopDist, stopDist / MathMax(RoundTripCost(), 1e-9),
+                          100.0 * (SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                 - SymbolInfoDouble(_Symbol, SYMBOL_BID)) / stopDist,
+                          dg0, needed));
+         stopDist = needed;
+      }
+   }
 
    // The broker's floor. Widen to it and let LotFor re-derive the size, so
    // the risk in money is unchanged and only the distance moves.

@@ -2257,3 +2257,77 @@ cost/stop ratio — E-053 in particular — is therefore optimistic, and the M1
 extrapolation of 0.15–0.22 becomes roughly **0.23–0.34** at the real spread.
 That makes E-053's conclusion stronger, not weaker: M1 gold on a Standard
 account pays about a third of its risk to the broker before the trade starts.
+
+---
+
+## E-063 — THE ANSWER. On M1 gold the spread is 61% of the way to your own stop.
+**Verdict: CONFIRMED — arithmetic on Veer's own measured numbers**
+
+### The number
+His spread, read off his terminal: **0.46**. His M1 bar ranges, read off his
+20:04–20:28 screenshot: roughly **0.3–0.8**, so ATR(7) ≈ 0.5.
+
+The EA shipped a **1.5 × ATR** stop. On M1 gold that is **0.75 points**.
+
+| | |
+|---|---|
+| round trip (spread + 2× slippage) | **0.56 points** = GBP 1.33 at 0.03 lots |
+| stop distance | **0.75 points** |
+| **cost / stop** | **0.75** |
+| spread alone, as a share of the stop | **61%** |
+
+**Every trade is filled 0.46 in the red against a 0.75 stop.** It has to travel
+three quarters of its own risk just to get to zero.
+
+E-053 measured that every market with cost/stop under ~0.07 was positive and
+both markets over 0.40 lost about a third of a unit of risk per trade. M1 gold
+at these settings is **0.75** — nearly double the worst thing in that table.
+
+### This is why profit evaporates
+It is not the trail, the peak-chasing, the stacking or the give-back. Those are
+all real and all worth fixing, and they were fixed. But a trade that starts 61%
+of the way to its own stop cannot be rescued by exit management. The give-back
+rule, the stall exit, the basket protection — every one of them is arranged
+around a stop that the spread has already half-consumed.
+
+### Fixed in the EA: the stop now has a COST FLOOR
+`InpMinStopCostX` (default 4.0). The stop is
+`max(InpStopAtrMult × ATR, InpMinStopCostX × round-trip cost)`.
+
+It is self-adjusting and needs no per-timeframe tuning: on 15m and 1h, where
+ATR is large relative to the spread, the ATR term wins and nothing changes. On
+M1, where the spread is large relative to ATR, the cost term takes over and the
+stop widens to where the trade is not mostly fee.
+
+### Every route out, on his own numbers
+| change | cost/stop | vs now |
+|---|---|---|
+| nothing — M1, 1.5×ATR, Standard | **0.75** | — |
+| Prime/ECN spread 0.20, M1, 1.5×ATR | 0.40 | −46% |
+| trade M5 instead (ATR ≈ 1.1) | 0.34 | −55% |
+| **widen the M1 stop to 4 × ATR** | **0.28** | **−62%** |
+| trade M15 instead (ATR ≈ 1.9) | 0.20 | −74% |
+| widen the M1 stop to 6 × ATR | 0.19 | −75% |
+| Prime/ECN AND M5 | 0.18 | −76% |
+| **Prime/ECN AND a 4 × ATR M1 stop** | **0.15** | **−80%** |
+
+The last row is the same order as US500 15m, which was the last market on the
+positive side of E-053's table. The top row is off the end of it.
+
+### What it costs him
+A wider stop with a fixed 0.03 lot means more money at risk per trade: a 4×ATR
+M1 stop is 2.0 points = **GBP 4.74** against GBP 1.78 at 1.5×ATR. On a GBP 112
+account that is 4.2% a trade, which is too much — so the stop widening and the
+lot size have to move together. `InpUseFixedLots` should go OFF and
+`InpRiskPct` should carry the sizing once the stop is honest.
+
+### Fact-checking my own inputs, which is where this came from
+1. I assumed a 0.30 spread for months. His terminal says 0.46. (E-059)
+2. I extrapolated M1 ATR from the repo's 15m data. That sample runs
+   2026-06-14 to 2026-08-24 with a median 15m bar range of **7.40** — a far
+   more volatile period than the one he is trading now, where his M1 bars run
+   0.3–0.8. **My extrapolation understated his cost burden by roughly 4×.**
+
+Both errors pushed the same way: they made the strategy look cheaper to trade
+than it is. Neither was found by more analysis. They were found by checking two
+inputs against his screenshots.
