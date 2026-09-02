@@ -1,57 +1,35 @@
-# Continuation prompt — paste this into a new Claude Code session
+# Start here
 
----
+Read CLAUDE.md, then SESSION_STATE.md, then this.
 
-You are JARVIS, Veer's persistent AI operating system. This is a
-continuation. Do not restart completed work and do not ask Veer to
-re-explain the project — it is all written down.
+## Do these in order
 
-**Read these first, in order:**
-1. `CLAUDE.md` (loads automatically — the standing rules)
-2. `JARVIS/state/SESSION_STATE.md` — where the last session stopped
-3. `JARVIS/state/NEXT_ACTIONS.md` — what to do now
-4. `JARVIS/state/EXPERIMENTS.md` — what is proven, disproven, untested
-5. `JARVIS/state/DECISIONS.md` and `FAILURE_LOG.md` — do not relitigate or repeat
-6. Then `git log --oneline -5` and `git status`
+1. **Ask Veer for two files** and do not build anything cost-related until you
+   have them: `STS_journal_XAUUSD_PERIOD_M1.csv` (the EA now logs spread, stop
+   and cost/stop on every entry) and the `GOLD_M1.json` output of
+   `JARVIS/ea/tools/ExportHistory.mq5`. The spread question has been argued
+   from charts twice and been wrong twice. Measure it.
 
-**Repo:** github.com/veer7710/signals
-**Branch:** `claude/jarvis-ai-operating-system-2xaclm`
+2. **Re-test E-056 with ONE observation per trade.** `JARVIS/research/stall.py`
+   currently emits one row per BAR, so rows inside a trade are correlated and
+   the 8-of-8 unanimity may be an artifact of that. This is the project's
+   strongest claim and it has not survived its own strongest attack. If it
+   fails, the stall exit in the EA must be reconsidered.
 
-**One-minute summary of where things stand.**
-The repo is JARVIS's home; its previous contents (an unrelated Telegram
-signal scanner) were deleted with Veer's approval, keeping `data/` — 2.4
-years of hourly candles for GOLD/US500/EURUSD/GBPUSD.
+3. **Relaunch the three agents that died on the session limit** (briefs are in
+   this conversation's history and in JARVIS/titan/): move-size prediction
+   (can a 0.1-point flip be told from a 20-point one AT the flip — this is the
+   highest-value open question), EA chart vision (clusters, real
+   break-of-structure reversals, session state, level quality), and the red
+   team on E-063 / half-banking / stall.
 
-A dependency-free backtest engine now exists at `JARVIS/research/`. It
-enforces no-look-ahead, next-bar-open fills, ties-resolve-as-losses, and
-real spread/slippage/commission. It passes 16 regression tests including a
-null test proving it finds no edge on random data. **Run
-`python3 JARVIS/research/test_engine.py` before trusting any result.**
+4. **Only then** touch the Pines or the EA again.
 
-Established findings (do not redo):
-- The old signal system's edge is **DISPROVEN**. 70% win rate, 0.53 R:R,
-  break-even needed 65.4%. A skill-free random system beat its result 32%
-  of the time. Root cause CONFIRMED: capped take-profit against an
-  ATR-scaled stop. Reproduced over 2 years: 69.5% win rate, -0.066R
-  expectancy, 99.6% chance of ending down.
-- `liquidity_sweep` as implemented is **UNPROVEN** and dies as costs rise.
-  Only one implementation of the liquidity family has been tested.
-- `donchian_trend` is **PROMISING**: +0.198R, PF 1.28, 5/6 walk-forward
-  folds positive, survives 3x spread, max drawdown 9.7%. Not yet attacked.
-
-**Your first action:** A-001 in `NEXT_ACTIONS.md` — spawn the
-`adversarial-reviewer` agent and try to destroy `donchian_trend` (other
-symbols, parameter perturbation, per-year split, prop-firm drawdown
-maths). If it survives, it is a candidate. If it does not, record that in
-`EXPERIMENTS.md` and move to A-002.
-
-**Standing constraints:** never claim guaranteed profit; never report an
-uncomputed number; nothing touches a live account without Veer confirming
-that specific action; no evading usage limits or ToS (settled, D-005).
-
-**Still blocked on Veer** — check whether he has now provided them:
-- the real EA `.mq5` source and the two Pine scripts → `JARVIS/ea/inbox/`
-- prop firm name(s), account sizes, and his broker's gold symbol specs
-
-Before this session ends, update `SESSION_STATE.md`, `NEXT_ACTIONS.md` and
-this file, then commit and push.
+## What Veer has said repeatedly and I have repeatedly got wrong
+- Signal COUNT is not the problem. Do not add entry filters. E-053 measured
+  that they only shrink the system, and F-010 is what happened when I ignored
+  that.
+- He trades M1 gold only. H1 is context, never acted on (D-010).
+- His charts must stay clean: his own XAUUSD_CLEAN_3.5 header is the spec —
+  DEMA, BUY/SELL, live crosses, numbers in the status line, nothing else.
+- Short replies. He has said so explicitly.

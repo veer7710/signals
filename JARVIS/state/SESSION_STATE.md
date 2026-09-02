@@ -1,96 +1,57 @@
-# Session state — checkpoint
+# SESSION STATE — 2026-09-01
 
-**Session:** 2026-08-27/28 (sessions 1-2 merged)
-**Branch:** `claude/jarvis-ai-operating-system-2xaclm`
-**Model:** claude-opus-5
+## What this session actually established
 
-## What this session did
-1. Inspected the environment and the whole repository before building.
-2. Audited the pre-existing signal system against its own live trade log
-   and **disproved its edge** (E-001).
-3. Deleted the old project on Veer's instruction; kept `data/`.
-4. Built a dependency-free backtest engine with anti-look-ahead structure,
-   realistic costs, walk-forward, Monte Carlo, and cost sensitivity.
-5. **Found and fixed a bug in my own walk-forward** (F-001) that was
-   producing impossible 0% win rates, then wrote regression tests.
-6. Ran the first real study on GOLD 1h — results in EXPERIMENTS.md.
-7. Researched prop-firm multi-account rules (R-002) — found a hard
-   constraint on the 40-account scaling plan.
-8. Established this memory system, the resume script, and 6 agents.
+**E-063 / E-059 — cost is the dominant term, and I had the input wrong twice.**
+Spread was assumed at 0.30 for months; Veer's screenshots show 0.46. I then
+extrapolated M1 volatility from repo data covering a MORE volatile period than
+he trades. Both errors made the strategy look cheaper than it is.
+**BUT: Veer has since said his EA runs on a DIFFERENT broker from those charts,
+that PU Prime charges no commission, and that his spread is not large.** So the
+0.46 figure may not apply to the account that trades. The EA now MEASURES its
+own spread every tick and writes it to the journal and the box. That settles it
+next session; do not re-argue it from a chart.
 
-## Where the work stopped
-Foundation complete and committed. Strategy research has produced ONE
-promising candidate (`donchian_trend`) that has not yet faced adversarial
-review or out-of-sample testing on other symbols.
+**E-064 — the GOLD edge is real and modest.** Signal +0.26R (15m) / +0.23R (1h)
+against a random control, beating 12 of 12 and 11 of 12 seeds, at 1.7–1.8
+control standard deviations. Not the 3.65 bar. One instrument.
 
-## What is NOT done
-- No EA written (the source EA was never in the repo).
-- No Pine script analysed (never supplied).
-- Liquidity family barely explored — one implementation, one timeframe.
-- No dashboard, voice, scheduler, or business engines.
+**E-056 — stall is the strongest execution result: 8 of 8 markets, monotone.**
+Bars since a trade last made a new best predicts give-back, 24% at stall 0–1
+against 62% at stall 25+ on GOLD 15m. NOT YET RE-TESTED with one observation
+per trade instead of per bar — the red team was told to do that and died first.
+**That test is the highest-value unfinished item in the project.**
 
-## Do not repeat
-- Do not re-audit the deleted signal system. It is DISPROVEN (E-001).
-- Do not rebuild the capped-target design. Root cause CONFIRMED (E-002).
-- Do not re-ask whether to evade usage limits. Settled (D-005).
+**E-060 — early entry at the SuperTrend band does NOT help.** My first version
+scored +0.214R and was a look-ahead bug (it only entered on bars that turned
+out to flip). Honest version: beats the close entry in 3 of 8, identical pooled.
 
----
-# UPDATE — overnight research session (2026-08-28)
+**E-061/062 — the geometry the EA already ships (1.5 ATR stop, 3R, 50 bars) is
+at the out-of-sample optimum on GOLD 1h.** 60 cells searched. No improvement
+found. GOLD 15m OOS had n=17–37 per cell and was discarded.
 
-## What happened
-Received the real EA (`XAUUSD_QUAD_v19_18.mq5`, 20,695 lines, 748 inputs) and
-both Pine scripts. Audited them. Built an exit laboratory and a cross-market
-robustness scan. Launched five deep-research agents.
+## Shipped and pushed
+- `SuperTrendSniper.mq5` — cost floor on the stop (InpMinStopCostX), spread
+  telemetry, stall exit, give-back banking half, basket engine, guards that
+  survive restart, broker stop-level handling, execution box with ChartRedraw.
+- `XAUUSD_CLEAN_3_6.pine` — Veer's own 3.5 with measured readings in the STATUS
+  LINE only, plus a position box. His chart rule kept exactly.
+- `LIQUIDITY_CLEAN_1_0.pine` — the two LuxAlgo scripts and nothing else.
+- `ExportHistory.mq5` — drag onto a chart, writes M1/M5/M15 JSON for the engine.
 
-## USAGE LIMIT HIT
-All five research agents were killed by the account session limit (resets
-01:40 UTC) before writing their findings. Their five topics are UNFINISHED and
-are the first actions for the next session. Do NOT assume any of their results
-exist — no findings files were written except `06_exit_experiment.md`, which
-was produced by the main session.
+## The two files that unblock everything
+1. `MQL5/Files/STS_journal_XAUUSD_PERIOD_M1.csv` — every entry now carries
+   spread, stop and cost/stop. One session of it answers the cost question.
+2. `GOLD_M1.json` / `GOLD_M5.json` from ExportHistory.mq5 — every experiment
+   in this repo has run on 15m/1h. He trades M1. This ends the extrapolating.
 
-## Verified findings this session
-- **E-008 CONFIRMED:** early break-even is the worst exit rule on all four
-  markets (-0.161 to -0.308R). Veer's "protect indubitable profits" instinct
-  is the mechanism destroying his EA.
-- **E-008:** an oracle peak-exit returns +3.019R vs +0.201R for the best real
-  exit. "Never closing at the peak" is universal and permanent.
-- **E-009/E-010:** 8 strategies x 4 markets — NOTHING reaches PROMISING.
-  `donchian_trend` DOWNGRADED from PROMISING to UNPROVEN (fails on 3 of 4
-  markets). `liquidity_sweep` positive on 1 of 4 = likely artifact.
-- **E-006:** EA REJECTED — 748 parameters on a 279-trade sample.
-- **E-011:** every test so far is 1h on 4 correlated instruments; the published
-  trend evidence is daily+ across 50+ diversified markets. Wrong search space.
+## Failures logged this session
+F-009 (ta.adx does not exist; the checker validated the namespace and ignored
+the member), F-010 (the cost gate at 0.10 refused nearly every M1 entry while
+E-053 said M1 sits at 0.15–0.22 — I measured that filters do not work and then
+spent the afternoon adding filters).
 
-## Where the work stopped
-`JARVIS/MASTER_REPORT.md` and `JARVIS/TOMORROW.md` written. 4 commits ready.
-**Push still blocked (403)** — the Claude GitHub App is not installed for
-`veer7710/signals`. This is the top blocker; the container is ephemeral.
-
-
----
-# UPDATE — Pine indicator + automated search session
-
-## Built
-- `JARVIS/pine/LiquiditySniper_v1.pine` (v1.2, 525 lines, 39 inputs) — live on
-  Veer's charts and compiling. Encodes the continuation finding, the expansion
-  filter as an adjustable preset rather than a hard gate, retest confirmation,
-  multi-trade concurrency, and prior-day/session/round-number liquidity.
-- `JARVIS/research/autosearch.py` — the zero-AI-cost search engine. 672 tests in
-  40 seconds. Chronological 70/30 split, out-of-sample run once, multiple-testing
-  correction stated. THIS IS THE USAGE-CONSERVATION ANSWER: the model picks the
-  search space once, local Python does the grinding.
-- `JARVIS/research/sweeps.py`, `sweep_study.py`, `movesize.py`, `volregime.py`,
-  `intraday_momentum.py` — all runnable locally at no usage cost.
-
-## Bugs I made and caught (all before they reached a result)
-- MFE/MAE measured independently reported "75% reached 1R" while 85% stopped
-  out. Fixed to first-touch, ties lose. Honest figure 44.5%.
-- Momentum comparison run with the fade direction, concluding sweeps were worse
-  than momentum. Would have killed a real finding.
-- Pine: ta.dmi returns [+DI,-DI,ADX] and the ADX variable was reading +DI.
-- Pine: merged equal-high levels moved their price but the line never followed.
-- Pine: line(na) is not a valid constructor.
-
-## What the next session should NOT redo
-E-001, E-002, E-017 (fade), E-022 (LeBaron), lead-lag. All closed with evidence.
+## Standing correction to how I work
+Two of the three biggest errors this session were WRONG INPUTS, not wrong
+analysis, and neither was found by more analysis. Check the input against the
+user's own screenshots before running anything on top of it.

@@ -2331,3 +2331,43 @@ lot size have to move together. `InpUseFixedLots` should go OFF and
 Both errors pushed the same way: they made the strategy look cheaper to trade
 than it is. Neither was found by more analysis. They were found by checking two
 inputs against his screenshots.
+
+---
+
+## E-064 — The control's own seed noise. My red team caught this before it died.
+**Verdict: the GOLD edge SURVIVES, at 1.7–1.8 control standard deviations**
+
+The adversarial agent's last line before the session limit killed it was:
+*"E-060's control looks like a single random seed. Let me verify and measure
+the control's own seed noise."* It was right to look. A random control run on
+ONE seed has its own sampling error, and if that error is as large as the edge
+being claimed, the claim is not measured.
+
+Re-run with 12 seeds, GOLD, at the geometry the EA ships (1.5 ATR stop, 3R,
+50-bar cap):
+
+| | signal | control mean | control sd | control range | signal beats |
+|---|---|---|---|---|---|
+| GOLD 15m | **+0.260R** (n=96) | +0.086 | 0.099 | −0.069 to +0.246 | **12 of 12 seeds** |
+| GOLD 1h | **+0.227R** (n=264) | +0.026 | 0.121 | −0.173 to +0.347 | **11 of 12 seeds** |
+
+Edge over the mean control: **+0.175R on 15m, +0.201R on 1h** — about **1.8 and
+1.7 control standard deviations**.
+
+### Read it honestly
+The control's seed-to-seed spread is 0.10–0.12R, which is the same order as the
+edge itself. That is exactly why this check was needed. The edge survives it —
+beating 12 of 12 and 11 of 12 independent draws is not what a zero edge does —
+but 1.75 sd is modest, roughly p ≈ 0.04–0.08 one-sided, and it is one
+instrument. It is not the 3.65 t-statistic this project set as its bar for a
+780-configuration search, and it should not be quoted as though it were.
+
+### What it means in practice
+On GOLD, the SuperTrend + DEMA entry is better than random by a real but small
+margin. That is the honest ceiling on what execution work can amplify: a good
+exit on a +0.2R entry is worth having; no exit rule turns a zero-edge entry
+positive (E-041).
+
+**Every single-seed control in E-060, E-061 and E-062 should be read with this
+in mind.** The direction of those results is unchanged; the precision implied
+by their decimal places is not real.
