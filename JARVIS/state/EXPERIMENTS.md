@@ -2608,3 +2608,85 @@ decide this strategy.
   timeframe. `ExportHistory.mq5` is still the blocker.
 
 Files: `JARVIS/research/liq_geometry.py`, `JARVIS/research/liq_validate.py`.
+
+---
+
+## E-070 / E-071 / E-072 — The SuperTrend EA. The entry is fine. The exit is the problem, and the fix is the opposite of what was asked for.
+
+### E-070 — the entry is NOT the problem
+E-068 found the liquidity strategy's entry was worth everything. Same test on
+SuperTrend flips: identical signals, only the order's location changes, risk
+anchored to the signal bar so a better fill cannot flatter itself.
+
+| entry | taken | fill% | win% | expectancy | total R |
+|---|---|---|---|---|---|
+| **market (what the EA does)** | 2235 | 65% | 25.7% | **−0.106R** | −236R |
+| limit 0.25 ATR back | 2200 | 64% | 22.5% | −0.120R | −264R |
+| limit 0.50 ATR back | 2104 | 61% | 19.2% | −0.137R | −289R |
+| limit at the SuperTrend line | 181 | 5% | 8.3% | −0.803R | −145R |
+| limit at the DEMA | 691 | 20% | 18.4% | −0.350R | −242R |
+
+**Market entry wins on expectancy, total R and fill rate.** Waiting for a
+pullback loses money here, and the reason is not mysterious: a sweep is a
+REJECTION, so price comes back to you; a flip is a BREAKOUT, so it does not.
+The "top tick / limit order / never in drawdown" idea is **REJECTED** for
+SuperTrend. It stays right for liquidity.
+
+*(First run of this scored limit_st at −18R. A resting order at the SuperTrend
+line can sit BEYOND the stop; filling there is not a brilliant entry with a
+tiny risk, it is a trade already stopped out, and dividing by that near-zero
+risk produced the number. Such fills are now refused.)*
+
+### E-071 — the exit grid, and the number that settles a session-long argument
+GOLD, SuperTrend flips, every cell market-entry:
+
+| stop | target | n | win% | expectancy | **points** |
+|---|---|---|---|---|---|
+| 2.0 ATR | 3R | 313 | 31.0% | +0.212R | **+1385** |
+| 3.0 ATR | 2R | 241 | 41.5% | +0.209R | +1365 |
+| 2.0 ATR | 2R | 389 | 38.8% | +0.144R | +1274 |
+| **1.5 ATR | 3R — the EA today** | 433 | 27.3% | +0.072R | **+715** |
+| 3.0 ATR | 0.25 ATR | 594 | **91.6%** | −0.018R | **−548** |
+
+**A 91.6% win rate that loses money.** Not a paradox — the near target caps
+every winner while the wide stop pays every loser in full. On GOLD 1h that cell
+walk-forwards **0 of 6 blocks** and loses 611 points.
+
+Veer, three times in writing: *"we are not looking for massive profits ... we
+want small consistent profits hundreds of times"*. On the SuperTrend flip that
+shape is measurably the losing one. It remains correct for liquidity sweeps —
+different trade, different physics.
+
+Widening the stop 1.5 → 2.0 ATR roughly **doubles the points** and changes
+nothing else.
+
+### E-072 — two lots, two jobs
+He trades 0.02 as two 0.01s, so the position can hold both shapes. GOLD:
+
+| | n | win% | expectancy | **points** |
+|---|---|---|---|---|
+| **runner** — both lots to 2R | 389 | 38.8% | **+0.144R** | **+1274** |
+| split, half at 0.5 ATR, half runs | 389 | 38.8% | +0.060R | +562 |
+| split + break-even on the remainder | 583 | 78.0% | +0.008R | +99 |
+| **scalp** — both lots at 0.5 ATR | 606 | 78.5% | **−0.033R** | **−273** |
+
+Every step toward "bank it early and protect it" costs money, in order:
+1274 → 562 → 99 → −273. **Break-even alone costs 82% of what is left**
+(562 → 99), which is the fourth independent measurement calling it poison.
+
+*(First run had `left` initialised to the post-scale remainder, so a stop-out
+before the scale banked a fraction of the loss — and in `scalp` mode, none of
+it. Profit factor came back 0.00 with a t of +63, which is what gave it away.)*
+
+### What this does NOT license
+None of the R-target cells clears t ≥ 2.0. Best is 3.0A/2R on GOLD 1h at
+t=+1.80, +1.9 control sd, OOS +0.191/+0.199. **UNPROVEN**, with a consistent
+direction across both timeframes and both halves. Pooled across eight markets
+every cell is still negative — this is a GOLD result.
+
+**Give-back is not the same thing as a near target** and this does not condemn
+it. A fixed target caps a winner; a give-back rule only acts once the trade has
+stopped making new highs. The two must not be conflated, and the give-back
+engine keeps its stall gate.
+
+Files: `JARVIS/research/st_entry.py`, `st_exit_grid.py`, `st_partial.py`.

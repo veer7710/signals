@@ -86,7 +86,8 @@ FileSeek FileIsExist FileDelete FileSize FileFlush
 TerminalInfoInteger TerminalInfoString MQLInfoInteger MQLInfoString
 EnumToString ColorToString ResetLastError GetLastError
 OnInit OnDeinit OnTick OnTimer OnTrade OnTradeTransaction OnChartEvent
-OnStart OnCalculate OnTester EventSetTimer EventKillTimer
+OnStart OnCalculate OnTester OnTimer EventSetTimer EventKillTimer
+EventSetMillisecondTimer EventChartCustom
 ZeroMemory ArrayFill CheckPointer ArrayRemove ArrayInsert ArrayReverse
 PeriodSeconds Period Symbol Digits Point SeriesInfoInteger RefreshRates
 StringGetCharacter StringSetCharacter StringInit StringBufferLen

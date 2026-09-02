@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.09"
+#property version   "2.10"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.09 / money-armed give-back"
+#define STS_BUILD "2026-09-02 / 2.10 / timer-driven readout"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -784,6 +784,8 @@ double RunMoveAtr();
 void   BoxLine(int idx, string txt, color c);
 void   BoxClear();
 void   DrawBox();
+void   Readout();
+long   g_readN = 0;   // readout beats, so a frozen box is visibly frozen
 void   SaveStats();
 void   LoadGuards();
 double MinStopDist();
@@ -3167,6 +3169,77 @@ void LoadStats()
 }
 
 //==================== LIFECYCLE ====================================
+
+//===================================================================
+//  MODULE: THE READOUT
+//===================================================================
+// Veer, three separate times: "the profit box is not working", "it doesn't
+// update at all", "the profit box is still not updating".
+//
+// The first two fixes were both real bugs and neither was THE bug. The panel
+// was being drawn without ChartRedraw (fixed), and the readout lived inside
+// DrawBox, which returns early when InpShowBox is off (fixed, moved into
+// OnTick). Both shipped. It still did not update, because both fixes left the
+// readout depending on the same single thing: A TICK ARRIVING.
+//
+// OnTick does not run when the market is quiet. It does not run at all when
+// the market is shut. It does not run between the EA being attached and the
+// first quote. On M1 gold in a dead hour that is minutes of a frozen box
+// showing a P/L that has already moved - which is exactly the report, three
+// times, and I kept fixing the drawing instead of the trigger.
+//
+// The readout now also runs off a 250ms TIMER, and once inside OnInit. The
+// terminal calls OnTimer whether or not the market is doing anything, so the
+// box is live from the instant the EA is attached and it keeps counting
+// through silence.
+void Readout()
+{
+   if(!InpBoxComment) return;
+
+   double eq    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double spNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   Basket bq;
+   Snapshot(bq);
+   double spAvgQ = (g_spN > 0) ? g_spSum / (double)g_spN : 0.0;
+
+   // A HEARTBEAT. If this clock is frozen the EA is not running, and no other
+   // line on this box can be trusted. It is here so that "it is not updating"
+   // becomes answerable from the chart instead of from a guess.
+   g_readN++;
+   string beat = TimeToString(TimeCurrent(), TIME_MINUTES | TIME_SECONDS);
+
+   Comment(StringFormat(
+      "SNIPERBOT  build %s\n"
+      "%s %s   equity %s   live %s  (%d)\n"
+      "OPEN  %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
+      "KEPT OF PEAK %.0f%%   GREEN->RED %d of %d closed\n"
+      "TODAY %d trades   %s\n"
+      "spread now %.*f   avg %.*f   worst %.*f\n"
+      "%s",
+      STS_BUILD,
+      _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), Money(eq), beat, (int)g_readN,
+      bq.n, bq.lots, Money(bq.money), Money(bq.peakMoney), Money(bq.givenBack),
+      (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
+      g_stGreenRed, g_stTrades,
+      g_stDayTrades, Money(g_stDayRealized),
+      _Digits, spNow, _Digits, spAvgQ, _Digits, g_spMax,
+      g_lockedPerm ? "LOCKED - max drawdown"
+                   : (g_lockedDay ? "locked for today" : "trading")));
+}
+
+// The timer exists ONLY to keep the readout and the panel alive when ticks are
+// not arriving. It must never enter, size, or close a trade: those stay on the
+// tick and the bar close so that the backtest and the live account remain the
+// same system. Protection is not here for a reason that is not laziness - it
+// reads prices, and prices only move on a tick.
+void OnTimer()
+{
+   Readout();
+   DrawBox();
+}
+
 int OnInit()
 {
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
@@ -3197,6 +3270,13 @@ int OnInit()
    // a lock or move the drawdown baseline.
    LoadGuards();
 
+   // 250ms: fast enough that the P/L line tracks the terminal's own, slow
+   // enough to cost nothing. Started BEFORE the first Print so the box is on
+   // the chart before anything below can fail.
+   EventSetMillisecondTimer(250);
+   Readout();
+   DrawBox();
+
    Print("=== SNIPERBOT BUILD " + STS_BUILD + " ===");
    Print("If that build stamp is not the one in the message that sent you this "
          "file, MetaEditor has not rebuilt it. Open the .mq5 and press F7.");
@@ -3217,6 +3297,7 @@ int OnInit()
 
 void OnDeinit(const int reason)
 {
+   EventKillTimer();
    SaveStats();
    BoxClear();
    ObjectDelete(0, "STS_box_bg");
@@ -3261,34 +3342,7 @@ void OnTick()
       g_spN++;
    }
 
-   // THE READOUT, BEFORE ANYTHING CAN GO WRONG.
-   // It used to live inside DrawBox(), which returns early if InpShowBox is
-   // off and which depends on chart objects rendering. Comment() is drawn by
-   // the terminal itself. If this is not on the chart, the EA is not running -
-   // there is no third possibility, and that is the point of moving it here.
-   if(InpBoxComment)
-   {
-      Basket bq;
-      Snapshot(bq);
-      double spAvgQ = (g_spN > 0) ? g_spSum / (double)g_spN : 0.0;
-      Comment(StringFormat(
-         "SNIPERBOT  build %s\n"
-         "%s %s   equity %s\n"
-         "OPEN  %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
-         "KEPT OF PEAK %.0f%%   GREEN->RED %d of %d closed\n"
-         "TODAY %d trades   %s\n"
-         "spread now %.*f   avg %.*f   worst %.*f\n"
-         "%s",
-         STS_BUILD,
-         _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), Money(eq),
-         bq.n, bq.lots, Money(bq.money), Money(bq.peakMoney), Money(bq.givenBack),
-         (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
-         g_stGreenRed, g_stTrades,
-         g_stDayTrades, Money(g_stDayRealized),
-         _Digits, spNow, _Digits, spAvgQ, _Digits, g_spMax,
-         g_lockedPerm ? "LOCKED - max drawdown"
-                      : (g_lockedDay ? "locked for today" : "trading")));
-   }
+   Readout();
 
    CheckGuardsTick();      // before anything else: a breach outranks a rule
    UpdatePeaks();
