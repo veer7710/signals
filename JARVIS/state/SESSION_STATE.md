@@ -1,57 +1,49 @@
-# SESSION STATE — 2026-09-01
+# SESSION STATE — 2026-09-02
 
-## What this session actually established
+## Where this session got to
 
-**E-063 / E-059 — cost is the dominant term, and I had the input wrong twice.**
-Spread was assumed at 0.30 for months; Veer's screenshots show 0.46. I then
-extrapolated M1 volatility from repo data covering a MORE volatile period than
-he trades. Both errors made the strategy look cheaper than it is.
-**BUT: Veer has since said his EA runs on a DIFFERENT broker from those charts,
-that PU Prime charges no commission, and that his spread is not large.** So the
-0.46 figure may not apply to the account that trades. The EA now MEASURES its
-own spread every tick and writes it to the journal and the box. That settles it
-next session; do not re-argue it from a chart.
+Four deliverables were asked for: the liquidity Pine, the SuperTrend Pine, a
+liquidity EA and the SuperTrend EA — all clean, all trading real levels, all
+with a working live position box.
 
-**E-064 — the GOLD edge is real and modest.** Signal +0.26R (15m) / +0.23R (1h)
-against a random control, beating 12 of 12 and 11 of 12 seeds, at 1.7–1.8
-control standard deviations. Not the 3.65 bar. One instrument.
+### Shipped
+| file | state |
+|---|---|
+| `JARVIS/pine/LIQUIDITY_CLEAN_1_1.pine` | rebuilt on the E-069 geometry: retest entry, 0.5 ATR target, stop 1.5 ATR beyond the sweep wick, zone = one confirmed pivot. Static-check clean. |
+| `JARVIS/pine/XAUUSD_CLEAN_3_6.pine` | minimum stop 1.5 → 2.0 ATR (E-071). Static-check clean. |
+| `JARVIS/ea/build/LiquiditySniper.mq5` | **NEW.** The E-069 geometry as an EA. Real broker-side limit orders. Check clean. |
+| `JARVIS/ea/build/SuperTrendSniper.mq5` | build 2.14. Timer-driven readout, 2.0 ATR stop, ADX gate off, stall tiers cut, give-back arms at 3R. Check clean. |
 
-**E-056 — stall is the strongest execution result: 8 of 8 markets, monotone.**
-Bars since a trade last made a new best predicts give-back, 24% at stall 0–1
-against 62% at stall 25+ on GOLD 15m. NOT YET RE-TESTED with one observation
-per trade instead of per bar — the red team was told to do that and died first.
-**That test is the highest-value unfinished item in the project.**
+### The five findings that changed the code
+1. **E-068** — my liquidity measurement was wrong in three places and fired 12
+   times in 4501 bars. Veer's reported 80% win rate is reproduced exactly by
+   the corrected geometry. The entry (retest, not sweep close) is the whole
+   edge: the sweep close scores −0.003R at ZERO cost.
+2. **E-069** — that geometry survives everything: GOLD 1h n=401, 87.8%,
+   +0.106R, PF 1.85, t=+5.05, walk-forward 6/6, 7.8 control-sd. **PROMISING.**
+3. **E-070/071/072** — SuperTrend is the OPPOSITE animal. Its entry is fine
+   (market beats every limit variant); its exit was wrong. A 91.6% win rate
+   near-target cell LOSES 548 points. Stop 1.5 → 2.0 ATR doubles the points.
+4. **E-073** — E-056, the project's most-cited result, does **not** survive
+   being counted once per trade. Pooled over 1826 independent trades the gap
+   is +0.046 with a 95% interval of [−0.002, +0.105]. Downgraded CONFIRMED →
+   SUPPORTED, magnitude wrong by 6x, EA tiers cut to match.
+5. **E-074/075** — only the DEMA gate has ever paid for itself; the ADX
+   ceiling refused a quarter of all signals for nothing. And the give-back
+   rule was never the problem — **arming it at 0.6R was**. Armed at 3R it is
+   the highest-expectancy exit tested.
 
-**E-060 — early entry at the SuperTrend band does NOT help.** My first version
-scored +0.214R and was a look-ahead bug (it only entered on bars that turned
-out to flip). Honest version: beats the close entry in 3 of 8, identical pooled.
+## The three things that are still true and still limiting
+1. **There is no M1 or M5 data in the repository.** Every conclusion here is
+   measured on 15m and 1h bars. `JARVIS/ea/tools/ExportHistory.mq5` fixes this
+   in one drag-and-drop and has still not been run.
+2. **Nothing here is proof of profit.** The strongest verdict any of it holds
+   is PROMISING, and that means "has not been disproved".
+3. **Both strategies are GOLD (and index) results.** All four FX rows are
+   REJECTED on the liquidity rules and negative on the SuperTrend ones.
 
-**E-061/062 — the geometry the EA already ships (1.5 ATR stop, 3R, 50 bars) is
-at the out-of-sample optimum on GOLD 1h.** 60 cells searched. No improvement
-found. GOLD 15m OOS had n=17–37 per cell and was discarded.
-
-## Shipped and pushed
-- `SuperTrendSniper.mq5` — cost floor on the stop (InpMinStopCostX), spread
-  telemetry, stall exit, give-back banking half, basket engine, guards that
-  survive restart, broker stop-level handling, execution box with ChartRedraw.
-- `XAUUSD_CLEAN_3_6.pine` — Veer's own 3.5 with measured readings in the STATUS
-  LINE only, plus a position box. His chart rule kept exactly.
-- `LIQUIDITY_CLEAN_1_0.pine` — the two LuxAlgo scripts and nothing else.
-- `ExportHistory.mq5` — drag onto a chart, writes M1/M5/M15 JSON for the engine.
-
-## The two files that unblock everything
-1. `MQL5/Files/STS_journal_XAUUSD_PERIOD_M1.csv` — every entry now carries
-   spread, stop and cost/stop. One session of it answers the cost question.
-2. `GOLD_M1.json` / `GOLD_M5.json` from ExportHistory.mq5 — every experiment
-   in this repo has run on 15m/1h. He trades M1. This ends the extrapolating.
-
-## Failures logged this session
-F-009 (ta.adx does not exist; the checker validated the namespace and ignored
-the member), F-010 (the cost gate at 0.10 refused nearly every M1 entry while
-E-053 said M1 sits at 0.15–0.22 — I measured that filters do not work and then
-spent the afternoon adding filters).
-
-## Standing correction to how I work
-Two of the three biggest errors this session were WRONG INPUTS, not wrong
-analysis, and neither was found by more analysis. Check the input against the
-user's own screenshots before running anything on top of it.
+## Standing rule that keeps being vindicated
+Three results this session failed the same way: a statistic computed over the
+wrong unit. E-050 for want of a control, E-064 for a single control seed,
+E-073 for counting bars as trades. **Any result quoted with an n far larger
+than the number of independent decisions behind it is wrong until re-counted.**
