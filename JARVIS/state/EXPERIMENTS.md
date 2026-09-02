@@ -2743,3 +2743,58 @@ with an n far larger than the number of independent decisions behind it should
 be assumed wrong until re-counted.**
 
 File: `JARVIS/research/stall_attack.py`.
+
+---
+
+## E-074 — Every gate in the SuperTrend EA, audited. Only one of them pays.
+
+Veer: *"we are now not hitting same trades as before"*, *"see what else we can
+ADD REMOVE IMPROVE OPTIMISE"*.
+
+The EA has eight conditions that can refuse a signal. Each was added for a
+reason; almost none was ever measured **as a gate**. A gate earns its place
+only if the trades it REFUSES are worse than the ones it ALLOWS — a one-line
+test nobody had run. F-010 is what happens when you skip it.
+
+### GOLD — each gate on its own, same signals, same exit (2.0 ATR / 3R)
+
+| gate | allowed | exp | refused | exp | delta | verdict |
+|---|---|---|---|---|---|---|
+| **DEMA slope agrees** | 625 | **+0.275R** | 698 | **−0.041R** | **+0.316R** | **KEEP** |
+| ADX ≤ 35 | 1000 | +0.130R | 323 | +0.043R | +0.087R | NOISE |
+| efficiency ≥ 0.08 | 905 | +0.113R | 418 | +0.098R | +0.015R | NOISE |
+| < 5 flips in 20 | 1297 | +0.103R | 26 | +0.363R | −0.260R | refuses nothing, wrong sign |
+| cost/stop ≤ 0.30 | 1323 | — | **0** | — | — | never binds on gold |
+| stop ≥ 4 round trips | 1323 | — | **0** | — | — | never binds on gold |
+| re-entry cooldown | 1323 | — | **0** | — | — | never binds |
+| no-fade candle | 1323 | — | **0** | — | — | never binds on gold |
+
+**The DEMA filter is the entire edge.** Remove it and gold goes from +0.275R to
++0.111R. Four gates refuse literally nothing on gold at a 2.0 ATR stop. The two
+cost gates DO earn their place pooled across eight markets (+0.293R and +0.304R
+separation) — they are insurance that never binds on gold, and they stay.
+
+### In combination, GOLD, points banked per 0.01 lot
+
+| gate set | taken | kept% | expectancy | t | **points** |
+|---|---|---|---|---|---|
+| everything on | 344 | 26% | +0.324R | +3.20 | +2692 |
+| DEMA + ADX + cost (**the EA before this**) | 519 | 39% | +0.309R | +3.76 | +4445 |
+| **DEMA + cost (the EA now)** | 625 | **47%** | +0.275R | +3.71 | **+4639** |
+| no gates at all | 1323 | 100% | +0.109R | +2.22 | +5962 |
+| everything except DEMA | 618 | 47% | +0.111R | +1.54 | +1466 |
+
+**Highest expectancy is not the most money.** "Everything on" has the best
+per-trade number and the worst total, because it only trades a quarter of its
+own signals. Turning off the ADX ceiling gives 20% more trades AND more points.
+
+Removing every gate makes more points still (+5962) but at t=+2.22 against
++3.71, and 4.5 points per trade against 7.4. The DEMA filter is kept.
+
+### Changed
+`InpUseAdxFilter` **true → false**. The chop guard was already off (E-053).
+This is the third independent measurement saying the same thing: E-053 (chop
+filters are 5/8, a coin flip), E-066 (the money is in the MIDDLE efficiency
+band, so filtering by efficiency cuts the paying regime), and now E-074.
+
+File: `JARVIS/research/gate_audit.py`.

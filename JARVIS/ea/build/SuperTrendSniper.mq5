@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.12"
+#property version   "2.13"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.12 / stall tiers cut to what E-073 measures"
+#define STS_BUILD "2026-09-02 / 2.13 / gates audited, ADX ceiling off"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -238,7 +238,19 @@ input group "=== FILTERS (both held out-of-sample) ==="
 // THE TRADE-OFF, STATED: these filters roughly THIRD the number of trades
 // (2.6/week -> 0.8/week on gold 1h). They raise expectancy per trade and cut
 // how many you get. Turn them off for frequency, on for quality.
-input bool   InpUseAdxFilter  = true;   // skip entries when the trend is already extended
+// OFF. E-074 audited all eight gates on the EA's own signals with its own exit.
+// On GOLD the ADX ceiling refuses 323 of 1323 signals - a quarter of them - for
+// a difference of +0.087R that is inside its own error. Gold, gates in
+// combination, points banked per 0.01 lot:
+//
+//     DEMA + ADX + cost gates (the EA before this)   519 trades   +4445
+//     DEMA + cost gates       (the EA now)           625 trades   +4639
+//
+// More trades AND more money. The DEMA filter is a different animal and stays
+// on: it is worth +0.316R of separation on gold, and with it removed the whole
+// edge collapses from +0.275R to +0.111R. It is the only gate in this EA that
+// has ever paid for itself.
+input bool   InpUseAdxFilter  = false;  // skip entries when the trend is already extended
 input double InpMaxAdx        = 35.0;   // ADX ceiling
 input bool   InpUseSession    = false;  // restrict to one session (see below)
 input int    InpSessFromUTC   = 13;     // NY open
