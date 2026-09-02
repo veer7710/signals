@@ -2535,3 +2535,76 @@ certain smaller number over the larger uncertain one, in writing: *"we are not
 looking for massive profits ... we want small consistent profits hundreds of
 times"*. That is a legitimate preference between two measured options and the
 settings now match it. `InpGbBase` and `InpGbArmMoney` reverse it in one edit.
+
+---
+
+## E-068 / E-069 — The 80% gap, closed. The liquidity strategy was never measured.
+
+**Veer:** *"i personally have a 80% winrate w liquidity strat and losses dont
+even compare to the profits"*. **E-065 measured 31.6%.** Both cannot describe
+the same trade, and it was mine that was wrong — in three separate places.
+
+### What E-065 actually measured
+Twelve trades on GOLD 15m. Twelve, in 4501 bars. Its 117 "pooled" trades were
+~15 per market. Nothing computed on that sample — not the 31.6% win rate, not
+the 68% stop rate, not the PF of 1.03 — was ever a measurement of a strategy.
+
+### The three errors, each with a price tag
+
+| # | E-065 did | Veer does | cost |
+|---|---|---|---|
+| ZONE | 3 pivots inside a ±ATR/6.9 band | a single swing point is liquidity | 39.3 → **2.7** sweeps per 1000 bars |
+| ENTRY | bought the sweep bar's close | waits for the **retest** of the swept level | close scores **−0.003R at ZERO cost** — no edge at all |
+| TARGET | the opposite zone, 3–6 ATR away | ~0.5 ATR | 33% win → **80%** |
+
+The zone error is mine and specific: he sent **two** LuxAlgo scripts —
+*Liquidity Sweeps* (one swing point) and *Buyside & Sellside Liquidity*
+(clustered) — and I ANDed them, keeping the strictest reading of each.
+
+The entry error is the important one. At **zero costs** the sweep-close entry
+scores −0.003R. It is not a weak edge being eaten by spread; it is nothing.
+**The entire edge is in the retest.**
+
+### E-069 — the reconciled geometry, attacked
+`zone = any confirmed pivot · entry = RETEST · stop = 1.5 ATR beyond the sweep
+wick · target = 0.5 ATR`. Pooled win rate **80.5%** — Veer's number to within
+a point.
+
+| market | n | win% | expectancy | PF | t | OOS 1st / 2nd | walk-fwd | vs control | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| **GOLD 1h** | 401 | **87.8%** | **+0.106R** | 1.85 | +5.05 | +0.098 / +0.114 | **6/6** | **+7.8 sd** | **PROMISING** |
+| US500 1h | 345 | 84.1% | +0.053R | 1.33 | +2.12 | +0.035 / +0.072 | 6/6 | +8.3 sd | PROMISING |
+| GOLD 15m | 98 | 81.6% | +0.023R | 1.12 | +0.45 | −0.003 / +0.048 | 4/6 | +2.2 sd | UNPROVEN |
+| US500 15m | 110 | 83.6% | +0.026R | 1.15 | +0.58 | −0.010 / +0.062 | 4/6 | +2.4 sd | UNPROVEN |
+| EURUSD 1h | 366 | 79.8% | −0.070R | 0.68 | −2.63 | | 0/6 | | REJECTED |
+| GBPUSD 1h | 357 | 84.6% | −0.002R | 0.99 | −0.10 | | 4/6 | | REJECTED |
+| EURUSD 15m | 111 | 54.1% | −0.348R | 0.10 | −6.26 | | 0/6 | | REJECTED |
+| GBPUSD 15m | 110 | 54.5% | −0.356R | 0.10 | −6.33 | | 0/6 | | REJECTED |
+
+Control is 12 seeds, not one (E-064). Monte Carlo on trade order: GOLD 1h
+drawdown median 4.0R, 95th percentile 6.1R.
+
+### Why it is not a fitted cell
+The whole 5×4 neighbourhood on GOLD 1h is positive, on **both** zone
+definitions, and the trigger survives pivot length 5→14 and wick share
+0→0.5 (t between +2.6 and +6.1 in all twelve). It is a plateau, not a spike.
+Best interior cell is min_piv=2 / stop 1.0A / target 0.75A at **+0.286R**
+(n=152), better than the cell chosen — the chosen cell was picked to match
+Veer's reported win rate, not to maximise anything.
+
+### And it barely cares about the spread
+GOLD, same geometry, commission 0: **+0.111R at zero spread, +0.090R at the
+0.46 measured off his terminal.** A 1.5 ATR stop makes R large enough that the
+spread is a rounding error. The argument about PU Prime's spread does not
+decide this strategy.
+
+### The honest caveats
+- FX is rejected outright and the 15m rows are UNPROVEN. This is a **gold and
+  index** result, on **1h**.
+- The shape risks 1.5 to make 0.5: it needs ~75% just to break even, and every
+  point of live win rate lost to slippage costs about 0.03R. No margin for
+  sloppiness.
+- **15m and 1h bars. Veer trades M1/M5/M15.** Nothing here measures his
+  timeframe. `ExportHistory.mq5` is still the blocker.
+
+Files: `JARVIS/research/liq_geometry.py`, `JARVIS/research/liq_validate.py`.
