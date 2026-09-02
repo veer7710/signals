@@ -2690,3 +2690,56 @@ stopped making new highs. The two must not be conflated, and the give-back
 engine keeps its stall gate.
 
 Files: `JARVIS/research/st_entry.py`, `st_exit_grid.py`, `st_partial.py`.
+
+---
+
+## E-073 — The stall finding was 6x smaller than reported. The EA was tuned on it.
+
+E-056 is the project's most-cited result: "bars since a trade last made a new
+best predicts giving it back, monotone, **8 of 8 markets**, CONFIRMED". The EA's
+give-back allowance scales on it — a trade still printing new highs got 35%
+more rope, one that peaked 25 bars ago got 45% less.
+
+**E-056 takes one observation per BAR.** A trade that runs 61 bars contributes
+61 rows sharing one entry, one peak and one outcome, and every count and
+interval in E-056 treats them as 61 independent facts. Across all eight markets
+the average is **61.1 bars per trade**, so its n was inflated roughly 61-fold
+and its intervals are about √61 ≈ 8x too narrow.
+
+Re-run three ways. `gap` = P(gives it back | stall 12+) − P(gives it back | stall 0–3).
+
+| | gap | 95% interval | |
+|---|---|---|---|
+| counting BARS (E-056's method) | **+0.289** | [+0.264, +0.316] | clear |
+| cluster bootstrap, resampling TRADES | +0.289 | [+0.264, +0.316] | clear |
+| **one vote per trade**, 1826 independent trades | **+0.046** | **[−0.002, +0.105]** | **spans zero** |
+
+Per market, one vote per trade: **0 of 8** have an interval clear of zero.
+Six of eight still lean positive, and the pooled point estimate is positive.
+
+### The verdict
+**E-056 is downgraded from CONFIRMED to SUPPORTED, and its magnitude is wrong
+by a factor of six.** The direction is probably real — six markets lean the
+same way and the pooled estimate is positive — but the size it was quoted at
+came from long trades each contributing dozens of stalled bars.
+
+The cluster bootstrap being clear while the per-trade estimate is not is not a
+contradiction: the cluster test resamples trades but keeps their bars, so it
+measures the *bar-weighted* gap honestly, and that quantity really is +0.289.
+The EA does face a bar-weighted decision population — it asks "has this trade
+stalled?" at every bar. But the *evidence* behind the rule rests on ~1800
+independent trades, not 111,605 bars, and at that n the effect is +0.046.
+
+### What changed in the EA
+Stall tiers cut by the same factor the effect shrank by: **1.35/0.55 → 1.07/0.93**.
+The direction is kept, the magnitude is now what is measured. `InpStallScales=false`
+removes it entirely, which the evidence would also permit.
+
+### The lesson, which is general
+Three separate results this session (E-050, E-064, this) failed the same way:
+a statistic computed over the wrong unit. Bars are not trades, one control seed
+is not a control, and twelve signals are not a strategy. **Any result quoted
+with an n far larger than the number of independent decisions behind it should
+be assumed wrong until re-counted.**
+
+File: `JARVIS/research/stall_attack.py`.

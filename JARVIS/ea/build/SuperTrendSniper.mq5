@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.11"
+#property version   "2.12"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.11 / timer readout + 2.0 ATR stop"
+#define STS_BUILD "2026-09-02 / 2.12 / stall tiers cut to what E-073 measures"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -2427,17 +2427,33 @@ double GiveBackAllowed(double peakR, int stall, bool afterImpulse)
    else if(risk == 2) gb *= 0.62;
    else if(risk >= 3) gb *= 0.45;
 
-   // E-056. Weighted to the measured gradient, not to taste: the 0-1 and
-   // 1-3 buckets were BETTER than base in 8 of 8 markets, so a trade still
-   // printing new highs is given more room, not less.
+   // E-056, AS CORRECTED BY E-073. These tiers used to run 1.35 down to 0.55,
+   // a 2.5x spread, on the strength of "8 of 8 markets, monotone". That result
+   // took ONE OBSERVATION PER BAR. A trade that runs 61 bars contributed 61
+   // rows sharing one entry, one peak and one outcome, and every count in
+   // E-056 treated them as 61 independent facts.
+   //
+   // E-073 re-ran it with each trade voting once. Pooled over 1826 independent
+   // trades across eight markets:
+   //
+   //     counting BARS        gap +0.289   95% [+0.264, +0.316]   clear
+   //     ONE VOTE PER TRADE   gap +0.046   95% [-0.002, +0.105]   SPANS ZERO
+   //
+   // Six markets of eight still lean positive and the pooled point estimate is
+   // positive, so the DIRECTION is kept - a trade still making new highs gets
+   // more rope than one that stopped 25 bars ago. But the effect is 6x smaller
+   // than the number these tiers were cut from, and at 95% it does not clear
+   // zero. So the spread is cut by the same factor: 1.35/0.55 becomes
+   // 1.07/0.93. That is what +0.046 buys. Set InpStallScales=false to remove
+   // it entirely, which the evidence would also permit.
    if(InpStallScales)
    {
-      if(stall <= 1)       gb *= 1.35;
-      else if(stall <= 3)  gb *= 1.15;
+      if(stall <= 1)       gb *= 1.07;
+      else if(stall <= 3)  gb *= 1.04;
       else if(stall <= 6)  gb *= 1.00;
-      else if(stall <= 12) gb *= 0.85;
-      else if(stall <= 25) gb *= 0.70;
-      else                 gb *= 0.55;
+      else if(stall <= 12) gb *= 0.98;
+      else if(stall <= 25) gb *= 0.95;
+      else                 gb *= 0.93;
    }
 
    // E-057: an impulse gives back more of itself than an ordinary bar does,

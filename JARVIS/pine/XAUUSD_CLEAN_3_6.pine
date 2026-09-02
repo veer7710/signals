@@ -168,10 +168,11 @@ brkClose  = input.float(0.65,"BREAK: min close position in the bar", group = gA,
 
 gR       = "STOP"
 slBuf    = input.float(0.35,"Buffer beyond structure (ATR)", group = gR, step = 0.05)
-slMinAtr = input.float(1.5, "Minimum stop (ATR)", group = gR, step = 0.1)
+slMinAtr = input.float(2.0, "Minimum stop (ATR)", group = gR, step = 0.1,
+     tooltip = "2.0, and it is measured, not a preference. E-071 swept every stop/target pair on the EA's own flips. GOLD, points made per 0.01 lot: a 1.5 ATR stop with a 3R target makes +715. A 2.0 ATR stop with the same target makes +1385. Same entries, one number changed. A 1.5 ATR stop on M1 gold sits inside the noise the flip bar itself just made, so the trade is stopped out by the move that signalled it.")
 slMax    = input.float(4.0, "Maximum stop that still qualifies (points)", group = gR, step = 0.1)
 spread   = input.float(0.46,"Assumed spread (points)", group = gR, step = 0.01,
-     tooltip = "MEASURED off your own screenshots (0.41 / 0.46 / 0.47 / 0.50), not assumed. Your 3.5 had 0.30 here, which made every net target on the chart look 0.32 points better than it was. On a Prime/ECN account set this to 0.20 and add the commission.")
+     tooltip = "MEASURED off your own screenshots (0.41 / 0.46 / 0.47 / 0.50), not assumed. Your 3.5 had 0.30 here, which made every net target on the chart look 0.32 points better than it was. On a Prime/ECN account set this to 0.20 and add the commission. Worth knowing: with the 2.0 ATR stop this number barely moves the result - E-069 measured +0.111R at zero spread against +0.090R at 0.46 - because a wide stop makes R large enough that the spread is a rounding error.")
 
 gD        = "DISPLAY"
 cBuy      = input.color(#00A6E8, "BUY colour",  group = gD)
