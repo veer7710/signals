@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.10"
+#property version   "2.11"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.10 / timer-driven readout"
+#define STS_BUILD "2026-09-02 / 2.11 / timer readout + 2.0 ATR stop"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -308,7 +308,12 @@ input group "=== SIZE ==="
 input bool   InpUseFixedLots  = false;  // fixed size instead of % risk
 input double InpFixedLots     = 0.03;   // total size for one entry
 input double InpRiskPct       = 0.50;   // % of equity risked per trade (if not fixed)
-input double InpStopAtrMult   = 1.5;    // stop distance in ATR
+// 2.0, not 1.5. E-071 measured every stop/target pair on the EA's own signals.
+// GOLD, points made per 0.01 lot:  1.5 ATR stop / 3R = +715.  2.0 ATR / 3R =
+// +1385.  Same entries, same target, one number changed. A 1.5 ATR stop on M1
+// gold sits inside the noise the flip bar itself just made, so the trade is
+// stopped by the move that signalled it. Nothing else in this file changes.
+input double InpStopAtrMult   = 2.0;    // stop distance in ATR
 // THE COST FLOOR ON THE STOP. E-063, and it is the most important line in
 // this file.
 //

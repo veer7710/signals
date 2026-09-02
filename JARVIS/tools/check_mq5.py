@@ -100,7 +100,7 @@ CTRADE_METHODS = set("""
 Buy Sell BuyLimit SellLimit BuyStop SellStop PositionClose PositionModify
 PositionClosePartial OrderDelete OrderModify SetExpertMagicNumber
 SetTypeFilling SetTypeFillingBySymbol SetDeviationInPoints SetAsyncMode
-ResultRetcode ResultDeal ResultOrder ResultPrice ResultVolume ResultComment
+ResultRetcode ResultRetcodeDescription ResultDeal ResultOrder ResultPrice ResultVolume ResultComment
 """.split())
 
 TYPE_WORDS = set("""
