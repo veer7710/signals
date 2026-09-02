@@ -45,22 +45,49 @@ int WriteOne(ENUM_TIMEFRAMES tf, string tag)
    MqlRates r[];
    ArraySetAsSeries(r, false);          // oldest first, which is what we write
 
-   int avail = Bars(_Symbol, tf);
-   if(avail <= 10)
+   // MT5 ONLY HANDS OUT BARS IT HAS ALREADY DOWNLOADED, AND THE DOWNLOAD IS
+   // ASYNCHRONOUS. The first call to CopyRates for a timeframe the terminal has
+   // not cached returns a few hundred bars (or -1) and STARTS the fetch in the
+   // background. A script that takes that first answer as the truth writes a
+   // useless file and looks like it worked - which is the most likely reason
+   // this has never produced a usable M1 export.
+   //
+   // So: ask, wait, ask again, until the count stops growing. Requesting the
+   // bars is itself what triggers the download; there is no other way to make
+   // the terminal fetch deep M1 history from a script.
+   int want = InpMaxBars;
+   int got = 0, prev = -1, still = 0;
+   for(int attempt = 0; attempt < 120; attempt++)   // up to ~60 seconds
    {
-      PrintFormat("%s: only %d bars available. Open a chart on this timeframe "
-                  "and press Home until it stops loading, then run again.",
-                  tag, avail);
-      return 0;
+      got = CopyRates(_Symbol, tf, 0, want, r);
+      if(got >= want) break;                        // got everything asked for
+      if(got == prev)
+      {
+         still++;
+         // three identical answers in a row means the server has no more
+         if(still >= 6 && got > 0) break;
+      }
+      else
+      {
+         still = 0;
+         if(got > 0)
+            PrintFormat("%s: downloading... %d bars so far", tag, got);
+      }
+      prev = got;
+      Sleep(500);
    }
 
-   int want = MathMin(avail, InpMaxBars);
-   int got  = CopyRates(_Symbol, tf, 0, want, r);
-   if(got <= 0)
+   if(got <= 10)
    {
-      PrintFormat("%s: CopyRates failed (%d). Error %d.", tag, got, GetLastError());
+      PrintFormat("%s: only %d bars after waiting. Open a chart on %s, press "
+                  "Home and hold it until the bar count stops rising, then run "
+                  "this again. Some brokers also cap how far back M1 goes.",
+                  tag, got, EnumToString(tf));
       return 0;
    }
+   if(got < want)
+      PrintFormat("%s: got %d of the %d requested - that is everything the "
+                  "server has.", tag, got, want);
 
    string fn = InpOutName + "_" + tag + ".json";
    int h = FileOpen(fn, FILE_WRITE | FILE_TXT | FILE_ANSI);
@@ -102,6 +129,8 @@ int WriteOne(ENUM_TIMEFRAMES tf, string tag)
 //+------------------------------------------------------------------+
 void OnStart()
 {
+   Print("This can take up to a minute per timeframe: M1 history is downloaded "
+         "on demand and the script waits for it. Do not close the terminal.");
    PrintFormat("ExportHistory on %s. Files go to MQL5/Files/ — open that "
                "folder with File > Open Data Folder.", _Symbol);
 

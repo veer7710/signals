@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.00"
+#property version   "3.02"
 #property strict
 
-#define LQS_BUILD "2026-09-02 / 3.00 / top-tick + FVG + order blocks"
+#define LQS_BUILD "2026-09-02 / 3.02 / spend a level only when it trades"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -95,6 +95,8 @@ input double InpEntryPast     = 0.25;   // limit sits this many ATR PAST the zon
 input double InpStopAtr       = 0.60;   // stop, ATR beyond the FILL. Small, on purpose.
 input double InpTargetR       = 2.0;    // target, multiples of that risk
 input int    InpArmLife       = 60;     // a zone stops being armable this many bars after birth
+input int    InpArmWait       = 60;     // an unfilled limit is cancelled after this many bars
+input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED
 input double InpEntryLots     = 0.02;   // size for one entry
 input int    InpMaxPositions  = 1;      // one at a time, as measured
 
@@ -155,6 +157,8 @@ void   PushGap(Gap &G[], double top, double bot, int dir, int bar);
 void   AgeGaps(Gap &G[], int bar, double c);
 void   BuildSmc();
 double BestLevel(int dir, double px, double a, string &src);
+bool   LevelUsed(double lvl);
+void   MarkUsed(double lvl);
 int    NearestZone(const Zone &Z[], int bar, double px, bool above);
 void   ArmSide(int dir);
 void   KillSide(int dir, string why);
@@ -503,6 +507,9 @@ ulong    g_tkBuy  = 0;      // resting BUY limit  (at a sellside zone, below)
 ulong    g_tkSell = 0;      // resting SELL limit (at a buyside zone, above)
 double   g_lvlBuy = 0.0;
 double   g_lvlSell = 0.0;
+int      g_barBuy = -1;     // bar the buy limit was placed on
+int      g_barSell = -1;
+double   g_used[];          // levels already traded or expired - never re-armed
 
 // Where the order sits: past the far edge of the zone, into the liquidity.
 double EntryLevel(const Zone &z, double a)
@@ -530,11 +537,71 @@ int NearestZone(const Zone &Z[], int bar, double px, bool above)
    return best;
 }
 
+// LEAVE A RESTING ORDER ALONE, AND ONLY SPEND A LEVEL THAT TRADED.
+// This is what P91 forced, and the road to it is worth recording because two
+// plausible fixes were wrong before the third was right.
+//
+// Build 3.00 re-pointed both limits to the nearest level on EVERY bar close.
+// The parity harness put that beside what E-080 actually measured. GOLD 1h:
+//
+//                        trades   win%   expectancy   points   95th drawdown
+//   E-080, as measured      515  51.1%     +0.487R    +2792    14.6R = GBP99
+//   build 3.00 in fact     1519  41.5%     +0.201R    +2884    32.9R = GBP223
+//
+// Marginally more money for MORE THAN DOUBLE THE DRAWDOWN. On a 40-pound
+// account that is not a preference, it is the account. Chasing the nearest
+// level meant order blocks - which form close to price constantly - supplied
+// 1025 of 1519 trades against 62 in the measurement.
+//
+// Two fixes were tried and measured before this one:
+//   preferring the zone source over FVG and order blocks    +0.167R  WORSE
+//   expiring the order faster (wait 1, 2, 3, 5 bars)        flat, no effect
+// Both were reasonable guesses and both were wrong, which is the reason to
+// measure rather than reason.
+//
+// What actually mattered: build 3.01 blacklisted a level as soon as an order
+// was PLACED there, even if that order expired untouched. An untouched order
+// has not spent anything - the level is exactly as valid as before. Marking it
+// only on a real fill, with a 60-bar rest, gives +0.249R and +2714 points
+// against +0.166R and +2202.
+//
+// HONEST LIMIT: this EA still does not reproduce +0.487R and cannot. That
+// number belongs to a backtest that may hold many candidate orders at once;
+// an EA rests two. THE EA'S NUMBER IS +0.249R, and that is the one to quote.
+bool LevelUsed(double lvl)
+{
+   for(int i = 0; i < ArraySize(g_used); i++)
+      if(MathAbs(g_used[i] - lvl) < _Point * 2) return true;
+   return false;
+}
+
+void MarkUsed(double lvl)
+{
+   int n = ArraySize(g_used);
+   ArrayResize(g_used, n + 1);
+   g_used[n] = lvl;
+   if(ArraySize(g_used) > 400)
+   {
+      for(int i = 0; i < ArraySize(g_used) - 1; i++) g_used[i] = g_used[i + 1];
+      ArrayResize(g_used, 400);
+   }
+}
+
 void ArmSide(int dir)
 {
    if(g_lockedDay || g_lockedPerm) return;
    if(PosCount() >= InpMaxPositions) return;
    if(g_tradesToday >= InpMaxTradesDay) return;
+
+   // an order already resting and not yet expired is LEFT ALONE
+   ulong tkNow = (dir > 0) ? g_tkBuy : g_tkSell;
+   int   bAt   = (dir > 0) ? g_barBuy : g_barSell;
+   int   barNo = Bars(_Symbol, _Period) - 1;
+   if(tkNow != 0 && OrderSelect(tkNow))
+   {
+      if(barNo - bAt <= InpArmWait) return;
+      KillSide(dir, StringFormat("unfilled after %d bars", InpArmWait));
+   }
 
    ulong  tk   = (dir > 0) ? g_tkBuy : g_tkSell;
    double a    = ATRv(1);
@@ -555,12 +622,10 @@ void ArmSide(int dir)
    int dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double lvl = NormalizeDouble(raw, dg);
 
+   if(InpArmOncePerLvl && LevelUsed(lvl)) return;
+
    // already resting at this exact level for this exact zone: leave it alone.
    // Re-sending it every bar would churn the order book and reset its age.
-   double have = (dir > 0) ? g_lvlBuy : g_lvlSell;
-   if(tk != 0 && OrderSelect(tk) && MathAbs(have - lvl) < _Point)
-      return;
-
    KillSide(dir, "");
 
    double stop = NormalizeDouble(lvl - dir * InpStopAtr * a, dg);
@@ -593,8 +658,12 @@ void ArmSide(int dir)
                         ORDER_TIME_GTC, 0, "LQS toptick");
    if(ok)
    {
-      if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl; }
-      else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; }
+      if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl;  g_barBuy = barNo; }
+      else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; g_barSell = barNo; }
+      // NOT marked used here. A level is only spent once it has actually
+      // TRADED - see OnTradeTransaction. Blacklisting a level because an order
+      // rested there and expired untouched throws away a level that is exactly
+      // as valid as it was before, and measured 0.166R against 0.249R.
       Log(StringFormat("ARMED %s LIMIT %.2f at %.*f   stop %.*f (%.*f risk)   "
                        "target %.*f   source %s",
                        dir > 0 ? "BUY" : "SELL", InpEntryLots, dg, lvl,
@@ -615,8 +684,8 @@ void KillSide(int dir, string why)
       if(why != "") Log(StringFormat("cancelled the %s limit: %s",
                                      dir > 0 ? "buy" : "sell", why));
    }
-   if(dir > 0) { g_tkBuy = 0;  g_lvlBuy = 0.0; }
-   else        { g_tkSell = 0; g_lvlSell = 0.0; }
+   if(dir > 0) { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_barBuy = -1; }
+   else        { g_tkSell = 0; g_lvlSell = 0.0; g_barSell = -1; }
 }
 
 void KillAll(string why)
@@ -629,8 +698,8 @@ void KillAll(string why)
 // alive, and clear any ticket the broker has already disposed of.
 void ManageOrders()
 {
-   if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0; }
-   if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; }
+   if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_barBuy = -1; }
+   if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; g_barSell = -1; }
 
    if(PosCount() >= InpMaxPositions || g_lockedDay || g_lockedPerm)
    {
@@ -726,7 +795,8 @@ void Readout()
       "SPREAD     now %.*f   avg %.*f   worst %.*f\n"
       "STATE      %s\n"
       "\n"
-      "E-080: GOLD 1h 51.1%% on 515, +0.487R, PF 1.95, t=+7.4, 6/6 - PROMISING.\n"
+      "P91 parity, THE EA's own numbers: GOLD 1h 43.0%% on 895, +0.249R,\n"
+      "PF 1.42, t=+5.0. The +0.487R figure is the BACKTEST's and is not this EA's.\n"
       "HALF THESE TRADES LOSE. The money is in 2R, not in being right often.\n"
       "Measured on 15m/1h bars, NOT on M1. XAUUSD only.",
       LQS_BUILD,
@@ -848,6 +918,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(entry == DEAL_ENTRY_IN)
    {
       g_tradesToday++;
+      // NOW the level is spent - it produced a trade.
+      if(InpArmOncePerLvl)
+         MarkUsed(HistoryDealGetDouble(trans.deal, DEAL_PRICE));
       // one side filled, so the other must go: the measurement counted one
       // position at a time and two open would be a different strategy.
       KillAll("the other side filled");

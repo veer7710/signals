@@ -2981,3 +2981,65 @@ order rests until touched — that is the whole point of it.
 `LIQUIDITY_CLEAN_1_3.pine` and `LiquiditySniper.mq5` build 3.00.
 
 Files: `JARVIS/research/smc.py`, `smc_combine.py`.
+
+---
+
+## E-081 — What a £40 account can do. This governs every phase after it.
+
+0.01 lots of XAUUSD is **£0.787 per point and cannot be made smaller**, so the
+account does not choose its risk — the **timeframe** does:
+
+| timeframe | 0.60 ATR stop | risk on 0.01 | % of £40 |
+|---|---|---|---|
+| 1h | 8.61 pts | £6.78 | **17.0%** |
+| 15m | 5.05 pts | £3.98 | **10.0%** |
+| M5 (est) | 2.92 pts | £2.30 | 5.7% |
+| **M1 (est)** | **1.31 pts** | **£1.03** | **2.6%** |
+
+**A £40 account must trade M1.** Not a preference — the only timeframe where
+the smallest position the broker allows is a survivable bet. 15m and 1h are out
+at that balance whatever the edge turns out to be.
+
+The ruin table in `account.py` carries its own warning: the ending balances are
+arithmetic on a distribution measured on **GOLD 1h and never on M1**. They are
+conditional, and the condition is the whole of Block A.
+
+---
+
+## E-082 / P91 — The EA was not trading what I measured. A 2.4× expectancy gap.
+
+**Nothing in this project had ever checked that an EA reproduces its backtest.**
+This is the gap through which a good backtest becomes a losing account.
+
+E-080 measured a *signal set*: every candidate, in time order, first touched
+wins. The EA cannot rest fifty orders — it picked the **nearest** level per
+side and re-pointed on every bar close. GOLD 1h, same bars:
+
+| | trades | win% | expectancy | points | 95th-pct drawdown |
+|---|---|---|---|---|---|
+| **E-080 as measured** | 515 | 51.1% | **+0.487R** | +2792 | 14.6R = **£99** |
+| **build 3.00 in fact** | 1519 | 41.5% | **+0.201R** | +2884 | 32.9R = **£223** |
+
+Marginally more money for **more than double the drawdown**. On a £40 account
+that is not a preference, it is the account. Chasing the nearest level meant
+order blocks — which form close to price constantly — supplied **1025 of 1519
+trades against 62** in the measurement.
+
+### Two plausible fixes, both measured, both wrong
+- **Prefer the zone source over FVG/OB:** +0.167R. *Worse.*
+- **Expire the order faster (1/2/3/5 bars):** flat, no effect at all.
+
+### What actually mattered
+Build 3.01 blacklisted a level as soon as an order was **placed** there, even
+if it expired untouched. An untouched order has not spent anything — the level
+is exactly as valid as before. Marking it only on a **real fill**, with a
+60-bar rest: **+0.249R and +2714 points** against +0.166R and +2202.
+
+### The honest limit
+**The EA still does not reproduce +0.487R and cannot.** That number belongs to
+a backtest which may hold many candidate orders at once; an EA rests two.
+**The EA's number is +0.249R (n=895, PF 1.42, t=+5.02)** and that is the figure
+now printed on its own chart. Every previous quote of +0.487R for this EA was
+the backtest's number, not its own.
+
+Files: `JARVIS/research/account.py`, `ea_parity.py`.
