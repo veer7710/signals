@@ -2798,3 +2798,52 @@ filters are 5/8, a coin flip), E-066 (the money is in the MIDDLE efficiency
 band, so filtering by efficiency cuts the paying regime), and now E-074.
 
 File: `JARVIS/research/gate_audit.py`.
+
+---
+
+## E-075 — The give-back rule was never the problem. Arming it at 0.6R was.
+
+E-051b compared exits on a 1.5 ATR stop with the ADX gate on. Both have since
+changed (E-071, E-074), so R is a third larger and every rule expressed in R —
+which is all of them — means something different. Re-run on the EA as it now
+stands. GOLD 1h, 459 trades, same entries for every row, overlap allowed so
+this measures exits and nothing else.
+
+| exit policy | win% | expectancy | t | **points** |
+|---|---|---|---|---|
+| **trail 3×ATR armed at 1R** | 39.7% | +0.347R | +3.46 | **+4622** |
+| **give-back 25% armed at 3R** | 33.4% | **+0.368R** | +3.77 | +4313 |
+| trail 3×ATR | 36.9% | +0.305R | +3.11 | +4065 |
+| fixed 3R | 33.6% | +0.311R | +3.57 | +3961 |
+| give-back 30% armed at 2R | 41.6% | +0.295R | +3.77 | +3763 |
+| time 50 bars | 35.8% | +0.321R | +3.06 | +3729 |
+| give-back 25% armed at 1.5R | 46.6% | +0.227R | +3.35 | +3210 |
+| **give-back 30% armed at 1R** | 52.3% | +0.136R | +2.29 | **+2251** |
+| BE@1R + trail | 34.9% | +0.223R | +2.51 | +2690 |
+| **trail + give-back 30% at 1R (the EA before this)** | 49.2% | **+0.087R** | +1.52 | **+1618** |
+| ORACLE — closes at the exact peak, not tradeable | 97.8% | +3.018R | +15.11 | +41471 |
+
+### The finding
+**Arming level is a monotone dial, and the EA was at the wrong end of it.**
++0.136R at 1R → +0.227R at 1.5R → +0.295R at 2R → **+0.368R at 3R**. The
+give-back rule armed at 3R is the highest-expectancy exit tested. Armed at
+0.6R and £0.30 — where this EA has been — it fires on ordinary trades and caps
+them, which is exactly where the earlier "3× worse than the trail" result came
+from. I had been condemning the rule when the fault was the threshold.
+
+**Trail + give-back together is the worst reasonable combination** at every
+arming level: +1618 points against +4622 for the trail alone.
+
+### Changed
+`InpGbArmR` 0.6 → **3.0**, `InpGbArmMoney` £0.30 → **£2.00**.
+
+That still does the job Veer asked for — *"was up 2.50 on two 0.01s total and
+closed at 47p each"* — because a £2.00 floor protects a £2.50 peak. A £0.30
+floor protects nothing and pays for it with the runners.
+
+**Honest note:** on points the trail alone still wins, +4622 against +4313.
+Keeping the give-back armed high is a deliberate concession to a preference
+Veer has stated three times in writing, and it now costs about 7% rather
+than 65%.
+
+File: `JARVIS/research/exit_rerun.py`.

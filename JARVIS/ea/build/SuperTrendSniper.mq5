@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.13"
+#property version   "2.14"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.13 / gates audited, ADX ceiling off"
+#define STS_BUILD "2026-09-02 / 2.14 / give-back arms at 3R, not 0.6R"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -506,8 +506,29 @@ input group "=== PROFIT PROTECTION (E-051: measured, not guessed) ==="
 // writing: "we are not looking for massive profits ... we want small
 // consistent profits hundreds of times". These settings do what he asked for.
 input bool   InpUseGiveBack   = true;   // leave when profit is handed back
-input double InpGbArmR        = 0.6;    // arm once the trade is this good in R...
-input double InpGbArmMoney    = 0.30;   // ...OR this much money, whichever first
+// ARMING IS THE WHOLE ARGUMENT, AND IT IS A DIAL, NOT A SWITCH.
+// E-075 re-measured every exit policy on this EA as it now stands (2.0 ATR
+// stop, ADX gate off), all on the same entries. GOLD 1h, 459 trades:
+//
+//     give-back 30% armed at 1.0R   +0.136R   +2251 points
+//     give-back 25% armed at 1.5R   +0.227R   +3210 points
+//     give-back 30% armed at 2.0R   +0.295R   +3763 points
+//     give-back 25% armed at 3.0R   +0.368R   +4313 points   <- best expectancy
+//     trail 3xATR armed at 1.0R     +0.347R   +4622 points   <- best points
+//
+// The give-back RULE was never the problem. Arming it early was. At 0.6R and
+// GBP0.30 - where this EA has been - it fires on ordinary trades and caps
+// them, and that is where the "3x worse than the trail" result came from. Armed
+// at 3R it is the highest-expectancy rule tested and it still does the job
+// Veer actually asked for: "was up 2.50 on two 0.01s total and closed at 47p".
+// A GBP2.00 floor protects that peak. A GBP0.30 floor protects nothing and
+// costs the runners that pay for the losers.
+//
+// Honest note: on POINTS the trail alone still wins (+4622 vs +4313). Keeping
+// the give-back armed high is a deliberate concession to a preference Veer has
+// stated three times in writing, and it now costs about 7% rather than 65%.
+input double InpGbArmR        = 3.0;    // arm once the trade is this good in R...
+input double InpGbArmMoney    = 2.00;   // ...OR this much money, whichever first
 input double InpGbBase        = 0.20;   // give back this much of the peak
 input double InpGbTier2R      = 1.5;    // once the peak passes this...
 input double InpGbTier2       = 0.16;   // ...allow only this much give-back
