@@ -460,14 +460,37 @@ input group "=== PROFIT PROTECTION (E-051: measured, not guessed) ==="
 // WHAT IT IS NOT: it did not beat a random entry on GOLD 1h (E-050), and
 //   EURUSD/GBPUSD stay negative under every exit rule tried. It shapes the
 //   equity path. It does not manufacture an edge.
+// RETUNED 2026-09-02 FROM A LIVE TRADE VEER REPORTED.
+// Two 0.01 positions peaked at GBP 2.50 together and closed at GBP 0.47 each -
+// GBP 0.94 kept out of GBP 2.50, so 62% of the peak was handed back. He has
+// also seen peaks of GBP 8 close for a fraction.
+//
+// WHY THE OLD SETTINGS LET THAT HAPPEN: the rule armed at 1.0 R and then
+// allowed 24-30% of the peak back. On 0.01 lots one R is a large number in
+// MONEY, so a trade could run up GBP 2.50, never reach the arming threshold in
+// R terms on a wide stop, and give the lot back with the rule never firing.
+//
+// TWO CHANGES:
+//  1. It now arms on MONEY OR R, whichever comes first. Veer thinks in pounds
+//     and trades 0.01 lots; a rule that only speaks R is blind to exactly the
+//     trades he is complaining about.
+//  2. The allowances are roughly a third tighter. At GBP 2.50 peak and a 20%
+//     allowance the trade closes at GBP 2.00 instead of GBP 0.94.
+//
+// THE COST, STATED: E-051b measured that a tighter give-back keeps LESS
+// expectancy - it sells the runners that pay for the losers. Veer has chosen
+// the certain smaller number over the larger uncertain one three times now, in
+// writing: "we are not looking for massive profits ... we want small
+// consistent profits hundreds of times". These settings do what he asked for.
 input bool   InpUseGiveBack   = true;   // leave when profit is handed back
-input double InpGbArmR        = 1.0;    // only after the trade got this good
-input double InpGbBase        = 0.30;   // give back this much of the peak
-input double InpGbTier2R      = 2.0;    // once the peak passes this...
-input double InpGbTier2       = 0.24;   // ...allow only this much give-back
-input double InpGbTier3R      = 4.0;    // and past this...
-input double InpGbTier3       = 0.18;   // ...this much. Big peaks are protected harder
-input double InpGbMinMoney    = 0.0;    // ignore the rule below this profit (0 = off)
+input double InpGbArmR        = 0.6;    // arm once the trade is this good in R...
+input double InpGbArmMoney    = 1.00;   // ...OR this much money, whichever first
+input double InpGbBase        = 0.20;   // give back this much of the peak
+input double InpGbTier2R      = 1.5;    // once the peak passes this...
+input double InpGbTier2       = 0.16;   // ...allow only this much give-back
+input double InpGbTier3R      = 3.0;    // and past this...
+input double InpGbTier3       = 0.12;   // ...this much. Big peaks are protected hardest
+input double InpGbMinMoney    = 0.25;   // but never act below this profit - noise
 // 1.0 SINCE 2026-09-01, ON VEER'S EXPLICIT INSTRUCTION:
 // "although we wanna claim big big trends we want to actually CLOSE IN PROFIT
 //  ... im happy if maximum potential profit on a trend is not taken as long as
@@ -487,9 +510,11 @@ input group "=== BASKET (manage the TOTAL, not one trade) ==="
 // Four positions each individually behaving reasonably can still hand back
 // the whole basket, because nothing was watching the total. Now something is.
 input bool   InpUseBasket     = true;   // protect total floating profit
-input double InpBasketArmPct  = 0.60;   // arm once the basket is this % of equity green
-input double InpBasketMinMoney= 2.00;   // ...and at least this much money
-input double InpBasketGiveBack= 0.35;   // close the basket after handing back this much
+// Same retune. Veer's basket peaked at GBP 2.50 and the old floor of GBP 2.00
+// meant it barely armed before the money was gone.
+input double InpBasketArmPct  = 0.40;   // arm once the basket is this % of equity green
+input double InpBasketMinMoney= 1.00;   // ...or at least this much money, whichever is lower
+input double InpBasketGiveBack= 0.20;   // close the basket after handing back this much
 input bool   InpBasketCloseAll= true;   // false = only close the losers, keep the winner
 // Veer: "what if everytime a trade goes above 1 pound 20 TOTAL we put sl there
 // although often it can hit that sl and then just run off".
@@ -2518,7 +2543,14 @@ void ProtectPositions()
       if(g_tkGbDone[ti]) continue;      // banks once, then the trail has it
 
       double peakR = g_tkPeakPrev[ti] / g_tkRisk[ti];   // NOT this tick's high
-      if(peakR < InpGbArmR) continue;                 // never got good enough
+
+      // ARM ON MONEY OR ON R, WHICHEVER COMES FIRST. On 0.01 lots a trade can
+      // be worth real money long before it is worth 1 R, and those are exactly
+      // the trades that were being handed back with the rule never firing.
+      bool armedR     = (peakR >= InpGbArmR);
+      bool armedMoney = (InpGbArmMoney > 0.0
+                      && g_tkPeakMoney[ti] >= InpGbArmMoney);
+      if(!armedR && !armedMoney) continue;
       if(InpGbMinMoney > 0.0 && g_tkPeakMoney[ti] < InpGbMinMoney) continue;
 
       long   type = PositionGetInteger(POSITION_TYPE);
@@ -2531,7 +2563,18 @@ void ProtectPositions()
       int    stall = StallBars(ti);
       double gb    = GiveBackAllowed(peakR, stall, g_tkPeakImp[ti]);
       double keep  = peakR * (1.0 - gb);
-      if(rNow > keep) continue;
+
+      // If the trade armed on MONEY rather than on R, the R-space floor above
+      // can sit below zero and never trigger. Protect the money peak directly
+      // as well, and act on whichever floor is hit first.
+      bool moneyBreach = false;
+      if(armedMoney && g_tkPeakMoney[ti] > 0.0)
+      {
+         double mNow = PositionGetDouble(POSITION_PROFIT)
+                     + PositionGetDouble(POSITION_SWAP);
+         moneyBreach = (mNow <= g_tkPeakMoney[ti] * (1.0 - gb));
+      }
+      if(rNow > keep && !moneyBreach) continue;
 
       // One close REQUEST at a time. Without this a requote produced a fresh
       // close attempt, a Log line and a full FileOpen/Write/Close journal row
@@ -2655,7 +2698,12 @@ void ProtectBasket()
    if(b.n == 0) return;
 
    double eq  = AccountInfoDouble(ACCOUNT_EQUITY);
-   double arm = MathMax(eq * InpBasketArmPct / 100.0, InpBasketMinMoney);
+   // MathMin, not MathMax. The old line armed at the LARGER of the two, so on
+   // a small account the GBP 2.00 floor dominated and a GBP 2.50 peak had
+   // almost no protected range at all. The floor is meant to stop the rule
+   // firing on noise, not to postpone it until the money is gone.
+   double arm = MathMin(MathMax(eq * InpBasketArmPct / 100.0, 0.25),
+                        InpBasketMinMoney);
 
    // an old, stretched, crowded run gets protected sooner, not later
    string w = "";

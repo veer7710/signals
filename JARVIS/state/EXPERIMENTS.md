@@ -2488,3 +2488,50 @@ should never be traded, and one cell is clearly worth more.
 prove nothing — what carries this is that the SHAPE axis is monotone in the
 same direction at all three speeds, and that its mechanism agrees with E-052
 which was measured independently.
+
+---
+
+## E-067 — Retuning the give-back from a live trade. The arming threshold was the bug.
+**Verdict: a deliberate expectancy-for-consistency trade, made on Veer's instruction**
+
+Veer, 2026-09-02: *"i've already seen us in the past 5 min go up in peaks of 8
+pound close not near was up 2.50 on two 0.01s total and closed at 47 p each see
+how horrible that is"*.
+
+GBP 2.50 peak, GBP 0.94 kept. **62% of the peak handed back.**
+
+### Why the rule did not fire
+It armed at **1.0 R only**. On 0.01 lots, and with the stop now widened by the
+cost floor (E-063), one R is several pounds — so a trade could run to GBP 2.50,
+never reach 1 R, and give the whole thing back **with the give-back rule never
+once evaluating it**. The rule was blind to exactly the trades being complained
+about, because it only spoke R and he trades in pounds.
+
+### Changed
+1. **Arms on MONEY or on R, whichever comes first.** `InpGbArmMoney = 1.00`.
+2. **Allowances roughly a third tighter**: base 0.30 → 0.20, tier2 0.24 → 0.16,
+   tier3 0.18 → 0.12, and the tiers trigger sooner (1.5 R and 3.0 R).
+3. **A money floor alongside the R floor**, so a trade armed on money is
+   protected in money — the R-space floor can sit below zero and never trigger.
+4. **Basket: `MathMax` → `MathMin` on the arming threshold.** The old line armed
+   at the LARGER of "0.6% of equity" and "GBP 2.00", so on a small account the
+   GBP 2.00 floor dominated and a GBP 2.50 peak had almost no protected range.
+   The floor exists to stop the rule firing on noise, not to postpone it until
+   the money is gone. That was a genuine logic error, not a tuning choice.
+
+### What it does to his trade
+| peak | old (30% back) | new (20% back) |
+|---|---|---|
+| GBP 2.50 | GBP 1.75 | **GBP 2.00** |
+| GBP 8.00 | GBP 5.60 | **GBP 6.40** |
+
+Against the GBP 0.94 he actually kept, the arming fix is worth more than the
+allowance change: the allowance only matters once the rule is looking.
+
+### The cost, stated plainly
+E-051b measured that a tighter give-back keeps LESS expectancy — it sells the
+runners that pay for the losers. This is the third time Veer has chosen the
+certain smaller number over the larger uncertain one, in writing: *"we are not
+looking for massive profits ... we want small consistent profits hundreds of
+times"*. That is a legitimate preference between two measured options and the
+settings now match it. `InpGbBase` and `InpGbArmMoney` reverse it in one edit.
