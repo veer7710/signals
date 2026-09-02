@@ -57,7 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "1.00"
+#property version   "2.09"
+// THE BUILD STAMP. Printed on start and shown in the panel. Three separate
+// reports of "the profit box does not work" and no way to tell whether the
+// build carrying the fix was ever compiled. If the number below is not the one
+// in the message that shipped it, MetaEditor has not rebuilt: open the file and
+// press F7. An .ex5 does not update itself when the .mq5 changes.
+#define STS_BUILD "2026-09-02 / 2.09 / money-armed give-back"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -484,13 +490,13 @@ input group "=== PROFIT PROTECTION (E-051: measured, not guessed) ==="
 // consistent profits hundreds of times". These settings do what he asked for.
 input bool   InpUseGiveBack   = true;   // leave when profit is handed back
 input double InpGbArmR        = 0.6;    // arm once the trade is this good in R...
-input double InpGbArmMoney    = 1.00;   // ...OR this much money, whichever first
+input double InpGbArmMoney    = 0.30;   // ...OR this much money, whichever first
 input double InpGbBase        = 0.20;   // give back this much of the peak
 input double InpGbTier2R      = 1.5;    // once the peak passes this...
 input double InpGbTier2       = 0.16;   // ...allow only this much give-back
 input double InpGbTier3R      = 3.0;    // and past this...
 input double InpGbTier3       = 0.12;   // ...this much. Big peaks are protected hardest
-input double InpGbMinMoney    = 0.25;   // but never act below this profit - noise
+input double InpGbMinMoney    = 0.10;   // but never act below this profit - noise
 // 1.0 SINCE 2026-09-01, ON VEER'S EXPLICIT INSTRUCTION:
 // "although we wanna claim big big trends we want to actually CLOSE IN PROFIT
 //  ... im happy if maximum potential profit on a trend is not taken as long as
@@ -528,7 +534,21 @@ input bool   InpBasketCloseAll= true;   // false = only close the losers, keep t
 // the idea: it locks break-even plus the round-trip cost, so a trade that has
 // been worth GBP1.20 can no longer become a loser, and it does NOT try to bank
 // the GBP1.20 itself. Set InpLockAtMoney to 0 to switch it off entirely.
-input double InpLockAtMoney   = 1.20;   // once the basket is this green, stops go to break-even+
+// "what about trades which go up say 30p then close in loss"
+//
+// A trade that has been genuinely green should not be allowed to become a
+// loser. This locks EACH POSITION at break-even plus its own round trip once
+// it has been InpLockPosMoney in profit, so the worst case becomes zero rather
+// than a loss. The basket rule below does the same thing for the total.
+//
+// THE COST, AND IT IS REAL: E-051 measured break-even stops as the WORST exit
+// rule on all four markets tested, -0.161R to -0.308R, because they scratch
+// out the trades that were about to pay for the losers. Veer knows - he wrote
+// "often it can hit that sl and then just run off" himself. The threshold is
+// therefore set ABOVE noise: a trade has to have made real money before its
+// downside is removed, and a trade still finding its feet is left alone.
+input double InpLockPosMoney  = 0.50;   // lock a POSITION out of loss once this green
+input double InpLockAtMoney   = 1.20;   // once the BASKET is this green, stops go to break-even+
 input bool   InpLockOnlyOnce  = true;   // and are never pulled back afterwards
 // STACKING IS OFF AND SHOULD STAY OFF.
 // Veer, from the live account: "scale adds are making us profit but also loss
@@ -752,6 +772,7 @@ void   UpdatePeaks();
 void   ProtectPositions();
 void   ProtectBasket();
 void   LockBasket();
+void   LockPositions();
 bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
 void   RegisterSignal(int dir);
@@ -2631,6 +2652,47 @@ void ProtectPositions()
    }
 }
 
+// LOCK EACH POSITION OUT OF LOSS once it has been worth InpLockPosMoney.
+// This is the answer to a trade that goes 30p green and closes red: after this
+// fires, the worst that trade can do is zero.
+void LockPositions()
+{
+   if(InpLockPosMoney <= 0.0) return;
+
+   double cost = RoundTripCost();
+   double mn   = MinStopDist();
+   int    dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      int ti = TrackFind(tk);
+      if(ti < 0) continue;
+      if(g_tkPeakMoney[ti] < InpLockPosMoney) continue;   // never got green enough
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      double tp   = PositionGetDouble(POSITION_TP);
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      double lock = NormalizeDouble(open + dir * cost, dg);
+      bool better = (dir > 0) ? (lock > sl) : (lock < sl);
+      bool room   = (mn <= 0.0) || (MathAbs(px - lock) >= mn);
+      bool safe   = (dir > 0) ? (lock < px) : (lock > px);
+      if(better && room && safe && trade.PositionModify(tk, lock, tp))
+         Log(StringFormat("locked out of loss: it has been %s green, so the "
+                          "worst this trade can now do is zero",
+                          Money(g_tkPeakMoney[ti])));
+   }
+}
+
 // LOCK THE BASKET OUT OF LOSS once it has been worth InpLockAtMoney.
 // Not a profit target - a floor. See the note on InpLockAtMoney for why this
 // is the least damaging version of a rule that measured badly.
@@ -3061,34 +3123,6 @@ void DrawBox()
    for(int i = r; i < 40; i++)
       ObjectDelete(0, StringFormat("STS_box_%02d", i));
 
-   // THE FALLBACK THAT CANNOT FAIL.
-   // Chart objects can be hidden by a template, pushed off-screen by a stale
-   // corner, or suppressed by "Show objects" being off. Comment() is drawn by
-   // the terminal itself, needs no objects and cannot be misplaced. If the
-   // panel above is ever invisible again, these six lines still tell Veer what
-   // the EA is doing.
-   if(InpBoxComment)
-   {
-      Comment(StringFormat(
-         "SNIPERBOT  %s %s\n"
-         "open %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
-         "KEPT OF PEAK %.0f%%    GREEN->RED %d of %d\n"
-         "today %d trades  %s     equity %s\n"
-         "spread now %.*f  avg %.*f  worst %.*f\n"
-         "run %d bars / %.1f ATR   stall %d   risk %d/3   %s",
-         _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
-         b.n, b.lots, Money(b.money), Money(b.peakMoney), Money(b.givenBack),
-         (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
-         g_stGreenRed, g_stTrades,
-         g_stDayTrades, Money(g_stDayRealized), Money(eq),
-         _Digits, SymbolInfoDouble(_Symbol, SYMBOL_ASK)
-                - SymbolInfoDouble(_Symbol, SYMBOL_BID),
-         _Digits, (g_spN > 0 ? g_spSum / (double)g_spN : 0.0),
-         _Digits, g_spMax,
-         RunBars(), RunMoveAtr(), b.stall, risk,
-         g_lockedPerm ? "LOCKED" : (g_lockedDay ? "locked today" : "trading")));
-   }
-
    // WITHOUT THIS THE BOX DOES NOT UPDATE.
    // Veer: "the profit box is see thru and not good can't see clearly also it
    // doesn't update at all". Object text changes are not shown until the chart
@@ -3163,6 +3197,9 @@ int OnInit()
    // a lock or move the drawdown baseline.
    LoadGuards();
 
+   Print("=== SNIPERBOT BUILD " + STS_BUILD + " ===");
+   Print("If that build stamp is not the one in the message that sent you this "
+         "file, MetaEditor has not rebuilt it. Open the .mq5 and press F7.");
    PrintFormat("Broker spread right now: %.*f. The stop's cost floor "
                "(InpMinStopCostX = %.1f) only binds if the spread is large "
                "relative to ATR - watch the 'spread' row in the box.",
@@ -3224,10 +3261,40 @@ void OnTick()
       g_spN++;
    }
 
+   // THE READOUT, BEFORE ANYTHING CAN GO WRONG.
+   // It used to live inside DrawBox(), which returns early if InpShowBox is
+   // off and which depends on chart objects rendering. Comment() is drawn by
+   // the terminal itself. If this is not on the chart, the EA is not running -
+   // there is no third possibility, and that is the point of moving it here.
+   if(InpBoxComment)
+   {
+      Basket bq;
+      Snapshot(bq);
+      double spAvgQ = (g_spN > 0) ? g_spSum / (double)g_spN : 0.0;
+      Comment(StringFormat(
+         "SNIPERBOT  build %s\n"
+         "%s %s   equity %s\n"
+         "OPEN  %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
+         "KEPT OF PEAK %.0f%%   GREEN->RED %d of %d closed\n"
+         "TODAY %d trades   %s\n"
+         "spread now %.*f   avg %.*f   worst %.*f\n"
+         "%s",
+         STS_BUILD,
+         _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), Money(eq),
+         bq.n, bq.lots, Money(bq.money), Money(bq.peakMoney), Money(bq.givenBack),
+         (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
+         g_stGreenRed, g_stTrades,
+         g_stDayTrades, Money(g_stDayRealized),
+         _Digits, spNow, _Digits, spAvgQ, _Digits, g_spMax,
+         g_lockedPerm ? "LOCKED - max drawdown"
+                      : (g_lockedDay ? "locked for today" : "trading")));
+   }
+
    CheckGuardsTick();      // before anything else: a breach outranks a rule
    UpdatePeaks();
    ProtectPositions();
-   LockBasket();          // a floor first, then the give-back rule
+   LockPositions();       // each trade out of loss first
+   LockBasket();          // then the basket, then the give-back rule
    ProtectBasket();
    DrawBox();
 
