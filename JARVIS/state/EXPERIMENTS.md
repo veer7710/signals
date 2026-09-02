@@ -2434,3 +2434,57 @@ ones that most reduce the stop rate. Nothing else changes.
 ### What would settle it
 M1 and M5 data. `ExportHistory.mq5` produces it in one drag-and-drop. Every
 number above is 15m and 1h, and the strategy is run on M1/M5/M15.
+
+---
+
+## E-066 — Where the SuperTrend makes and loses money, by market condition
+**Verdict: SUPPORTED — and it says the paying regime is the MIDDLE, not the trend**
+Script: `JARVIS/research/regime.py`
+
+Veer: *"supertrend m1 is there to catch all trends meaning small big chop we
+just need to be able to perform well in all ... it needs to trade all sessions
+although some are slow so it needs to be able to actually capture those pennies"*.
+
+Two axes, both computable at entry from closed bars. SPEED = ATR(7) over its
+own 200-bar median. SHAPE = the 50-bar Kaufman efficiency ratio, net distance
+divided by the path walked.
+
+**Pooled, 2,967 trades, 8 market/timeframe combinations:**
+
+| | chop (<0.10) | **mixed (0.10–0.25)** | trend (>0.25) |
+|---|---|---|---|
+| slow | −0.027 (287) | **+0.192 (279)** | −0.267 (83) |
+| normal | −0.053 (696) | −0.023 (807) | −0.072 (182) |
+| fast | −0.181 (242) | **+0.063 (320)** | −0.097 (71) |
+
+**The money is in the middle column.** Dead chop loses at every speed. An
+already-established trend loses at every speed — and loses MOST in a slow
+market (−0.267R), which is the cell that looks safest.
+
+### Why, mechanically
+A SuperTrend catches TURNS. In dead chop the turns are noise and cost the
+spread. In a running trend the turn already happened and the entry is late —
+which is E-052's run-exhaustion result arriving from a completely different
+direction, on different data, and agreeing.
+
+### GOLD, the instrument that matters
+GOLD 1h base +0.339R over 373 trades. The **normal/mixed** cell is **+0.549R on
+102 trades** — the strongest cell anywhere with enough trades to mean anything.
+GOLD 15m base +0.232R; its cells are 10–60 trades and are not quotable.
+
+### What it changes: SIZING, NOT FILTERING
+`InpUseRegimeSize` scales the lot by the efficiency ratio — 0.70× in chop,
+**1.25× in the middle**, 0.70× in a running trend. Every signal is still taken.
+
+That distinction is the whole point and it is the thing I got wrong in F-010.
+Veer has said since his first message that signal count is not the problem, and
+E-053 measured that filters drag a system toward zero because they remove
+trades without selecting. Sizing weights the edge instead of deleting the
+trades, which is what the table above actually supports: no cell is so bad it
+should never be traded, and one cell is clearly worth more.
+
+### Caveats
+15m and 1h. Still no M1 data. Nine cells were examined, so a single cell would
+prove nothing — what carries this is that the SHAPE axis is monotone in the
+same direction at all three speeds, and that its mechanism agrees with E-052
+which was measured independently.

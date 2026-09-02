@@ -378,6 +378,34 @@ input group "=== CHOP GUARD (present so it can be tested, not argued about) ==="
 // It is here because Veer asked for it and because GOLD 15m, the nearest
 // thing to his instrument, did improve (+13.2R). Turn it on to test it on
 // the journal, not because this comment recommends it.
+// E-066. WHERE THE STRATEGY ACTUALLY MAKES MONEY, and it is not where anyone
+// would guess. 2,967 trades across 8 market/timeframe combinations, bucketed
+// by the 50-bar efficiency ratio (net distance / path walked):
+//
+//                 chop(<0.10)   MIXED(0.10-0.25)   trend(>0.25)
+//   slow            -0.027         +0.192            -0.267
+//   normal          -0.053         -0.023            -0.072
+//   fast            -0.181         +0.063            -0.097
+//
+// The money is in the MIDDLE. Dead chop loses at every speed and an already-
+// established trend loses at every speed. That is mechanically obvious once
+// seen: a SuperTrend catches TURNS - in chop the turns are noise, and in a
+// running trend the turn already happened and this is late.
+//
+// GOLD 1h, the closest thing to Veer's instrument: base +0.339R, and the
+// normal/mixed cell is +0.549R on 102 trades - the strongest cell anywhere
+// with enough trades to mean something.
+//
+// THIS IS SIZING, NOT FILTERING, and the distinction is the whole point.
+// Veer has said from his first message that signal count is not the problem
+// and E-053 measured that filters only drag a system toward zero. Every
+// signal is still taken. The bad regimes are taken SMALLER and the good one
+// BIGGER, so the edge is weighted rather than the trades deleted.
+input bool   InpUseRegimeSize = true;   // size by market shape (E-066)
+input double InpRegimeChopX   = 0.70;   // multiplier in dead chop
+input double InpRegimeMixX    = 1.25;   // ...in the middle, where the money is
+input double InpRegimeTrendX  = 0.70;   // ...in an already-running trend
+
 input bool   InpUseChopGuard  = false;
 input int    InpChopErLen     = 50;     // BARS, never minutes - flip density is per bar
 input double InpMinEffRatio   = 0.08;   // skip below this efficiency ratio
@@ -1429,6 +1457,27 @@ void TryEntry()
                           trRisk, trWhy, lots, cut));
          lots = cut;
       }
+   }
+
+   // ---- SIZE BY MARKET SHAPE (E-066). Applied last, so it scales whatever
+   // the risk model and the trend-risk discount have already decided.
+   if(InpUseRegimeSize)
+   {
+      double erNow = EfficiencyRatio(50);
+      double mult  = (erNow < 0.10) ? InpRegimeChopX
+                   : ((erNow < 0.25) ? InpRegimeMixX : InpRegimeTrendX);
+      string shape = (erNow < 0.10) ? "chop"
+                   : ((erNow < 0.25) ? "MIXED - the paying regime" : "running trend");
+      double step2 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double sized = lots * mult;
+      if(step2 > 0) sized = MathFloor(sized / step2) * step2;
+      double vmin2 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      double vmax2 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+      sized = MathMax(vmin2, MathMin(sized, vmax2));
+      if(MathAbs(sized - lots) > 1e-9)
+         Log(StringFormat("efficiency %.3f = %s: sizing %.2f -> %.2f",
+                          erNow, shape, lots, sized));
+      lots = sized;
    }
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
