@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "2.00"
+#property version   "3.00"
 #property strict
 
-#define LQS_BUILD "2026-09-02 / 2.00 / top-tick entry, E-077 geometry"
+#define LQS_BUILD "2026-09-02 / 3.00 / top-tick + FVG + order blocks"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -151,6 +151,10 @@ int    DayStamp();
 void   Readout();
 void   BuildZones();
 double EntryLevel(const Zone &z, double a);
+void   PushGap(Gap &G[], double top, double bot, int dir, int bar);
+void   AgeGaps(Gap &G[], int bar, double c);
+void   BuildSmc();
+double BestLevel(int dir, double px, double a, string &src);
 int    NearestZone(const Zone &Z[], int bar, double px, bool above);
 void   ArmSide(int dir);
 void   KillSide(int dir, string why);
@@ -320,6 +324,164 @@ void ExpireZones(Zone &Z[], int bar)
    ArrayResize(Z, w);
 }
 
+//==================== SMC: FVG AND ORDER BLOCKS ====================
+// E-079 built six SMC concepts and measured every one of them against the
+// entry that already works. Three pay and three do not, and the three that do
+// not are in this comment rather than in the code:
+//
+//   FAIR VALUE GAP     IN.  As a trigger on its own, GOLD 1h: 34 trades,
+//                      67.6% win, +0.998R, +466 points. The strongest single
+//                      signal in the project.
+//   ORDER BLOCK        IN.  58 trades, 53.4% win, +0.559R, +338 points.
+//   INVERSE FVG        OUT. 1136 trades and MINUS 39 points. It fires
+//                      constantly and dilutes everything it is added to:
+//                      the full stack drops from +0.487R to +0.119R with it.
+//   BOS / CHoCH        OUT. As triggers, -0.028R to +0.030R - inside noise.
+//   STRUCTURE BIAS     OUT, and this one is the interesting refusal. As a
+//                      filter it RAISES expectancy from +0.487R to +0.638R -
+//                      and cuts the trade count from 515 to 205 and the money
+//                      from +2792 points to +1403. That is exactly the trap
+//                      E-074 caught in the SuperTrend EA: the best per-trade
+//                      number and the least money. Veer is paid in points.
+//
+// Together with the zone entry: n=515, 51.1% win, +0.487R, PF 1.95, t=+7.37,
+// +2792 points, walk-forward 6 of 6, +5.0 sd clear of 30 control seeds, and a
+// Monte Carlo drawdown of 9.8R median. Against the zone entry alone (480
+// trades, +0.385R, +2110 points) it is MORE trades, higher expectancy and 32%
+// more money - better on every axis, which is rare enough to be suspicious of,
+// so it was checked out of sample (+0.598 / +0.377) and block by block.
+
+struct Gap
+{
+   double top;
+   double bot;
+   int    born;
+   int    dir;        // +1 bullish (support), -1 bearish (resistance)
+   bool   dead;
+};
+
+Gap g_fvg[];
+Gap g_ob[];
+
+input group "=== SMC  (E-079: these two pay, iFVG/BOS/CHoCH do not) ==="
+input bool   InpUseFvg        = true;   // rest orders at fair value gaps
+input bool   InpUseOB         = true;   // rest orders at order blocks
+input double InpDispAtr       = 1.0;    // a displacement bar's BODY, in ATR
+input double InpMinGapAtr     = 0.10;   // ignore gaps smaller than this
+input int    InpSmcLife       = 200;    // bars an FVG or block stays live
+
+void PushGap(Gap &G[], double top, double bot, int dir, int bar)
+{
+   int n = ArraySize(G);
+   ArrayResize(G, n + 1);
+   G[n].top = top;  G[n].bot = bot;  G[n].dir = dir;
+   G[n].born = bar; G[n].dead = false;
+   if(ArraySize(G) > 60)
+   {
+      for(int i = 0; i < ArraySize(G) - 1; i++) G[i] = G[i + 1];
+      ArrayResize(G, 60);
+   }
+}
+
+void AgeGaps(Gap &G[], int bar, double c)
+{
+   int w = 0;
+   for(int i = 0; i < ArraySize(G); i++)
+   {
+      if(bar - G[i].born > InpSmcLife) continue;
+      // a close through it the wrong way kills it. For an FVG that is the
+      // INVERSION, which E-079 measured as worth nothing - so it is killed
+      // here rather than traded the other way.
+      if((G[i].dir == 1 && c < G[i].bot) || (G[i].dir == -1 && c > G[i].top))
+         continue;
+      if(w != i) G[w] = G[i];
+      w++;
+   }
+   ArrayResize(G, w);
+}
+
+// Runs on the CLOSED bar. An FVG needs bars 1, 2 and 3 back, all closed.
+void BuildSmc()
+{
+   int bar = Bars(_Symbol, _Period) - 1;
+   double a = ATRv(1);
+   if(a <= 0.0) return;
+   double c1 = iClose(_Symbol, _Period, 1);
+
+   AgeGaps(g_fvg, bar, c1);
+   AgeGaps(g_ob,  bar, c1);
+
+   if(InpUseFvg)
+   {
+      double h3 = iHigh(_Symbol, _Period, 3), l3 = iLow(_Symbol, _Period, 3);
+      double h1 = iHigh(_Symbol, _Period, 1), l1 = iLow(_Symbol, _Period, 1);
+      if(h3 < l1 && (l1 - h3) >= InpMinGapAtr * a) PushGap(g_fvg, l1, h3,  1, bar);
+      if(l3 > h1 && (l3 - h1) >= InpMinGapAtr * a) PushGap(g_fvg, l3, h1, -1, bar);
+   }
+
+   if(InpUseOB)
+   {
+      double o1 = iOpen(_Symbol, _Period, 1);
+      double body = c1 - o1;
+      if(MathAbs(body) >= InpDispAtr * a)
+      {
+         int d = (body > 0) ? 1 : -1;
+         // the last OPPOSITE-colour candle before the displacement leg
+         for(int k = 2; k < 9; k++)
+         {
+            double ok = iOpen(_Symbol, _Period, k), ck = iClose(_Symbol, _Period, k);
+            bool opp = (d > 0) ? (ck < ok) : (ck > ok);
+            if(opp)
+            {
+               PushGap(g_ob, MathMax(ok, ck), MathMin(ok, ck), d, bar);
+               break;
+            }
+         }
+      }
+   }
+}
+
+// The nearest tradeable level on one side, from ANY source. dir +1 wants a
+// level BELOW price to buy at, dir -1 a level above to sell at.
+double BestLevel(int dir, double px, double a, string &src)
+{
+   double best = 0.0;
+   bool   have = false;
+   src = "";
+
+   int bar = Bars(_Symbol, _Period) - 1;
+   int idx = (dir > 0) ? NearestZone(g_zS, bar, px, false)
+                       : NearestZone(g_zB, bar, px, true);
+   if(idx >= 0)
+   {
+      Zone z = (dir > 0) ? g_zS[idx] : g_zB[idx];
+      double lvl = EntryLevel(z, a);
+      if((dir > 0 && lvl < px) || (dir < 0 && lvl > px))
+      { best = lvl; have = true; src = "zone"; }
+   }
+
+   for(int pass = 0; pass < 2; pass++)
+   {
+      if(pass == 0 && !InpUseFvg) continue;
+      if(pass == 1 && !InpUseOB)  continue;
+      int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
+      for(int i = 0; i < cnt; i++)
+      {
+         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         if(g.dir != dir) continue;
+         double mid = (g.top + g.bot) / 2.0;
+         if(dir > 0 && mid >= px) continue;
+         if(dir < 0 && mid <= px) continue;
+         if(!have || MathAbs(mid - px) < MathAbs(best - px))
+         {
+            best = mid; have = true;
+            src = (pass == 0) ? "fvg" : "ob";
+         }
+      }
+   }
+   return have ? best : 0.0;
+}
+
 //==================== THE RESTING ORDERS ===========================
 // The whole strategy, in one idea: a limit sits INSIDE the nearest live zone
 // on each side, and the sweep fills it. Nothing waits for confirmation, because
@@ -341,8 +503,6 @@ ulong    g_tkBuy  = 0;      // resting BUY limit  (at a sellside zone, below)
 ulong    g_tkSell = 0;      // resting SELL limit (at a buyside zone, above)
 double   g_lvlBuy = 0.0;
 double   g_lvlSell = 0.0;
-int      g_bornBuy = -1;
-int      g_bornSell = -1;
 
 // Where the order sits: past the far edge of the zone, into the liquidity.
 double EntryLevel(const Zone &z, double a)
@@ -384,20 +544,21 @@ void ArmSide(int dir)
    double ask  = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    if(bid <= 0.0 || ask <= 0.0) return;
 
-   // a BUY rests below price at a SELLSIDE zone; a SELL rests above at a BUYSIDE one
-   int idx = (dir > 0) ? NearestZone(g_zS, bar, bid, false)
-                       : NearestZone(g_zB, bar, ask, true);
-   if(idx < 0) { KillSide(dir, "no live zone on this side"); return; }
+   // The nearest level on this side from ANY source - liquidity zone, fair
+   // value gap or order block. Nearest, because that is the one price reaches
+   // first, and the backtest resolved overlapping signals the same way: first
+   // touched wins, one position at a time.
+   string src = "";
+   double raw = BestLevel(dir, (dir > 0) ? bid : ask, a, src);
+   if(raw == 0.0) { KillSide(dir, "no live level on this side"); return; }
 
-   Zone z   = (dir > 0) ? g_zS[idx] : g_zB[idx];
    int dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   double lvl = NormalizeDouble(EntryLevel(z, a), dg);
+   double lvl = NormalizeDouble(raw, dg);
 
    // already resting at this exact level for this exact zone: leave it alone.
    // Re-sending it every bar would churn the order book and reset its age.
    double have = (dir > 0) ? g_lvlBuy : g_lvlSell;
-   int    hb   = (dir > 0) ? g_bornBuy : g_bornSell;
-   if(tk != 0 && OrderSelect(tk) && MathAbs(have - lvl) < _Point && hb == z.born)
+   if(tk != 0 && OrderSelect(tk) && MathAbs(have - lvl) < _Point)
       return;
 
    KillSide(dir, "");
@@ -432,12 +593,12 @@ void ArmSide(int dir)
                         ORDER_TIME_GTC, 0, "LQS toptick");
    if(ok)
    {
-      if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl;  g_bornBuy = z.born; }
-      else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; g_bornSell = z.born; }
+      if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl; }
+      else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; }
       Log(StringFormat("ARMED %s LIMIT %.2f at %.*f   stop %.*f (%.*f risk)   "
-                       "target %.*f   zone %.*f",
+                       "target %.*f   source %s",
                        dir > 0 ? "BUY" : "SELL", InpEntryLots, dg, lvl,
-                       dg, stop, dg, risk, dg, tgt, dg, z.px));
+                       dg, stop, dg, risk, dg, tgt, src));
    }
    else
       Log(StringFormat("ARM REJECTED (%s): %d %s", dir > 0 ? "buy" : "sell",
@@ -454,8 +615,8 @@ void KillSide(int dir, string why)
       if(why != "") Log(StringFormat("cancelled the %s limit: %s",
                                      dir > 0 ? "buy" : "sell", why));
    }
-   if(dir > 0) { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_bornBuy = -1; }
-   else        { g_tkSell = 0; g_lvlSell = 0.0; g_bornSell = -1; }
+   if(dir > 0) { g_tkBuy = 0;  g_lvlBuy = 0.0; }
+   else        { g_tkSell = 0; g_lvlSell = 0.0; }
 }
 
 void KillAll(string why)
@@ -468,8 +629,8 @@ void KillAll(string why)
 // alive, and clear any ticket the broker has already disposed of.
 void ManageOrders()
 {
-   if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_bornBuy = -1; }
-   if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; g_bornSell = -1; }
+   if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0; }
+   if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; }
 
    if(PosCount() >= InpMaxPositions || g_lockedDay || g_lockedPerm)
    {
@@ -560,12 +721,12 @@ void Readout()
       "P/L        %s        today %s over %d trades\n"
       "ARMED      %s\n"
       "\n"
-      "ZONES      %d buyside   %d sellside\n"
+      "LEVELS     %d buyside  %d sellside  %d FVG  %d order blocks\n"
       "WIN RATE   %s   (%d of %d closed)\n"
       "SPREAD     now %.*f   avg %.*f   worst %.*f\n"
       "STATE      %s\n"
       "\n"
-      "E-077: GOLD 1h 47.5%% on 491, +0.378R, PF 1.69, 6/6 blocks - PROMISING.\n"
+      "E-080: GOLD 1h 51.1%% on 515, +0.487R, PF 1.95, t=+7.4, 6/6 - PROMISING.\n"
       "HALF THESE TRADES LOSE. The money is in 2R, not in being right often.\n"
       "Measured on 15m/1h bars, NOT on M1. XAUUSD only.",
       LQS_BUILD,
@@ -573,7 +734,7 @@ void Readout()
       pos,
       Money(pl), Money(g_dayRealized), g_tradesToday,
       armed,
-      ArraySize(g_zB), ArraySize(g_zS),
+      ArraySize(g_zB), ArraySize(g_zS), ArraySize(g_fvg), ArraySize(g_ob),
       (g_nTrades > 0 ? StringFormat("%.1f%%", 100.0 * g_nWins / g_nTrades) : "-"),
       g_nWins, g_nTrades,
       _Digits, sp, _Digits, spAvg, _Digits, g_spMax,
@@ -665,6 +826,7 @@ void OnTick()
    if(Bars(_Symbol, _Period) < InpPivLen * 4 + 30) return;
 
    BuildZones();
+   BuildSmc();
    ManageOrders();
 }
 

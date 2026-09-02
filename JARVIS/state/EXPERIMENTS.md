@@ -2919,3 +2919,65 @@ the wrong direction to be wrong in when the conclusion is "trade it".
 not a fault. Monte Carlo on trade order: drawdown ~12R median, 18R at the 95th.
 
 Files: `JARVIS/research/toptick.py`, `toptick_validate.py`.
+
+---
+
+## E-079 / E-080 — SMC measured. Two of six pay; the other four are decoration.
+
+Veer: *"base liquidity strat with order blooms fvg all those kinda things smc
+bos choch everything you can be deep and thorough have signals sniper entry"*.
+
+Deep does not mean drawing all of it. Each concept is a claim about the future
+and a claim can be checked, so each was built and tested twice against the
+entry that already survives (E-077): **as a filter** on it, and **as a trigger
+on its own** with the same 0.60 ATR stop and 2R target.
+
+### As triggers, GOLD 1h — against a 30-seed random-entry control
+| concept | n | win% | expectancy | PF | t | points | edge vs control |
+|---|---|---|---|---|---|---|---|
+| **fair value gap** | 44 | **65.9%** | **+0.943R** | 3.66 | +4.39 | +552 | **+1.053R** |
+| **order block** | 70 | 51.4% | **+0.498R** | 1.98 | +2.78 | +312 | +0.628R |
+| inverse FVG | 1333 | 36.5% | +0.054R | 1.08 | +1.37 | +896 | +0.238R |
+| BOS retest | 283 | 35.7% | +0.030R | 1.05 | +0.36 | +202 | +0.214R |
+| CHoCH retest | 213 | 33.8% | −0.028R | 0.96 | −0.28 | +305 | +0.151R |
+
+### Combined, one account, one position, first touched wins
+| signal set | n | win% | expectancy | t | **points** |
+|---|---|---|---|---|---|
+| base (E-077 zone entry alone) | 480 | 47.7% | +0.385R | +5.62 | +2110 |
+| base + FVG | 501 | 49.5% | +0.440R | +6.55 | +2542 |
+| **base + FVG + order block** | **515** | **51.1%** | **+0.487R** | **+7.37** | **+2792** |
+| base + FVG + OB, bias-filtered | 205 | 56.1% | +0.638R | +6.13 | +1403 |
+| everything incl. iFVG | 1446 | 38.7% | +0.119R | +3.10 | +1785 |
+
+**More trades, higher expectancy and 32% more money than the base** — better on
+every axis at once, which is rare enough to distrust, so it was checked out of
+sample and block by block:
+
+`base + FVG + order block`, GOLD 1h: **n=515, 51.1% win, +0.487R, PF 1.95,
+t=+7.37, +2792 points, OOS +0.598 / +0.377, walk-forward 6/6, +5.0 control sd,
+Monte Carlo drawdown 9.8R median / 14.6R at the 95th.** **PROMISING.**
+GOLD 15m, base + FVG: n=159, +0.392R, t=+3.30, 6/6, +3.6 sd. **PROMISING.**
+
+### The four that are out, and why
+- **Inverse FVG — OUT.** 1136 trades in the stack for **−39 points**. It fires
+  constantly and dilutes: the stack falls from +0.487R to +0.119R with it in.
+- **BOS / CHoCH — OUT.** Inside noise as triggers, and as filters the samples
+  that pass are 17–27 trades.
+- **Structure bias — OUT, and this is the interesting refusal.** As a filter it
+  *raises* expectancy from +0.487R to +0.638R — and cuts trades from 515 to 205
+  and money from +2792 to +1403 points. **Best per-trade number, least money.**
+  Exactly the trap E-074 caught in the SuperTrend EA.
+- **"Entry inside an order block" — BACKWARDS on 15m**, +0.141R allowed against
+  +0.463R refused. Being *in* the block is worse than approaching it.
+
+### A bug caught before the numbers were believed
+The first run had `base` at n=26 against E-077's 491. The candidate generator
+marked a zone *used* when it first appeared rather than when its order was
+actually reached, so zones were burned on bars price never came near. A resting
+order rests until touched — that is the whole point of it.
+
+### Shipped
+`LIQUIDITY_CLEAN_1_3.pine` and `LiquiditySniper.mq5` build 3.00.
+
+Files: `JARVIS/research/smc.py`, `smc_combine.py`.
