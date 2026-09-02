@@ -1,12 +1,12 @@
 //@version=6
 // ===========================================================================
-//  LIQUIDITY CLEAN 1.1  —  the two LuxAlgo scripts, and nothing else
+//  LIQUIDITY CLEAN 1.2  —  top-tick entries off the LuxAlgo levels
 //
 //  WHAT IS ON THE CHART, COMPLETE LIST
 //    · the gold DEMA
 //    · BUYSIDE / SELLSIDE LIQUIDITY zones
 //    · the sweep box when a zone is wicked and rejected
-//    · one thin line where the resting order waits, only while it waits
+//    · two thin lines where the buy and sell limits rest, while they rest
 //    · BUY / SELL labels at the FILL
 //    · while a trade is live: its target and its stop · one closing x
 //    · one position box, bottom left
@@ -84,7 +84,7 @@
 //  come from the LuxAlgo scripts and from Veer's own reading of his charts.
 // ===========================================================================
 
-indicator("Liquidity Clean 1.1", "LIQ", overlay = true,
+indicator("Liquidity Clean 1.2", "LIQ", overlay = true,
      max_lines_count = 300, max_boxes_count = 300, max_labels_count = 300,
      max_bars_back = 2000)
 
@@ -134,19 +134,22 @@ hLife= input.int(30, "   a HTF sweep stays live for (bars)", minval = 3, maxval 
 gS     = "SIGNALS"
 showSig= input.bool(true, "BUY / SELL", group = gS)
 sigCool= input.int(5, "Bars between signals", minval = 1, maxval = 100, group = gS)
-// STOP AND TARGET, SET FROM THE MEASUREMENT (E-065), not from taste.
-// The stop used to sit just beyond the ZONE. But a sweep means price has
-// ALREADY been through that edge, so the stop sat inside the exact noise the
-// setup is built on and 90.3% of trades died there. Beyond the SWEEP BAR'S OWN
-// EXTREME plus 1.5 ATR: win rate 10.2% -> 31.6%, expectancy -0.372R -> +0.004R,
-// stop rate 90.3% -> 67.7%. Identical entries in every one of those rows.
-stopBuf = input.float(1.5, "Stop beyond the sweep wick (x ATR)", minval = 0.1, step = 0.1, group = gS,
-     tooltip = "The sweep defined how far the market was willing to push. The trade is wrong only if price goes BEYOND that - not if it merely returns to the zone edge it just wicked through.")
-retWait = input.int(20, "Bars to wait for the retest", minval = 1, maxval = 200, group = gS,
-     tooltip = "A sweep no longer fires a signal - it ARMS a resting order at the level that was swept, and the fill is the signal. If price never comes back within this many bars the setup is dead. E-068: entering on the sweep bar's close instead scores MINUS 0.003R with ZERO costs, so that entry has no edge at all.")
-tgtAtr  = input.float(0.50, "Target (x ATR)", minval = 0.1, step = 0.05, group = gS,
-     tooltip = "Measured, not chosen. On GOLD 1h the whole 0.25-1.00 ATR band is positive; 0.50 is where the pooled win rate is 80.5%, which is the number Veer reports. Aiming at the opposite zone instead is a 33% win rate by construction.")
-showArm = input.bool(true, "Show the resting order while it waits", group = gS)
+// STOP AND TARGET, SET FROM THE MEASUREMENT (E-077), not from taste.
+// Two earlier versions of this block were both wrong. 1.0 put the stop just
+// beyond the ZONE - but a sweep has already been through that edge, so the
+// stop sat inside the exact noise the setup is built on and 90.3% of trades
+// died there. 1.1 moved it 1.5 ATR beyond the sweep wick, which fixed the win
+// rate (31.6% -> 87.8%) by making the risk enormous: it risked 1.5 ATR to make
+// 0.5, which is not a top-tick trade and was never what was asked for.
+// Now: the order rests INSIDE the zone and the sweep fills it, so the stop can
+// be 0.60 ATR and the target 2R.
+stopBuf = input.float(0.60, "Stop beyond the FILL (x ATR)", minval = 0.05, step = 0.05, group = gS,
+     tooltip = "SMALL, on purpose - this is the whole point of entering at the tick rather than after it. 0.15 ATR is too tight and loses everywhere: the poke overshoots. 0.40-0.90 is the plateau. 1.5 ATR, which version 1.1 used, is not a top-tick stop at all.")
+entPast = input.float(0.25, "Limit sits this far PAST the zone edge (x ATR)", minval = 0.0, step = 0.05, group = gS,
+     tooltip = "The order rests INSIDE the zone, past its far edge, and the sweep fills it. It does not wait for confirmation. E-076 measured what waiting costs: entering on the sweep bar's close scores MINUS 0.003R with ZERO costs, and waiting for the retest leaves the wick so far behind that the stop can no longer be small.")
+tgtR    = input.float(2.0, "Target (multiples of risk)", minval = 0.5, step = 0.25, group = gS,
+     tooltip = "2R. Measured, not chosen. On GOLD 1h every combination of a 0.45-0.90 ATR stop with a 1.5R-2.5R target is positive - a plateau, not a cell. The best is 0.75 ATR / 1.5R at +3183 points; 0.60 / 2R sits in the interior because an edge-of-grid optimum is usually a fit.")
+showArm = input.bool(true, "Show the resting orders while they wait", group = gS)
 minTgt = input.float(1.5, "Minimum target to signal (points)", minval = 0.1, step = 0.1, group = gS,
      tooltip = "1.5 points is where the round trip stops eating the trade: at 0.03 lots it grosses GBP 3.56 and nets GBP 2.44. At 0.5 points the broker takes 94% of it.")
 showScalp = input.bool(true, "Mark the scalps between the two zones", group = gS)
@@ -351,69 +354,57 @@ pClose = false
 var float pLast   = na      // net result of the last closed trade, in currency
 var bool  pLastOk = false
 
-// E-068 measured the entry this script used to take - buying the sweep bar's
-// close - at MINUS 0.003R WITH ZERO COSTS. That is not a weak edge being eaten
-// by the spread, it is nothing. The whole edge is in waiting for price to come
-// BACK to the level it just swept. So a sweep does not fire a signal any more:
-// it ARMS a resting order at the swept edge, and the FILL is the signal.
+// WHAT CHANGED IN 1.2, AND WHY IT IS THE OPPOSITE OF 1.1
 //
-//   GOLD 1h · retest entry · stop 1.5 ATR beyond the sweep wick · target 0.5 ATR
-//   n=401  87.8% win  +0.106R  PF 1.85  t=+5.05  walk-forward 6/6 blocks
-//   7.8 control-sd clear of twelve random-entry seeds  ->  PROMISING
+// Veer: "we need to have top tick entrys meaning we do a small stop loss which
+// is reasonable and catch a massiveeee entry from the tick thats the point".
+//
+// 1.1 waited for the sweep, then rested an order back at the zone edge. It
+// wins 87% of the time and it is NOT that trade: by the time price is back at
+// the edge the wick is far away and the risk is already large. It risks 1.5
+// ATR to make 0.5 - the wrong way round.
+//
+// The order now rests INSIDE the zone, PAST its far edge, BEFORE the sweep,
+// and the sweep fills it. The zone is where the stops are; the sweep is the
+// market reaching in to take them. The stop then sits 0.60 ATR past the fill -
+// small - and the target is 2R.
+//
+// It also fills on every BREAK, not only every sweep, and that is the honest
+// cost of it. A break is a full-size loss. E-077 is whether a small stop and a
+// 2R target pay for those:
+//
+//   GOLD 1h   n=491  47.5% win  +0.378R  PF 1.69  t=+5.58   +2172 points
+//             OOS +0.470 / +0.286   walk-forward 6 of 6 blocks
+//             +4.7 sd clear of 30 random-entry seeds        PROMISING
+//   GOLD 15m  n=158  48.1% win  +0.382R  PF 1.69  t=+3.20    PROMISING
+//
+// HALF OF THESE LOSE. That is the shape, not a fault.
 var int lastSig = -9999
 sigSell = false
 sigBuy  = false
 
-// the armed setup: which way, the price the order rests at, and the sweep's own
-// extreme - which is both the invalidation and the stop's anchor.
-var int   aDir  = 0
-var float aLvl  = na
-var float aWick = na
-var int   aBar  = -9999
-
 tgtDn = not na(nearS) ? close - nearS : 0.0
 tgtUp = not na(nearB) ? nearB - close : 0.0
 
-// A buyside sweep arms a SELL at the level it swept, and vice versa. One armed
-// setup at a time, and none while a trade is live - that is what one account
-// can actually do, and it is what the backtest counted.
-if showSig and zSweptUp and aDir == 0 and pDir == 0 and not na(edB)
-    if not htfLive or htfDir == -1
-        aDir  := -1
-        aLvl  := edB
-        aWick := high
-        aBar  := n
-if showSig and zSweptDn and aDir == 0 and pDir == 0 and not na(edS)
-    if not htfLive or htfDir == 1
-        aDir  := 1
-        aLvl  := edS
-        aWick := low
-        aBar  := n
+// where the orders rest: past the far edge of the nearest live zone each side
+armSell = not na(nearB) ? nearB + entPast * atr : na
+armBuy  = not na(nearS) ? nearS - entPast * atr : na
 
-// The setup dies if price CLOSES beyond the sweep's own extreme - the sweep was
-// not a rejection after all - or if the retest simply never comes.
-if aDir != 0
-    bool dead = (aDir == 1 and close < aWick) or (aDir == -1 and close > aWick)
-    if dead or (n - aBar) > retWait
-        aDir  := 0
-        aLvl  := na
-
-// THE FILL. A resting order is live inside the bar, so the wick reaching it is
-// a fill. This is the one place the script is entitled to use low/high.
-if aDir != 0 and n > aBar and n - lastSig >= sigCool
-    if aDir == 1 and low <= aLvl
-        sigBuy  := true
-        lastSig := n
-    if aDir == -1 and high >= aLvl
+// THE FILL. A resting limit is live inside the bar, so the wick reaching it is
+// a fill. This is the one place the script may use high/low.
+if showSig and pDir == 0 and n - lastSig >= sigCool
+    if not na(armSell) and high >= armSell and (not htfLive or htfDir == -1)
         sigSell := true
         lastSig := n
-if sigBuy or sigSell
-    aDir := 0
+    else if not na(armBuy) and low <= armBuy and (not htfLive or htfDir == 1)
+        sigBuy  := true
+        lastSig := n
 
-// where the order is resting, while it is resting, and then it is gone.
-plot(showArm and aDir != 0 ? aLvl : na, "Resting order",
-     color = color.new(aDir > 0 ? cBuy : cSell, 45),
-     style = plot.style_linebr, linewidth = 1)
+// the two resting orders, drawn only while they are actually resting
+plot(showArm and pDir == 0 and not na(armBuy) ? armBuy : na, "Buy limit",
+     color = color.new(cBuy, 55), style = plot.style_linebr, linewidth = 1)
+plot(showArm and pDir == 0 and not na(armSell) ? armSell : na, "Sell limit",
+     color = color.new(cSell, 55), style = plot.style_linebr, linewidth = 1)
 
 plotshape(sigBuy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
      text = "BUY",  textcolor = color.white, size = size.small)
@@ -465,9 +456,9 @@ if barstate.islast
 
 if sigBuy or sigSell
     pDir  := sigBuy ? 1 : -1
-    pEnt  := aLvl                       // the resting order's price, not the close
-    pTgt  := (sigBuy ? 1 : -1) * tgtAtr * atr + aLvl
-    pStop := aWick - (sigBuy ? 1 : -1) * stopBuf * atr
+    pEnt  := sigBuy ? armBuy : armSell   // filled AT the resting order, not at the close
+    pStop := pEnt - pDir * stopBuf * atr
+    pTgt  := pEnt + pDir * tgtR * math.abs(pEnt - pStop)
     pPeak := 0.0
     pBar  := n
 
@@ -547,7 +538,7 @@ if showBox and barstate.islast
          cSell)
     f_bx(7, "HTF sweep", htfLive ? (htfDir > 0 ? "BUY side taken" : "SELL side taken")
          : "none live", htfLive ? color.orange : #8b949e)
-    f_bx(8, "evidence", "retest: GOLD 1h 87.8% on 401, PF 1.85 - PROMISING", cBuy)
+    f_bx(8, "evidence", "top-tick: GOLD 1h +0.378R on 491, PF 1.69 - PROMISING", cBuy)
 
 // ── ALERTS ──────────────────────────────────────────────────────────────────
 alertcondition(sigBuy,  "LIQ BUY",  "Liquidity Clean: BUY - sellside swept")

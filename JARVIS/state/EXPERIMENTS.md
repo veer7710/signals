@@ -2847,3 +2847,75 @@ Veer has stated three times in writing, and it now costs about 7% rather
 than 65%.
 
 File: `JARVIS/research/exit_rerun.py`.
+
+---
+
+## E-076 / E-077 — The top-tick entry. The cell I never tested, and the one that wins.
+
+Veer: *"we need to have top tick entrys meaning we do a small stop loss which
+is reasonable and catch a massiveeee entry from the tick thats the point"*.
+
+That is **risk 1 to make 2+**. Everything I had built for liquidity was the
+opposite shape. E-068 swept two entries — the sweep bar's CLOSE, and the RETEST
+back at the zone edge — and **both enter after the sweep is over**. Neither is
+that trade. By the time price is back at the edge the wick is far away and the
+risk is already large, which is why E-069 ended up risking 1.5 ATR to make 0.5.
+
+### What I had never tested
+A limit resting **INSIDE the zone, past its far edge, BEFORE the sweep**,
+filled BY the sweep. The zone is where the stops are; the sweep is the market
+reaching in to take them. The stop then sits just past the poke — small — and
+the whole reversal is the target.
+
+It also fills on every BREAK, not only every sweep, and that is its honest
+cost. A break is a full-size loss. The question is whether a small stop and a
+2R target pay for those. They do.
+
+### E-077, the chosen cell attacked
+`limit 0.25 ATR past the far edge · stop 0.60 ATR · target 2R`
+
+| | n | win% | expectancy | PF | t | OOS | walk-fwd | vs control | points |
+|---|---|---|---|---|---|---|---|---|---|
+| **GOLD 1h** | 491 | 47.5% | **+0.378R** | 1.69 | **+5.58** | +0.470 / +0.286 | **6/6** | **+4.7 sd** | **+2172** |
+| **GOLD 15m** | 158 | 48.1% | +0.382R | 1.69 | +3.20 | +0.498 / +0.265 | 4/6 | +3.8 sd | +301 |
+
+Both **PROMISING**. Against E-069, which this replaces: 401 trades, 87.8% win,
+**+0.106R**. The new shape is **3.5× the expectancy with more trades**, in the
+opposite geometry.
+
+### Why it is not a fitted cell
+The whole neighbourhood pays. GOLD 1h, expectancy / points:
+
+| stop | 1.5R | 2.0R | 2.5R | 3.0R |
+|---|---|---|---|---|
+| 0.35 ATR | −0.02 / +375 | +0.14 / +898 | +0.28 / +1327 | +0.32 / +1533 |
+| 0.45 ATR | +0.18 / +1178 | +0.34 / +1851 | +0.40 / +2038 | +0.31 / +1481 |
+| **0.60 ATR** | +0.39 / +2375 | **+0.38 / +2172** | +0.34 / +1759 | +0.21 / +844 |
+| 0.75 ATR | **+0.46 / +3183** | +0.37 / +2322 | +0.21 / +1114 | +0.07 / +393 |
+| 0.90 ATR | +0.38 / +2623 | +0.27 / +1554 | +0.11 / +658 | +0.05 / +551 |
+
+A 0.15 ATR stop loses everywhere — the poke overshoots. 0.45–0.90 is the
+plateau. The shipped default sits in its **interior**, not at the peak, because
+an edge-of-grid optimum is usually a fit.
+
+### It behaves the way the model says it should
+Small stop ⇒ **cost-sensitive**, unlike E-069's wide-stop shape which barely
+noticed the spread. GOLD 1h: **+0.492R at zero spread, +0.378R at 0.46,
++0.279R at 1.00.** If it had been cost-*insensitive* with a 0.60 ATR stop,
+the model would have been wrong.
+
+### A statistics correction inside this experiment
+The control z was first computed as (ours − control mean) / **per-seed sd**,
+giving +1.1 sd. That is the wrong denominator: the question is whether our
+expectancy differs from the *expected* expectancy of a random entry, and that
+expected value is estimated by the control **mean**, whose error is
+sd/√seeds. Corrected, with 30 seeds: **+4.7 sd**. Understating a separation is
+the wrong direction to be wrong in when the conclusion is "trade it".
+
+### Shipped
+`JARVIS/pine/LIQUIDITY_CLEAN_1_2.pine` and `LiquiditySniper.mq5` build 2.00.
+
+**Half these trades lose.** 47.5% is the measured win rate and it is the shape,
+not a fault. Monte Carlo on trade order: drawdown ~12R median, 18R at the 95th.
+
+Files: `JARVIS/research/toptick.py`, `toptick_validate.py`.

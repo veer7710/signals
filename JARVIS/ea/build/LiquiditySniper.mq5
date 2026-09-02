@@ -18,46 +18,62 @@
 //      Liquidity" (clustered) - and the research build ANDed them, keeping the
 //      strictest reading of each.
 //
-//   2. THE ENTRY IS THE RETEST, NOT THE SWEEP.
-//      Buying the sweep bar's close scores MINUS 0.003R WITH ZERO COSTS. Not a
-//      weak edge eaten by the spread - no edge at all. The entire edge is in
-//      waiting for price to come BACK to the level that was swept. So a sweep
-//      places a LIMIT ORDER and the fill is the trade.
+//   2. THE ORDER RESTS INSIDE THE ZONE AND THE SWEEP FILLS IT.
+//      Veer: "we need to have top tick entrys meaning we do a small stop loss
+//      which is reasonable and catch a massiveeee entry from the tick".
 //
-//   3. THE TARGET IS NEAR AND THE STOP IS WIDE.
-//      Aiming at the opposite zone, 3-6 ATR away, is a 33% win rate however
-//      good the trigger is. 0.5 ATR behind a 1.5 ATR stop is 80.5% pooled -
-//      which is Veer's reported number, to within a point.
+//      Both entries I had measured before this enter AFTER the sweep is over -
+//      at the sweep bar's close, or back at the zone edge later. Neither is
+//      that trade. A professional does not wait: the zone is WHERE THE STOPS
+//      ARE, the sweep is the market reaching in to take them, so the limit
+//      rests inside the zone BEFORE the sweep and is filled BY it. The stop
+//      then sits just past the poke - small - and the whole reversal is the
+//      target.
 //
-//  E-069, that geometry attacked:
-//    GOLD 1h   n=401  87.8% win  +0.106R  PF 1.85  t=+5.05
-//              OOS +0.098 / +0.114   walk-forward 6/6 blocks
-//              7.8 control-sd clear of twelve random-entry seeds   PROMISING
-//    US500 1h  n=345  84.1%  +0.053R  PF 1.33  t=+2.12  6/6         PROMISING
-//    EURUSD and GBPUSD, both timeframes                             REJECTED
+//      It also fills on every BREAK, not only every sweep, and that is the
+//      honest cost. A break is a full-size loss. The measurement below is
+//      whether a small stop and a 2R target pay for those.
+//
+//   3. SMALL STOP, BIG TARGET. Risk 1 to make 2.
+//      0.60 ATR of risk, 2R of target. NOT the 1.5-ATR-stop / 0.5-ATR-target
+//      shape this EA shipped with yesterday, which wins 87% of the time and
+//      makes a third of the money.
+//
+//  E-077, the geometry attacked. XAUUSD:
+//    GOLD 1h   n=491  47.5% win  +0.378R  PF 1.69  t=+5.58   +2172 points
+//              OOS +0.470 / +0.286   walk-forward 6 of 6 blocks
+//              +4.7 sd clear of 30 random-entry control seeds    PROMISING
+//    GOLD 15m  n=158  48.1% win  +0.382R  PF 1.69  t=+3.20    +301 points
+//              OOS +0.498 / +0.265   walk-forward 4 of 6       PROMISING
+//
+//  And it is a PLATEAU, not a cell. Every combination from a 0.45-0.90 ATR
+//  stop and a 1.5R-2.5R target is positive on GOLD 1h. The best of them is
+//  0.75 ATR / 1.5R at +3183 points; the shipped default sits in the interior
+//  because an edge-of-grid optimum is usually a fit.
 //
 //  PROMISING is the strongest word the directive allows for something that has
 //  survived. It does not mean profitable and this EA does not claim to be.
 //
 //  WHAT YOU MUST KNOW BEFORE RUNNING IT
-//   * GOLD AND INDICES. FX is rejected outright on these same rules.
-//   * It risks 1.5 to make 0.5, so it needs about 75% just to break even.
-//     Every point of win rate lost to live slippage costs roughly 0.03R. There
-//     is no margin for sloppiness in this shape - that is the trade-off that
-//     buys the high win rate, and it is not free.
+//   * XAUUSD. FX is rejected outright on these rules.
+//   * HALF THE TRADES LOSE. 47.5% win rate. The money is in 2R being twice
+//     as big as 1R, not in being right often. A run of five losses is normal
+//     and the Monte Carlo says the drawdown to expect is about 12R, with 18R
+//     at the 95th percentile. If that would make you turn it off, turn it off
+//     now instead.
+//   * THIS SHAPE CARES ABOUT THE SPREAD, unlike the one it replaces. Measured
+//     on GOLD 1h: +0.492R at zero spread, +0.378R at the 0.46 off Veer's
+//     terminal, +0.279R at 1.00. A small stop cannot absorb a wide spread, so
+//     news-time spreads are a real cost, not a rounding error.
 //   * IT WAS MEASURED ON 15m AND 1h BARS. There is no M1 or M5 data in the
 //     repository. Running it on M1 is an extrapolation, and the honest way to
 //     end that is to run ExportHistory.mq5 and re-measure.
-//   * The spread barely matters here: +0.111R at zero spread, +0.090R at the
-//     0.46 measured off Veer's own terminal. The 1.5 ATR stop makes R large
-//     enough that the spread is a rounding error. That is unusual and it is
-//     the strategy's best structural property.
 //
 #property copyright "JARVIS"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
-#define LQS_BUILD "2026-09-02 / 1.00 / retest entry, E-069 geometry"
+#define LQS_BUILD "2026-09-02 / 2.00 / top-tick entry, E-077 geometry"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -74,13 +90,11 @@ input int    InpMinPivots     = 1;      // pivots needed to make a zone
 input int    InpZoneLife      = 600;    // forget a zone after N bars
 input int    InpMaxZones      = 40;     // zones tracked each side
 
-input group "=== SWEEP  (LuxAlgo: the wick rule) ==="
-input double InpWickShare     = 0.30;   // wick must be this share of the bar
-
-input group "=== THE TRADE  (E-069 - do not tune without re-measuring) ==="
-input int    InpRetestWait    = 20;     // bars the limit order stays live
-input double InpStopAtr       = 1.5;    // stop, ATR beyond the SWEEP WICK
-input double InpTargetAtr     = 0.50;   // target, ATR from the fill
+input group "=== THE TRADE  (E-077 - do not tune without re-measuring) ==="
+input double InpEntryPast     = 0.25;   // limit sits this many ATR PAST the zone's far edge
+input double InpStopAtr       = 0.60;   // stop, ATR beyond the FILL. Small, on purpose.
+input double InpTargetR       = 2.0;    // target, multiples of that risk
+input int    InpArmLife       = 60;     // a zone stops being armable this many bars after birth
 input double InpEntryLots     = 0.02;   // size for one entry
 input int    InpMaxPositions  = 1;      // one at a time, as measured
 
@@ -107,14 +121,6 @@ struct Zone
 Zone   g_zB[];       // buyside zones
 Zone   g_zS[];       // sellside zones
 
-// the armed setup: a resting order that has not filled yet
-int      g_aDir  = 0;
-double   g_aLvl  = 0.0;    // the limit price
-double   g_aWick = 0.0;    // the sweep bar's own extreme
-double   g_aAtr  = 0.0;
-datetime g_aBar  = 0;
-int      g_aAge  = 0;
-ulong    g_aTicket = 0;    // the REAL pending order at the broker
 
 int      g_atrHandle = INVALID_HANDLE;
 datetime g_lastBar   = 0;
@@ -144,13 +150,16 @@ double ATRv(int shift);
 int    DayStamp();
 void   Readout();
 void   BuildZones();
-void   ScanSweep();
-void   ManageArmed();
-void   PlacePending();
-void   KillPending(string why);
+double EntryLevel(const Zone &z, double a);
+int    NearestZone(const Zone &Z[], int bar, double px, bool above);
+void   ArmSide(int dir);
+void   KillSide(int dir, string why);
+void   KillAll(string why);
+void   ManageOrders();
 bool   HavePosition();
 void   AddZone(Zone &Z[], double &piv[], double at, int dir, double mar, int bar);
 void   ExpireZones(Zone &Z[], int bar);
+void   MarkBroken(Zone &Z[], double c);
 void   CheckGuards();
 double MinStopDist();
 int    PosCount();
@@ -239,8 +248,26 @@ void BuildZones()
    if(isH) AddZone(g_zB, g_pivH, h, 1, mar, bar);
    if(isL) AddZone(g_zS, g_pivL, l, -1, mar, bar);
 
+   // A zone price has CLOSED beyond is DEAD - that is a break, not a sweep,
+   // and there is no trade left at it. The old sweep scanner used to set this
+   // flag; it was removed with the sweep logic, so for one build nothing did,
+   // and orders would have gone on resting at levels the market had left
+   // behind. Zones are now killed here, on every bar close, unconditionally.
+   MarkBroken(g_zB, iClose(_Symbol, _Period, 1));
+   MarkBroken(g_zS, iClose(_Symbol, _Period, 1));
+
    ExpireZones(g_zB, bar);
    ExpireZones(g_zS, bar);
+}
+
+void MarkBroken(Zone &Z[], double c)
+{
+   for(int i = 0; i < ArraySize(Z); i++)
+   {
+      if(Z[i].broken) continue;
+      if((Z[i].dir == 1 && c > Z[i].top) || (Z[i].dir == -1 && c < Z[i].bot))
+         Z[i].broken = true;
+   }
 }
 
 void AddZone(Zone &Z[], double &piv[], double at, int dir, double mar, int bar)
@@ -293,178 +320,164 @@ void ExpireZones(Zone &Z[], int bar)
    ArrayResize(Z, w);
 }
 
-//==================== THE SWEEP ====================================
-// Runs on the CLOSED bar (shift 1). A wick through a zone that closes back
-// inside is a sweep and arms the opposite side. A CLOSE through it is a break
-// and kills the zone - those are different events and conflating them is how
-// this strategy loses money.
-void ScanSweep()
+//==================== THE RESTING ORDERS ===========================
+// The whole strategy, in one idea: a limit sits INSIDE the nearest live zone
+// on each side, and the sweep fills it. Nothing waits for confirmation, because
+// E-076 measured what waiting costs - by the time the sweep bar has closed, the
+// wick is far away and the risk is no longer small.
+//
+// Two orders can rest at once, one each side, which is what a desk actually
+// does. The first to fill cancels the other: InpMaxPositions is 1 and the
+// measurement counted one trade at a time.
+//
+// These are REAL broker-side pending orders. That matters more here than
+// anywhere else: the fill IS the edge, and a limit simulated inside OnTick only
+// fills if a tick happens to arrive while price is through the level. On a fast
+// sweep wick - which is precisely the bar this strategy exists to catch - that
+// tick may never come, so the EA would miss the fills the backtest counted and
+// keep the slow ones it did not.
+
+ulong    g_tkBuy  = 0;      // resting BUY limit  (at a sellside zone, below)
+ulong    g_tkSell = 0;      // resting SELL limit (at a buyside zone, above)
+double   g_lvlBuy = 0.0;
+double   g_lvlSell = 0.0;
+int      g_bornBuy = -1;
+int      g_bornSell = -1;
+
+// Where the order sits: past the far edge of the zone, into the liquidity.
+double EntryLevel(const Zone &z, double a)
 {
-   if(g_aDir != 0) return;              // one armed setup at a time
-   if(HavePosition()) return;           // and none while a trade is live
-
-   double o = iOpen(_Symbol, _Period, 1);
-   double h = iHigh(_Symbol, _Period, 1);
-   double l = iLow(_Symbol, _Period, 1);
-   double c = iClose(_Symbol, _Period, 1);
-   double rng = MathMax(h - l, SymbolInfoDouble(_Symbol, SYMBOL_POINT));
-   double upW = h - MathMax(o, c);
-   double dnW = MathMin(o, c) - l;
-   double a = ATRv(1);
-   if(a <= 0.0) return;
-
-   // buyside zones: a wick above that closes back below -> SELL the retest
-   for(int i = 0; i < ArraySize(g_zB); i++)
-   {
-      if(g_zB[i].broken) continue;
-      if(c > g_zB[i].top) { g_zB[i].broken = true; continue; }
-      if(h > g_zB[i].top && c < g_zB[i].top && (upW / rng) >= InpWickShare)
-      {
-         g_aDir = -1;  g_aLvl = g_zB[i].top;  g_aWick = h;
-         g_aAtr = a;   g_aBar = iTime(_Symbol, _Period, 1);  g_aAge = 0;
-         Log(StringFormat("SWEEP buyside %.*f -> SELL limit at %.*f, "
-                          "invalidated by a close above %.*f",
-                          _Digits, g_zB[i].px, _Digits, g_aLvl, _Digits, g_aWick));
-         PlacePending();
-         return;
-      }
-   }
-   // sellside zones: a wick below that closes back above -> BUY the retest
-   for(int i = 0; i < ArraySize(g_zS); i++)
-   {
-      if(g_zS[i].broken) continue;
-      if(c < g_zS[i].bot) { g_zS[i].broken = true; continue; }
-      if(l < g_zS[i].bot && c > g_zS[i].bot && (dnW / rng) >= InpWickShare)
-      {
-         g_aDir = 1;   g_aLvl = g_zS[i].bot;  g_aWick = l;
-         g_aAtr = a;   g_aBar = iTime(_Symbol, _Period, 1);  g_aAge = 0;
-         Log(StringFormat("SWEEP sellside %.*f -> BUY limit at %.*f, "
-                          "invalidated by a close below %.*f",
-                          _Digits, g_zS[i].px, _Digits, g_aLvl, _Digits, g_aWick));
-         PlacePending();
-         return;
-      }
-   }
+   // buyside zone (above): we SELL, so the far edge is its top
+   if(z.dir == 1) return z.top + InpEntryPast * a;
+   return z.bot - InpEntryPast * a;
 }
 
-// A setup dies if price CLOSES beyond the sweep's own extreme - the sweep was
-// not a rejection after all - or if the retest simply never arrives.
-void ManageArmed()
+// The nearest live zone on one side that is still young enough to trade.
+int NearestZone(const Zone &Z[], int bar, double px, bool above)
 {
-   if(g_aDir == 0) return;
-   g_aAge++;
-   double c = iClose(_Symbol, _Period, 1);
-   bool dead = (g_aDir == 1 && c < g_aWick) || (g_aDir == -1 && c > g_aWick);
-   if(dead)
+   int best = -1;
+   double bd = 0.0;
+   for(int i = 0; i < ArraySize(Z); i++)
    {
-      KillPending("price closed beyond the sweep wick, so it was not a rejection");
-      g_aDir = 0;
-      return;
+      if(Z[i].broken) continue;
+      if(bar - Z[i].born > InpArmLife) continue;
+      double lvl = (Z[i].dir == 1) ? Z[i].top : Z[i].bot;
+      if(above && lvl <= px) continue;
+      if(!above && lvl >= px) continue;
+      double d = MathAbs(lvl - px);
+      if(best < 0 || d < bd) { best = i; bd = d; }
    }
-   if(g_aAge > InpRetestWait)
-   {
-      KillPending(StringFormat("no retest in %d bars", InpRetestWait));
-      g_aDir = 0;
-      return;
-   }
-   // the broker filled it, or expired it, while we were not looking
-   if(g_aTicket != 0 && !OrderSelect(g_aTicket))
-   {
-      g_aTicket = 0;
-      g_aDir    = 0;
-   }
+   return best;
 }
 
-//==================== THE RESTING ORDER =============================
-// A REAL pending order at the broker, not a price check inside OnTick.
-//
-// This matters more here than anywhere else in either EA. The whole measured
-// edge of this strategy IS the fill: E-068 found that taking the same signals
-// at the sweep bar's close instead scores -0.003R with zero costs. A simulated
-// limit only fills when a tick happens to arrive while price is through the
-// level, and on a fast retest wick that tick may never come - so the EA would
-// miss exactly the fills the backtest counted, and keep the ones it did not.
-// A broker-side limit fills on the touch whether or not this EA is looking.
-//
-// The stop and target go ON the order, so a disconnect cannot leave a naked
-// position: the broker holds both sides of the trade from the moment it fills.
-void PlacePending()
+void ArmSide(int dir)
 {
-   KillPending("");                    // never two at once
-   if(g_aDir == 0) return;
    if(g_lockedDay || g_lockedPerm) return;
    if(PosCount() >= InpMaxPositions) return;
    if(g_tradesToday >= InpMaxTradesDay) return;
 
-   double a = (g_aAtr > 0.0) ? g_aAtr : ATRv(1);
+   ulong  tk   = (dir > 0) ? g_tkBuy : g_tkSell;
+   double a    = ATRv(1);
    if(a <= 0.0) return;
+   int    bar  = Bars(_Symbol, _Period) - 1;
+   double bid  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask  = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   if(bid <= 0.0 || ask <= 0.0) return;
 
-   int    dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-   double lvl  = NormalizeDouble(g_aLvl, dg);
-   double stop = NormalizeDouble(g_aWick - g_aDir * InpStopAtr * a, dg);
-   double tgt  = NormalizeDouble(lvl + g_aDir * InpTargetAtr * a, dg);
+   // a BUY rests below price at a SELLSIDE zone; a SELL rests above at a BUYSIDE one
+   int idx = (dir > 0) ? NearestZone(g_zS, bar, bid, false)
+                       : NearestZone(g_zB, bar, ask, true);
+   if(idx < 0) { KillSide(dir, "no live zone on this side"); return; }
 
-   // the broker's own floor, applied to the ORDER price - a limit inside the
-   // stops level is rejected, and a rejected order is a trade silently missed
+   Zone z   = (dir > 0) ? g_zS[idx] : g_zB[idx];
+   int dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double lvl = NormalizeDouble(EntryLevel(z, a), dg);
+
+   // already resting at this exact level for this exact zone: leave it alone.
+   // Re-sending it every bar would churn the order book and reset its age.
+   double have = (dir > 0) ? g_lvlBuy : g_lvlSell;
+   int    hb   = (dir > 0) ? g_bornBuy : g_bornSell;
+   if(tk != 0 && OrderSelect(tk) && MathAbs(have - lvl) < _Point && hb == z.born)
+      return;
+
+   KillSide(dir, "");
+
+   double stop = NormalizeDouble(lvl - dir * InpStopAtr * a, dg);
+   double risk = (lvl - stop) * dir;
+   if(risk <= 0.0) return;
+   double tgt  = NormalizeDouble(lvl + dir * InpTargetR * risk, dg);
+
+   // the broker's floor. A limit inside the stops level is REJECTED, and a
+   // rejected order is a trade silently not taken.
    double md = MinStopDist();
    if(md > 0.0)
    {
-      if(MathAbs(lvl - stop) < md) stop = NormalizeDouble(lvl - g_aDir * md, dg);
-      if(MathAbs(tgt - lvl)  < md) tgt  = NormalizeDouble(lvl + g_aDir * md, dg);
+      if(MathAbs(lvl - stop) < md) stop = NormalizeDouble(lvl - dir * md, dg);
+      if(MathAbs(tgt - lvl)  < md) tgt  = NormalizeDouble(lvl + dir * md, dg);
    }
-   if((lvl - stop) * g_aDir <= 0.0)
+
+   // A limit must rest on the far side of the market. If price is already
+   // through the level the sweep has happened without us, and chasing it with
+   // a market order is the entry E-076 measured at -0.003R.
+   if((dir > 0 && ask <= lvl) || (dir < 0 && bid >= lvl))
    {
-      Log("refusing to arm: the stop is on the wrong side of the limit");
-      g_aDir = 0;
+      Log("not arming: price is already through the level");
       return;
    }
 
-   // A limit must rest on the far side of the market. If price has already
-   // gone through the level by the time the bar closed, the retest happened
-   // inside the sweep bar and the setup is gone - it is not an excuse to
-   // chase it with a market order.
-   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   if((g_aDir == 1 && ask <= lvl) || (g_aDir == -1 && bid >= lvl))
-   {
-      Log("not arming: price is already through the level, the retest is gone");
-      g_aDir = 0;
-      return;
-   }
-
-   datetime exp = iTime(_Symbol, _Period, 0)
-                + (datetime)(PeriodSeconds(_Period) * (InpRetestWait + 1));
-
-   bool ok = (g_aDir == 1)
+   bool ok = (dir > 0)
       ? trade.BuyLimit(InpEntryLots, lvl, _Symbol, stop, tgt,
-                       ORDER_TIME_SPECIFIED, exp, "LQS retest")
+                       ORDER_TIME_GTC, 0, "LQS toptick")
       : trade.SellLimit(InpEntryLots, lvl, _Symbol, stop, tgt,
-                        ORDER_TIME_SPECIFIED, exp, "LQS retest");
+                        ORDER_TIME_GTC, 0, "LQS toptick");
    if(ok)
    {
-      g_aTicket = trade.ResultOrder();
-      Log(StringFormat("ARMED %s LIMIT %.2f lots at %.*f   stop %.*f   "
-                       "target %.*f   ticket %I64u",
-                       g_aDir > 0 ? "BUY" : "SELL", InpEntryLots,
-                       dg, lvl, dg, stop, dg, tgt, g_aTicket));
+      if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl;  g_bornBuy = z.born; }
+      else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; g_bornSell = z.born; }
+      Log(StringFormat("ARMED %s LIMIT %.2f at %.*f   stop %.*f (%.*f risk)   "
+                       "target %.*f   zone %.*f",
+                       dir > 0 ? "BUY" : "SELL", InpEntryLots, dg, lvl,
+                       dg, stop, dg, risk, dg, tgt, dg, z.px));
    }
    else
-   {
-      Log(StringFormat("ARM REJECTED: %d %s", trade.ResultRetcode(),
-                       trade.ResultRetcodeDescription()));
-      g_aDir = 0;
-   }
+      Log(StringFormat("ARM REJECTED (%s): %d %s", dir > 0 ? "buy" : "sell",
+                       trade.ResultRetcode(), trade.ResultRetcodeDescription()));
 }
 
-void KillPending(string why)
+void KillSide(int dir, string why)
 {
-   if(g_aTicket == 0) return;
-   if(OrderSelect(g_aTicket))
+   ulong tk = (dir > 0) ? g_tkBuy : g_tkSell;
+   if(tk == 0) return;
+   if(OrderSelect(tk))
    {
-      trade.OrderDelete(g_aTicket);
-      if(why != "") Log("cancelled the resting order: " + why);
+      trade.OrderDelete(tk);
+      if(why != "") Log(StringFormat("cancelled the %s limit: %s",
+                                     dir > 0 ? "buy" : "sell", why));
    }
-   g_aTicket = 0;
+   if(dir > 0) { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_bornBuy = -1; }
+   else        { g_tkSell = 0; g_lvlSell = 0.0; g_bornSell = -1; }
+}
+
+void KillAll(string why)
+{
+   KillSide(1, why);
+   KillSide(-1, why);
+}
+
+// Called on every bar close: re-point the orders at the zones that are still
+// alive, and clear any ticket the broker has already disposed of.
+void ManageOrders()
+{
+   if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_bornBuy = -1; }
+   if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; g_bornSell = -1; }
+
+   if(PosCount() >= InpMaxPositions || g_lockedDay || g_lockedPerm)
+   {
+      KillAll("a position is open, or trading is locked");
+      return;
+   }
+   ArmSide(1);
+   ArmSide(-1);
 }
 
 //==================== RISK =========================================
@@ -524,12 +537,14 @@ void Readout()
    g_readN++;
    string live = TimeToString(TimeCurrent(), TIME_MINUTES | TIME_SECONDS);
 
-   string armed = (g_aDir == 0)
-      ? "none"
-      : StringFormat("%s limit at %.*f   %d/%d bars   dies on a close %s %.*f",
-                     g_aDir > 0 ? "BUY" : "SELL", _Digits, g_aLvl,
-                     g_aAge, InpRetestWait, g_aDir > 0 ? "below" : "above",
-                     _Digits, g_aWick);
+   // both sides, because both can be resting at once
+   string armed = "";
+   if(g_tkBuy != 0)
+      armed += StringFormat("BUY limit %.*f", _Digits, g_lvlBuy);
+   if(g_tkSell != 0)
+      armed += StringFormat("%sSELL limit %.*f", armed == "" ? "" : "   ",
+                            _Digits, g_lvlSell);
+   if(armed == "") armed = "none resting";
 
    string pos = (np == 0)
       ? "flat"
@@ -550,8 +565,9 @@ void Readout()
       "SPREAD     now %.*f   avg %.*f   worst %.*f\n"
       "STATE      %s\n"
       "\n"
-      "E-069: GOLD 1h 87.8%% on 401, PF 1.85, walk-forward 6/6 - PROMISING.\n"
-      "Measured on 15m/1h bars, NOT on M1. FX is rejected on these rules.",
+      "E-077: GOLD 1h 47.5%% on 491, +0.378R, PF 1.69, 6/6 blocks - PROMISING.\n"
+      "HALF THESE TRADES LOSE. The money is in 2R, not in being right often.\n"
+      "Measured on 15m/1h bars, NOT on M1. XAUUSD only.",
       LQS_BUILD,
       _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), Money(eq), live, (int)g_readN,
       pos,
@@ -596,9 +612,14 @@ int OnInit()
    Print("=== LIQUIDITY SNIPER BUILD " + LQS_BUILD + " ===");
    Print("If that build stamp is not the one you were sent, MetaEditor has not "
          "rebuilt it. Open the .mq5 and press F7.");
-   Print("Geometry is E-069 and is NOT a tuning surface: retest entry, stop "
-         "1.5 ATR beyond the sweep wick, target 0.50 ATR. Changing any of the "
-         "three invalidates every number quoted for it.");
+   Print("Geometry is E-077 and is NOT a tuning surface: the limit rests 0.25 "
+         "ATR PAST the zone's far edge, the stop is 0.60 ATR beyond the fill, "
+         "the target is 2R. Changing any of the three invalidates every number "
+         "quoted for it.");
+   Print("EXPECT TO LOSE ABOUT HALF THESE TRADES. 47.5% win rate is the "
+         "measured figure and it is not a fault. Monte Carlo on trade order "
+         "puts the drawdown to expect near 12R, and 18R at the 95th "
+         "percentile. Decide now whether you can sit through that.");
    return INIT_SUCCEEDED;
 }
 
@@ -606,7 +627,7 @@ void OnDeinit(const int reason)
 {
    EventKillTimer();
    // Leave no order behind that nothing is managing.
-   KillPending("the EA is shutting down");
+   KillAll("the EA is shutting down");
    Comment("");
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
 }
@@ -644,8 +665,7 @@ void OnTick()
    if(Bars(_Symbol, _Period) < InpPivLen * 4 + 30) return;
 
    BuildZones();
-   ManageArmed();
-   ScanSweep();
+   ManageOrders();
 }
 
 // The stop and the target are on the order, so the broker closes the trade.
@@ -666,8 +686,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(entry == DEAL_ENTRY_IN)
    {
       g_tradesToday++;
-      g_aTicket = 0;
-      g_aDir    = 0;
+      // one side filled, so the other must go: the measurement counted one
+      // position at a time and two open would be a different strategy.
+      KillAll("the other side filled");
       Log(StringFormat("FILLED at %.*f   %d trades today",
                        _Digits, HistoryDealGetDouble(trans.deal, DEAL_PRICE),
                        g_tradesToday));
