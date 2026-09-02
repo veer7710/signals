@@ -12,6 +12,32 @@ This checks the thing that actually broke.
 Run:  python3 JARVIS/tools/check_pine.py <file.pine>
 """
 from __future__ import annotations
+
+
+def strip_comment(line):
+    """Drop a // comment, but not one that lives inside a string literal.
+    `label.new(... , "a // b")` is a legal Pine string and chopping it there
+    silently truncated the line every check below then read."""
+    out, instr, prev = [], False, ""
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if instr:
+            out.append(ch)
+            if ch == '"' and prev != "\\":
+                instr = False
+        else:
+            if ch == '"':
+                instr = True
+                out.append(ch)
+            elif ch == "/" and i + 1 < len(line) and line[i + 1] == "/":
+                break
+            else:
+                out.append(ch)
+        prev = ch
+        i += 1
+    return "".join(out)
+
 import re, sys
 
 BUILTIN = set(
@@ -59,12 +85,12 @@ def check_call_order(src):
     to the user, so it gets its own check."""
     defs = {}
     for i, l in enumerate(src, 1):
-        m = re.match(r'^([a-zA-Z_]\w*)\s*\([^)]*\)\s*=>', l.split("//")[0])
+        m = re.match(r'^([a-zA-Z_]\w*)\s*\([^)]*\)\s*=>', strip_comment(l))
         if m and m.group(1) not in defs:
             defs[m.group(1)] = i
     out = []
     for i, l in enumerate(src, 1):
-        code = re.sub(r'"(\\.|[^"\\])*"', '""', l.split("//")[0])
+        code = re.sub(r'"(\\.|[^"\\])*"', '""', strip_comment(l))
         if re.match(r'^[a-zA-Z_]\w*\s*\([^)]*\)\s*=>', code):
             continue                       # the definition itself
         for fn, dline in defs.items():
@@ -82,7 +108,7 @@ def check_nested_func(src):
     function often only makes sense in that context."""
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         if not code.strip():
             continue
         m = re.match(r'^(\s+)([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>', code)
@@ -102,7 +128,7 @@ def check_continuation(src):
     out = []
     depth = 0
     for i, l in enumerate(src, 1):
-        code = re.sub(r'"(\\.|[^"\\])*"', '""', l.split("//")[0])
+        code = re.sub(r'"(\\.|[^"\\])*"', '""', strip_comment(l))
         if depth == 0 and code.strip():
             # ANY operator can start a wrapped line, not just and/or. The
             # version of this check that only looked for and/or/?/: let a
@@ -135,7 +161,7 @@ def check_var_offset(src):
         return []
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         for v in loopvars:
             if re.search(r'\b(?:open|high|low|close|volume|time)\s*\[\s*' + v + r'\s*\]', code):
                 out.append((i, f"VARIABLE HISTORY OFFSET ([{v}]) with no "
@@ -151,7 +177,7 @@ def check_order(src, declared):
     fifty lines further down, which will not compile."""
     first = {}
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         m = DECL.match(code)
         # A named argument on a continuation line ("color = isHigh ? ..") looks
         # exactly like a declaration. A builtin name is never being declared.
@@ -172,7 +198,7 @@ def check_order(src, declared):
 
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         if not code.strip():
             continue
         code = re.sub(r'"[^"]*"', '""', code)
@@ -192,7 +218,7 @@ def check_arity(src):
     a rename or a signature change silently leaves behind."""
     sig = {}
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         m = re.match(r'^([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*=>', code)
         if m:
             params = [p for p in m.group(2).split(",") if p.strip()]
@@ -200,13 +226,27 @@ def check_arity(src):
 
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         if re.match(r'^[a-zA-Z_]\w*\s*\([^)]*\)\s*=>', code):
             continue                      # the definition itself
         for fn, (want, dline) in sig.items():
             for m in re.finditer(r'(?<![\w.])' + fn + r'\s*\(', code):
                 rest, depth, args, cur = code[m.end():], 1, [], ""
+                instr = False
+                prev = ""
                 for ch in rest:
+                    # A comma inside a string literal is TEXT, not an argument
+                    # separator. Missing this reported a 4-arg call as 5 because
+                    # the label read "87.8% on 401, PF 1.85".
+                    if instr:
+                        cur += ch
+                        if ch == '"' and prev != "\\":
+                            instr = False
+                        prev = ch
+                        continue
+                    if ch == '"':
+                        instr = True; cur += ch; prev = ch; continue
+                    prev = ch
                     if ch in "([": depth += 1
                     elif ch in ")]":
                         depth -= 1
@@ -232,7 +272,7 @@ def check_tables(src):
     with. Pine throws at runtime, so the script loads and then dies."""
     dims, out = {}, []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         m = re.search(r'(?:var\s+)?table\s+([a-zA-Z_]\w*)\s*=\s*table\.new\s*\(([^)]*)', code)
         if m:
             parts = [p.strip() for p in m.group(2).split(",")]
@@ -241,7 +281,7 @@ def check_tables(src):
                 dims[m.group(1)] = (int(nums[0]), int(nums[1]), i)
 
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         for m in re.finditer(r'table\.cell\s*\(\s*([a-zA-Z_]\w*)\s*,\s*([^,]+),\s*([^,]+),', code):
             t = m.group(1)
             if t not in dims:
@@ -264,7 +304,7 @@ def check_draw_in_ternary(src):
     every bar - a silent leak that eventually hits max_boxes_count."""
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         if "?" not in code:
             continue
         head = code.split("?")[0]
@@ -315,7 +355,7 @@ def check_namespace_members(src):
     """`ta.adx(...)` compiles here and fails in TradingView. Catch it."""
     out = []
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         for m in re.finditer(r'\b(ta|math|str)\.([a-zA-Z_]\w*)', code):
             ns, name = m.group(1), m.group(2)
             if name not in NAMESPACE_MEMBERS[ns]:
@@ -332,7 +372,7 @@ def check(path):
 
     # pass 1: collect every name this file defines
     for l in src:
-        code = l.split("//")[0]
+        code = strip_comment(l)
         m = DECL.match(code)
         if m:
             declared.add(m.group(1))
@@ -411,7 +451,7 @@ def check(path):
 
     # pass 2: every identifier used must be known
     for i, l in enumerate(src, 1):
-        code = l.split("//")[0]
+        code = strip_comment(l)
         if not code.strip() or code.strip().startswith("//"):
             continue
         code = re.sub(r'"[^"]*"', '""', code)          # strip string literals

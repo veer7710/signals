@@ -1,21 +1,27 @@
 //@version=6
 // ===========================================================================
-//  LIQUIDITY CLEAN 1.0  —  the two LuxAlgo scripts, and nothing else
+//  LIQUIDITY CLEAN 1.1  —  the two LuxAlgo scripts, and nothing else
 //
 //  WHAT IS ON THE CHART, COMPLETE LIST
 //    · the gold DEMA
-//    · BUYSIDE / SELLSIDE LIQUIDITY zones - only where 3+ pivots cluster
+//    · BUYSIDE / SELLSIDE LIQUIDITY zones
 //    · the sweep box when a zone is wicked and rejected
-//    · BUY / SELL labels
+//    · one thin line where the resting order waits, only while it waits
+//    · BUY / SELL labels at the FILL
+//    · while a trade is live: its target and its stop · one closing x
 //    · one position box, bottom left
-//  Nothing else. No reaction scores, no forty level lines, no retest markers,
-//  no SMC boxes. Those were mine and they were the mess.
+//  Nothing else. No reaction scores, no forty level lines, no SMC boxes.
+//  Those were mine and they were the mess.
 //
 //  THE TWO SCRIPTS THIS IS BUILT FROM  (CC BY-NC-SA 4.0, (c) LuxAlgo)
-//   "Buyside & Sellside Liquidity" - a zone is drawn ONLY where three or more
-//     pivots sit within +/- ATR/margin of each other, and it is drawn with
-//     WIDTH, not as a line. That is the whole idea: price reacts near a level,
-//     not on it, and one pivot on its own is not liquidity.
+//   "Buyside & Sellside Liquidity" - a zone is drawn with WIDTH, not as a line.
+//     That is the whole idea: price reacts NEAR a level, not on it. Its own
+//     rule also demands three or more pivots inside +/- ATR/margin, and 1.0 of
+//     this script shipped with that. E-068 measured it: on GOLD 15m it fires
+//     2.7 times per 1000 bars - TWELVE signals in 4501 bars. Every statistic
+//     anyone quoted off this chart was computed on twelve trades.
+//     "Pivots needed to make a zone" now defaults to ONE, which is the other
+//     script's reading, and the trigger fires 39.3 times per 1000 bars.
 //   "Liquidity Sweeps" - a WICK through a level that closes back inside is a
 //     different event from a CLOSE through it. The first is a sweep and it is
 //     tradeable in the opposite direction; the second is a break.
@@ -24,9 +30,31 @@
 //  Veer: "say a m15 or m5 liquidity sweep we are looking to catch scalps on m1
 //  including support and resistance zone trades ... eg hit a level sell catch
 //  the buy up to that level and in between both trades catch scalps".
-//  So: a higher-timeframe sweep sets the direction, the M1 chart times it, and
-//  the OPPOSITE zone is drawn as the target - because that is where the trade
-//  is going, and it is where the next trade starts from.
+//  So: a higher-timeframe sweep sets the direction and the M1 chart times it.
+//
+//  WHAT CHANGED IN 1.1, AND WHY  (E-068 / E-069, both in EXPERIMENTS.md)
+//  Veer reported an 80% win rate trading this by hand. The research build of
+//  these same rules measured 31.6%. The rules were wrong, in three places:
+//
+//   ENTRY   1.0 fired on the sweep bar's CLOSE. That entry scores MINUS 0.003R
+//           WITH ZERO COSTS - it has no edge whatsoever. The edge is entirely
+//           in waiting for price to come BACK to the swept level. A sweep now
+//           ARMS a resting order at that level and the FILL is the signal.
+//   TARGET  1.0 aimed at the opposite zone, three to six ATR away. That is a
+//           33% win rate by construction, however good the trigger is. The
+//           target is now 0.50 ATR.
+//   STOP    1.5 ATR beyond the SWEEP WICK, not beyond the zone edge the sweep
+//           has already traded through.
+//
+//  Retest / 1.5 ATR stop / 0.50 ATR target, pooled across eight markets: 80.5%,
+//  which is Veer's number. GOLD 1h on its own: n=401, 87.8% win, +0.106R,
+//  PF 1.85, t=+5.05, walk-forward 6 of 6 blocks, 7.8 control-sd clear of twelve
+//  random-entry seeds. Verdict PROMISING - which means it has not been
+//  disproved, not that it is profitable.
+//  It is a hostile shape to own: risking 1.5 to make 0.5 needs ~75% just to
+//  break even, so every point of win rate lost to live slippage costs ~0.03R.
+//  EURUSD and GBPUSD are REJECTED outright on the same rules. This is a gold
+//  and index result, and it was measured on 15m and 1h bars, not on M1.
 //
 //  THE ARITHMETIC THAT SETS THE TARGET SIZE
 //  MEASURED off Veer's own screenshots, not assumed: his live gold spread is
@@ -56,7 +84,7 @@
 //  come from the LuxAlgo scripts and from Veer's own reading of his charts.
 // ===========================================================================
 
-indicator("Liquidity Clean 1.0", "LIQ", overlay = true,
+indicator("Liquidity Clean 1.1", "LIQ", overlay = true,
      max_lines_count = 300, max_boxes_count = 300, max_labels_count = 300,
      max_bars_back = 2000)
 
@@ -83,8 +111,8 @@ pvLen  = input.int(7, "Pivot length", minval = 3, maxval = 25, group = gL,
      tooltip = "LuxAlgo's Buyside & Sellside Liquidity uses 7. Bigger finds fewer, more significant pivots.")
 marDiv = input.float(6.9, "Cluster margin", minval = 3.0, maxval = 12.0, step = 0.1, group = gL,
      tooltip = "LuxAlgo's own default. The zone half-width is ATR divided by this, so a bigger number means a tighter cluster.")
-minPiv = input.int(3, "Pivots needed to make a zone", minval = 2, maxval = 8, group = gL,
-     tooltip = "THREE is the LuxAlgo rule (their code tests count > 2). One swing high is not liquidity - three stacked at the same price is, because that is where the stops are.")
+minPiv = input.int(1, "Pivots needed to make a zone", minval = 1, maxval = 8, group = gL,
+     tooltip = "ONE. Measured, and it is the single biggest number on this panel. THREE is the Buyside & Sellside Liquidity rule and it fires 2.7 times per 1000 bars on GOLD 15m - twelve trades in 4501 bars, which is why the old win rate on this script meant nothing. The other script Veer sent, Liquidity Sweeps, treats a single swing point as liquidity: 39.3 per 1000 bars. Raise this only if you want fewer, heavier levels.")
 visLiq = input.int(4, "Zones kept each side", minval = 1, maxval = 12, group = gL)
 zoneLife = input.int(600, "Forget a zone after (bars)", minval = 50, maxval = 5000, group = gL)
 
@@ -114,6 +142,11 @@ sigCool= input.int(5, "Bars between signals", minval = 1, maxval = 100, group = 
 // stop rate 90.3% -> 67.7%. Identical entries in every one of those rows.
 stopBuf = input.float(1.5, "Stop beyond the sweep wick (x ATR)", minval = 0.1, step = 0.1, group = gS,
      tooltip = "The sweep defined how far the market was willing to push. The trade is wrong only if price goes BEYOND that - not if it merely returns to the zone edge it just wicked through.")
+retWait = input.int(20, "Bars to wait for the retest", minval = 1, maxval = 200, group = gS,
+     tooltip = "A sweep no longer fires a signal - it ARMS a resting order at the level that was swept, and the fill is the signal. If price never comes back within this many bars the setup is dead. E-068: entering on the sweep bar's close instead scores MINUS 0.003R with ZERO costs, so that entry has no edge at all.")
+tgtAtr  = input.float(0.50, "Target (x ATR)", minval = 0.1, step = 0.05, group = gS,
+     tooltip = "Measured, not chosen. On GOLD 1h the whole 0.25-1.00 ATR band is positive; 0.50 is where the pooled win rate is 80.5%, which is the number Veer reports. Aiming at the opposite zone instead is a 33% win rate by construction.")
+showArm = input.bool(true, "Show the resting order while it waits", group = gS)
 minTgt = input.float(1.5, "Minimum target to signal (points)", minval = 0.1, step = 0.1, group = gS,
      tooltip = "1.5 points is where the round trip stops eating the trade: at 0.03 lots it grosses GBP 3.56 and nets GBP 2.44. At 0.5 points the broker takes 94% of it.")
 showScalp = input.bool(true, "Mark the scalps between the two zones", group = gS)
@@ -237,6 +270,7 @@ nearS := na
 f_walk(array<Zone> Z, bool isBuyside) =>
     bool sweptNow = false
     float nearest = na
+    float sweptEdge = na
     if array.size(Z) > 0
         for i = array.size(Z) - 1 to 0
             Zone z = array.get(Z, i)
@@ -255,6 +289,7 @@ f_walk(array<Zone> Z, bool isBuyside) =>
                 if wick and not z.swept
                     z.swept := true
                     sweptNow := true
+                    sweptEdge := isBuyside ? z.top : z.bot
                 // BREAK: a close beyond it
                 bool thru = isBuyside ? close > z.top : close < z.bot
                 if thru
@@ -265,10 +300,10 @@ f_walk(array<Zone> Z, bool isBuyside) =>
                     if not isBuyside and (na(nearest) or z.px > nearest) and z.px < close
                         nearest := z.px
             array.set(Z, i, z)
-    [sweptNow, nearest]
+    [sweptNow, nearest, sweptEdge]
 
-[swB, nrB] = f_walk(ZB, true)
-[swS, nrS] = f_walk(ZS, false)
+[swB, nrB, edB] = f_walk(ZB, true)
+[swS, nrS, edS] = f_walk(ZS, false)
 zSweptUp := swB
 zSweptDn := swS
 nearB := nrB
@@ -304,24 +339,81 @@ if useH
 htfLive = useH and htfDir != 0 and (n - htfBar) <= hLife
 
 // ── SIGNALS ─────────────────────────────────────────────────────────────────
+// The live position, declared here because the signal engine below refuses to
+// arm a new setup while one is open.
+var int   pDir  = 0
+var float pEnt  = na
+var float pTgt  = na
+var float pStop = na
+var float pPeak = 0.0
+var int   pBar  = 0
+pClose = false
+var float pLast   = na      // net result of the last closed trade, in currency
+var bool  pLastOk = false
+
+// E-068 measured the entry this script used to take - buying the sweep bar's
+// close - at MINUS 0.003R WITH ZERO COSTS. That is not a weak edge being eaten
+// by the spread, it is nothing. The whole edge is in waiting for price to come
+// BACK to the level it just swept. So a sweep does not fire a signal any more:
+// it ARMS a resting order at the swept edge, and the FILL is the signal.
+//
+//   GOLD 1h · retest entry · stop 1.5 ATR beyond the sweep wick · target 0.5 ATR
+//   n=401  87.8% win  +0.106R  PF 1.85  t=+5.05  walk-forward 6/6 blocks
+//   7.8 control-sd clear of twelve random-entry seeds  ->  PROMISING
 var int lastSig = -9999
 sigSell = false
 sigBuy  = false
 
-// SELL: a buyside zone was just swept, price is back below it, and there is a
-// sellside zone below worth reaching.
+// the armed setup: which way, the price the order rests at, and the sweep's own
+// extreme - which is both the invalidation and the stop's anchor.
+var int   aDir  = 0
+var float aLvl  = na
+var float aWick = na
+var int   aBar  = -9999
+
 tgtDn = not na(nearS) ? close - nearS : 0.0
 tgtUp = not na(nearB) ? nearB - close : 0.0
 
-if showSig and zSweptUp and n - lastSig >= sigCool and tgtDn >= minTgt
+// A buyside sweep arms a SELL at the level it swept, and vice versa. One armed
+// setup at a time, and none while a trade is live - that is what one account
+// can actually do, and it is what the backtest counted.
+if showSig and zSweptUp and aDir == 0 and pDir == 0 and not na(edB)
     if not htfLive or htfDir == -1
+        aDir  := -1
+        aLvl  := edB
+        aWick := high
+        aBar  := n
+if showSig and zSweptDn and aDir == 0 and pDir == 0 and not na(edS)
+    if not htfLive or htfDir == 1
+        aDir  := 1
+        aLvl  := edS
+        aWick := low
+        aBar  := n
+
+// The setup dies if price CLOSES beyond the sweep's own extreme - the sweep was
+// not a rejection after all - or if the retest simply never comes.
+if aDir != 0
+    bool dead = (aDir == 1 and close < aWick) or (aDir == -1 and close > aWick)
+    if dead or (n - aBar) > retWait
+        aDir  := 0
+        aLvl  := na
+
+// THE FILL. A resting order is live inside the bar, so the wick reaching it is
+// a fill. This is the one place the script is entitled to use low/high.
+if aDir != 0 and n > aBar and n - lastSig >= sigCool
+    if aDir == 1 and low <= aLvl
+        sigBuy  := true
+        lastSig := n
+    if aDir == -1 and high >= aLvl
         sigSell := true
         lastSig := n
+if sigBuy or sigSell
+    aDir := 0
 
-if showSig and zSweptDn and n - lastSig >= sigCool and tgtUp >= minTgt
-    if not htfLive or htfDir == 1
-        sigBuy := true
-        lastSig := n
+// where the order is resting, while it is resting, and then it is gone.
+plot(showArm and aDir != 0 ? aLvl : na, "Resting order",
+     color = color.new(aDir > 0 ? cBuy : cSell, 45),
+     style = plot.style_linebr, linewidth = 1)
 
 plotshape(sigBuy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
      text = "BUY",  textcolor = color.white, size = size.small)
@@ -370,18 +462,33 @@ if barstate.islast
     f_draw(ZS, cBuy,  "Sellside liquidity")
 
 // ── POSITION BOX ────────────────────────────────────────────────────────────
-var int   pDir  = 0
-var float pEnt  = na
-var float pTgt  = na
-var float pPeak = 0.0
-var int   pBar  = 0
 
 if sigBuy or sigSell
     pDir  := sigBuy ? 1 : -1
-    pEnt  := close
-    pTgt  := sigBuy ? nearB : nearS
+    pEnt  := aLvl                       // the resting order's price, not the close
+    pTgt  := (sigBuy ? 1 : -1) * tgtAtr * atr + aLvl
+    pStop := aWick - (sigBuy ? 1 : -1) * stopBuf * atr
     pPeak := 0.0
     pBar  := n
+
+// The trade is over when one of the two is touched. TIES GO TO THE STOP: if a
+// bar's range holds both, the bar cannot say which came first, so we take the
+// worse one. Every number quoted for this strategy was counted that way.
+float pExit = na
+if pDir != 0 and not na(pStop) and not na(pTgt)
+    bool hitS = pDir > 0 ? low <= pStop : high >= pStop
+    bool hitT = pDir > 0 ? high >= pTgt : low <= pTgt
+    bool won = false
+    if hitS
+        pExit := pStop
+    else if hitT
+        pExit := pTgt
+        won   := true
+    if not na(pExit)
+        pClose  := true
+        pLast   := (pExit - pEnt) * pDir * ccyPt - costGbp
+        pLastOk := won
+        pDir    := 0
 
 if pDir != 0 and not na(pEnt)
     fav = pDir > 0 ? high - pEnt : pEnt - low
@@ -399,14 +506,14 @@ tgtPts   = pDir == 0 or na(pTgt) or na(pEnt) ? 0.0
 plot(showTgt and pDir != 0 ? pTgt : na, "Target zone",
      color = pDir > 0 ? cBuy : cSell, style = plot.style_linebr, linewidth = 1)
 
-// THE STOP, DRAWN. Set it and do not look - which is what Veer asked for.
-var float pStop = na
-if sigBuy or sigSell
-    pStop := sigBuy ? low - stopBuf * atr : high + stopBuf * atr
+// the one closing mark, at the price the trade actually ended at
+plotshape(pExit, "closed", shape.xcross, location.absolute,
+     color = color.new(#8b949e, 10), size = size.tiny)
+
 plot(pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
      style = plot.style_linebr, linewidth = 1)
 
-var table BX = table.new(position.bottom_left, 2, 9, border_width = 1,
+var table BX = table.new(position.bottom_left, 2, 10, border_width = 1,
      bgcolor = #0d1117, frame_color = #30363d, frame_width = 2,
      border_color = #30363d)
 
@@ -422,6 +529,9 @@ if showBox and barstate.islast
     table.cell(BX, 1, 0, pDir == 0 ? "flat" : (pDir > 0 ? "LONG" : "SHORT"),
          text_color = color.white, bgcolor = #1f6feb, text_size = size.normal)
     f_bx(1, "entry", pDir == 0 ? "-" : str.tostring(pEnt, format.mintick), color.white)
+    f_bx(9, "last closed", na(pLast) ? "-"
+         : (pLastOk ? "target  " : "stop  ") + str.tostring(pLast, "#.##"),
+         na(pLast) ? #8b949e : (pLast >= 0 ? cBuy : cSell))
     f_bx(2, "net now", pDir == 0 ? "-" : str.tostring(netNow, "#.##"),
          netNow >= 0 ? cBuy : cSell)
     f_bx(3, "net at peak", pDir == 0 ? "-" : str.tostring(netPk, "#.##"), color.white)
@@ -437,7 +547,7 @@ if showBox and barstate.islast
          cSell)
     f_bx(7, "HTF sweep", htfLive ? (htfDir > 0 ? "BUY side taken" : "SELL side taken")
          : "none live", htfLive ? color.orange : #8b949e)
-    f_bx(8, "evidence", "sweep PF 1.03 on 117 - UNPROVEN", color.orange)
+    f_bx(8, "evidence", "retest: GOLD 1h 87.8% on 401, PF 1.85 - PROMISING", cBuy)
 
 // ── ALERTS ──────────────────────────────────────────────────────────────────
 alertcondition(sigBuy,  "LIQ BUY",  "Liquidity Clean: BUY - sellside swept")
