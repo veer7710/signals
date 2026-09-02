@@ -106,6 +106,14 @@ hLife= input.int(30, "   a HTF sweep stays live for (bars)", minval = 3, maxval 
 gS     = "SIGNALS"
 showSig= input.bool(true, "BUY / SELL", group = gS)
 sigCool= input.int(5, "Bars between signals", minval = 1, maxval = 100, group = gS)
+// STOP AND TARGET, SET FROM THE MEASUREMENT (E-065), not from taste.
+// The stop used to sit just beyond the ZONE. But a sweep means price has
+// ALREADY been through that edge, so the stop sat inside the exact noise the
+// setup is built on and 90.3% of trades died there. Beyond the SWEEP BAR'S OWN
+// EXTREME plus 1.5 ATR: win rate 10.2% -> 31.6%, expectancy -0.372R -> +0.004R,
+// stop rate 90.3% -> 67.7%. Identical entries in every one of those rows.
+stopBuf = input.float(1.5, "Stop beyond the sweep wick (x ATR)", minval = 0.1, step = 0.1, group = gS,
+     tooltip = "The sweep defined how far the market was willing to push. The trade is wrong only if price goes BEYOND that - not if it merely returns to the zone edge it just wicked through.")
 minTgt = input.float(1.5, "Minimum target to signal (points)", minval = 0.1, step = 0.1, group = gS,
      tooltip = "1.5 points is where the round trip stops eating the trade: at 0.03 lots it grosses GBP 3.56 and nets GBP 2.44. At 0.5 points the broker takes 94% of it.")
 showScalp = input.bool(true, "Mark the scalps between the two zones", group = gS)
@@ -391,7 +399,14 @@ tgtPts   = pDir == 0 or na(pTgt) or na(pEnt) ? 0.0
 plot(showTgt and pDir != 0 ? pTgt : na, "Target zone",
      color = pDir > 0 ? cBuy : cSell, style = plot.style_linebr, linewidth = 1)
 
-var table BX = table.new(position.bottom_left, 2, 8, border_width = 1,
+// THE STOP, DRAWN. Set it and do not look - which is what Veer asked for.
+var float pStop = na
+if sigBuy or sigSell
+    pStop := sigBuy ? low - stopBuf * atr : high + stopBuf * atr
+plot(pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
+     style = plot.style_linebr, linewidth = 1)
+
+var table BX = table.new(position.bottom_left, 2, 9, border_width = 1,
      bgcolor = #0d1117, frame_color = #30363d, frame_width = 2,
      border_color = #30363d)
 
@@ -416,9 +431,13 @@ if showBox and barstate.islast
     f_bx(5, "target zone", pDir == 0 or tgtPts <= 0 ? "-"
          : str.tostring(tgtPts, "#.#") + " pts = "
          + str.tostring(tgtPts * ccyPt - costGbp, "#.##") + " net", color.white)
-    f_bx(6, "HTF sweep", htfLive ? (htfDir > 0 ? "BUY side taken" : "SELL side taken")
+    f_bx(6, "stop", pDir == 0 or na(pStop) ? "-"
+         : str.tostring(pStop, format.mintick) + "   ("
+         + str.tostring(math.abs(pEnt - pStop) * ccyPt + costGbp, "#.##") + " risk)",
+         cSell)
+    f_bx(7, "HTF sweep", htfLive ? (htfDir > 0 ? "BUY side taken" : "SELL side taken")
          : "none live", htfLive ? color.orange : #8b949e)
-    f_bx(7, "evidence", "follow 54.1% / fade 44.5%", #8b949e)
+    f_bx(8, "evidence", "sweep PF 1.03 on 117 - UNPROVEN", color.orange)
 
 // ── ALERTS ──────────────────────────────────────────────────────────────────
 alertcondition(sigBuy,  "LIQ BUY",  "Liquidity Clean: BUY - sellside swept")

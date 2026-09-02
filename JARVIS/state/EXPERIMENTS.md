@@ -2371,3 +2371,66 @@ positive (E-041).
 **Every single-seed control in E-060, E-061 and E-062 should be read with this
 in mind.** The direction of those results is unchanged; the precision implied
 by their decimal places is not real.
+
+---
+
+## E-065 — The liquidity strategy measured. The stop was the problem, not the entry.
+**Verdict: UNPROVEN as an edge. But stop placement is worth 21 points of win rate.**
+Script: `JARVIS/research/liquidity.py`
+
+Veer runs this by hand and has never had a number for it. This implements the
+SAME rules `LIQUIDITY_CLEAN_1_0.pine` draws — the two LuxAlgo scripts' rules —
+so the number describes the chart he is actually looking at.
+
+Zone = 3+ pivots clustered within ±ATR/6.9. Entry = a wick sweep of the zone
+that closes back inside, wick ≥30% of the bar. Target = the nearest live zone
+the other way. Ties resolved as losses. Costs applied.
+
+### THE FINDING: the stop, not the signal
+
+| stop placed | buffer | min target | n | win% | expectancy | PF | stopped |
+|---|---|---|---|---|---|---|---|
+| beyond the ZONE | 0.25 ATR | 1 ATR | 186 | **10.2%** | −0.372R | 0.65 | **90.3%** |
+| beyond the ZONE | 1.5 ATR | 3 ATR | 117 | 23.9% | +0.032R | 1.04 | 76.1% |
+| beyond the WICK | 0.25 ATR | 1 ATR | 155 | 16.8% | −0.236R | 0.75 | 83.2% |
+| **beyond the WICK** | **1.5 ATR** | **1 ATR** | 133 | **31.6%** | +0.004R | 1.01 | 67.7% |
+| beyond the WICK | 1.5 ATR | 3 ATR | 117 | 26.5% | **+0.024R** | **1.03** | 73.5% |
+
+**Win rate 10.2% → 31.6%, expectancy −0.372R → +0.004R, from the stop alone.**
+The entries are identical in every row.
+
+My first implementation put the stop 0.25 ATR beyond the ZONE EDGE. But a
+sweep means price has ALREADY been through that edge — the stop was sitting
+inside the exact noise the setup is built on, and 90% of trades died there. The
+correct placement is beyond the SWEEP BAR'S OWN EXTREME: the sweep defined how
+far the market was willing to push, so the trade is wrong only if price goes
+BEYOND what the sweep already reached.
+
+### The honest verdict
+At the best setting the profit factor is **1.03** on **117 trades**. That is
+breakeven with noise around it, not an edge. **This strategy is UNPROVEN.**
+
+### Veer's belief, measured
+He wrote: *"price normally respects the zones hits it and comes down or up ...
+sometimes rarely it wont and it will breakthrough thats where we make our loss
+... and that is not very often"*.
+
+**Measured: 67.7% of sweep entries end at the stop even at the best setting.**
+The break-through is not rare on this data. Two readings are possible and they
+are not the same:
+1. It genuinely is rare on M1/M5 with his discretion, and 15m/1h does not
+   transfer. Possible — there is still NO M1 or M5 data in this repo.
+2. He remembers the reactions and not the break-throughs. Also possible, and
+   it is what a 68% stop rate would feel like if the winners were much larger.
+
+The profit factor of 1.03 says the winners ARE much larger — which is exactly
+what would make a 68% stop rate feel like "price normally respects the zone".
+
+### What changes in the Pine
+The default stop moves to **beyond the sweep wick + 1.5 ATR**, and the minimum
+target to **3 ATR**. Those are the measured-best cells and they are also the
+ones that most reduce the stop rate. Nothing else changes.
+
+### What would settle it
+M1 and M5 data. `ExportHistory.mq5` produces it in one drag-and-drop. Every
+number above is 15m and 1h, and the strategy is run on M1/M5/M15.
