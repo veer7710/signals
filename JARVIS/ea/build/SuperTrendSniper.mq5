@@ -190,9 +190,29 @@ input group "=== STALL (E-056: the strongest result in this project) ==="
 // within one trade are correlated and the confidence intervals in the study
 // are too narrow. What carries the finding is the 8-of-8 unanimity, which
 // correlated sampling inside a trade cannot manufacture.
+input bool   InpUseReversalExit = true; // close when structure breaks against the trade
 input int    InpMaxStall      = 25;     // close a stalled trade after this many bars
 input bool   InpStallScales   = true;   // and tighten the give-back as it stalls
 input double InpImpulseAtr    = 2.0;    // a bar this many ATRs wide is an impulse
+// VEER'S -GBP12 TRADE, and it is a rule not a story.
+// "there was a volume candle shot up and we entered a sell the second it
+// closes immediately shot up in 2 pound profit but unfortunately that candle
+// started a trend and we made -12p".
+//
+// That is the EA selling INTO a fresh up-impulse. The SuperTrend flips on the
+// pullback that always follows a big candle, so the signal fires in the exact
+// direction the impulse is not going. The +GBP2 was the pullback; the -GBP12
+// was the trend the candle had just started.
+//
+// E-057 measured the two sides of this and they disagree by size: a 2 x ATR
+// impulse typically hands back MORE than its own range (median 1.07-1.36,
+// beating a matched control in 8 of 8), but a 4 x ATR impulse hands back much
+// less (median 0.55-0.79) and continues. So a small impulse is faded safely
+// and a BIG one is not - which is exactly the candle that cost him GBP12.
+// n was 38-57 at 4 x ATR, too few to size on, but the direction is clear and
+// the cost of being wrong here is asymmetric.
+input double InpNoFadeAtr     = 3.0;    // refuse a signal AGAINST a bar this big
+input int    InpNoFadeBars    = 3;      // ...for this many bars afterwards
 input double InpImpulseTighten= 0.70;   // tighten the give-back by this after one
 input bool   InpUseTrail      = true;   // ON: measured best on SuperTrend entries
 input double InpTrailAtR      = 0.0;    // arm immediately. A wide trail needs no delay
@@ -420,7 +440,18 @@ input double InpGbTier2       = 0.24;   // ...allow only this much give-back
 input double InpGbTier3R      = 4.0;    // and past this...
 input double InpGbTier3       = 0.18;   // ...this much. Big peaks are protected harder
 input double InpGbMinMoney    = 0.0;    // ignore the rule below this profit (0 = off)
-input double InpGbClosePart   = 0.5;    // fraction to bank (1.0 = close it all)
+// 1.0 SINCE 2026-09-01, ON VEER'S EXPLICIT INSTRUCTION:
+// "although we wanna claim big big trends we want to actually CLOSE IN PROFIT
+//  ... im happy if maximum potential profit on a trend is not taken as long as
+//  we actually took a solid ammount".
+//
+// That is a preference between two measured options, not a mistake. E-051b:
+// banking HALF keeps about two thirds of the wide trail's expectancy for half
+// its chance of a 30% drawdown; closing it ALL keeps less expectancy again and
+// less drawdown again. He has chosen the certain smaller number over the
+// larger uncertain one, twice now, in writing. Set it back to 0.5 to let the
+// runner run.
+input double InpGbClosePart   = 1.0;    // fraction to bank (1.0 = close it all)
 
 input group "=== BASKET (manage the TOTAL, not one trade) ==="
 // Veer's actual failure was never one trade: "the basket reached ~GBP12 and
@@ -446,6 +477,17 @@ input bool   InpBasketCloseAll= true;   // false = only close the losers, keep t
 // the GBP1.20 itself. Set InpLockAtMoney to 0 to switch it off entirely.
 input double InpLockAtMoney   = 1.20;   // once the basket is this green, stops go to break-even+
 input bool   InpLockOnlyOnce  = true;   // and are never pulled back afterwards
+// STACKING IS OFF AND SHOULD STAY OFF.
+// Veer, from the live account: "scale adds are making us profit but also loss
+// its better to just had hold out that first trade and trail sl or look for a
+// real reentry postion also scale adds make 0.01".
+//
+// That is the same conclusion the numbers reached from the other side. An add
+// is taken at the WORST price of the move so far, it enlarges the position at
+// the moment give-back risk is highest, and E-053 measured that adding trades
+// does not add edge because the cost is charged per trade while the edge is
+// not. The first trade with a trail, or a genuine re-entry after a close, is
+// the same exposure without the extra fee and the extra fill risk.
 input int    InpMaxStack      = 1;      // positions allowed at once. 1 = no stacking
 input int    InpStackCoolBars = 5;      // bars between adds
 input double InpMaxNetLots    = 0.0;    // hard cap on one-way exposure (0 = auto)
@@ -480,6 +522,7 @@ input double InpRunAdx        = 25.0;   // ADX at entry (weakest of the three)
 
 input group "=== EXECUTION BOX (what is actually happening) ==="
 input bool   InpShowBox       = true;   // on-chart profit and execution panel
+input bool   InpBoxComment    = true;   // ALSO print it as a chart Comment (cannot be hidden)
 input int    InpBoxCorner     = 0;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 18;
@@ -651,6 +694,7 @@ void   Snapshot(Basket &b);
 int    TrendRisk(string &why);
 double GiveBackAllowed(double peakR, int stall, bool afterImpulse);
 int    StallBars(int ti);
+int    ReversalAgainst(int dir);
 void   UpdatePeaks();
 void   ProtectPositions();
 void   ProtectBasket();
@@ -1185,6 +1229,26 @@ void TryEntry()
       }
    }
 
+   // ---- DO NOT TRADE AGAINST A FRESH BIG CANDLE
+   if(InpNoFadeAtr > 0.0)
+   {
+      double aNow = ATR(1);
+      for(int k = 1; k <= InpNoFadeBars && aNow > 0.0; k++)
+      {
+         double rngK = iHigh(_Symbol, _Period, k) - iLow(_Symbol, _Period, k);
+         if(rngK < InpNoFadeAtr * aNow) continue;
+         int impDir = (iClose(_Symbol, _Period, k) > iOpen(_Symbol, _Period, k))
+                      ? 1 : -1;
+         if(impDir != (flipUp ? 1 : -1))
+         {
+            SkipLog(sdir, StringFormat("a %.1f x ATR candle went the OTHER way "
+                                       "%d bar(s) ago - this is the pullback, "
+                                       "not the trade", rngK / aNow, k));
+            return;
+         }
+      }
+   }
+
    // The signal is real from here: it has passed the DEMA slope and the ADX
    // ceiling, which is exactly how E-052 defined a signal. Record it against
    // the run BEFORE anything reads the risk score.
@@ -1664,6 +1728,24 @@ void ManagePosition()
       if(risk <= 0) continue;
       double rNow  = (price - open) * dir / risk;
 
+      // --- REVERSAL EXIT. Structure has broken against the trade.
+      // This is the "close later than we can" complaint: the EA used to wait
+      // for the SuperTrend to flip, which on M1 is late and noisy. A close
+      // beyond the last swing point is earlier and is not a single candle.
+      if(InpUseReversalExit)
+      {
+         int rev = ReversalAgainst(dir);
+         if(rev != 0 && rev != dir)
+         {
+            if(trade.PositionClose(tk))
+               Log(StringFormat("REVERSAL exit at %.2fR: price closed through "
+                                "the last swing against this %s. Structure has "
+                                "broken - not waiting for the SuperTrend.",
+                                rNow, dir > 0 ? "long" : "short"));
+            continue;
+         }
+      }
+
       // --- STALL EXIT, and it comes before the blind bar cap because it is
       // the better of the two. A trade still printing new highs at bar 49 is
       // not the trade InpMaxBars was written for; one that peaked thirty bars
@@ -2135,6 +2217,50 @@ int FlipsIn(int len)
    for(int k = 0; k < n; k++)
       if(g_flipHist[k] != 0) c++;
    return c;
+}
+
+// "this ea doesnt see reversals clearly ... therefore close later than we can"
+//
+// A SuperTrend flip is not a reversal - on M1 it flips constantly. A REVERSAL
+// is structural: the trade stops making new extremes, and then price BREAKS
+// the last swing point in the opposite direction. Two conditions, both from
+// closed bars, and it cannot fire on a single opposite candle - which Veer has
+// ruled out explicitly and repeatedly.
+//
+// Returns +1 if structure has broken UP (bad for a short), -1 if DOWN (bad for
+// a long), 0 otherwise.
+int ReversalAgainst(int dir)
+{
+   int look = 30;
+   if(Bars(_Symbol, _Period) < look + 5) return 0;
+
+   // the most recent confirmed swing in the direction the trade cares about
+   double swHi = 0.0, swLo = 0.0;
+   int    swHiBar = -1, swLoBar = -1;
+   for(int i = 3; i <= look; i++)
+   {
+      double h = iHigh(_Symbol, _Period, i);
+      double l = iLow(_Symbol, _Period, i);
+      bool isHi = h > iHigh(_Symbol, _Period, i - 1)
+               && h > iHigh(_Symbol, _Period, i - 2)
+               && h > iHigh(_Symbol, _Period, i + 1)
+               && h > iHigh(_Symbol, _Period, i + 2);
+      bool isLo = l < iLow(_Symbol, _Period, i - 1)
+               && l < iLow(_Symbol, _Period, i - 2)
+               && l < iLow(_Symbol, _Period, i + 1)
+               && l < iLow(_Symbol, _Period, i + 2);
+      if(isHi && swHiBar < 0) { swHi = h; swHiBar = i; }
+      if(isLo && swLoBar < 0) { swLo = l; swLoBar = i; }
+      if(swHiBar >= 0 && swLoBar >= 0) break;
+   }
+
+   double c1 = iClose(_Symbol, _Period, 1);
+
+   // a LONG is reversed when price CLOSES below the last swing low
+   if(dir > 0 && swLoBar > 0 && c1 < swLo) return -1;
+   // a SHORT is reversed when price CLOSES above the last swing high
+   if(dir < 0 && swHiBar > 0 && c1 > swHi) return 1;
+   return 0;
 }
 
 int TrendRisk(string &why)
@@ -2706,6 +2832,19 @@ void BoxLine(int idx, string txt, color c)
       if(InpBoxCorner == 1 || InpBoxCorner == 3)
          ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
    }
+   // SET THESE EVERY CALL, NOT ONLY AT CREATION.
+   // They used to be inside the "if it does not exist yet" block. An object
+   // left on the chart by an earlier build kept that build's corner and
+   // position forever - so the panel was drawn, correctly, somewhere the
+   // chart was not showing. Veer has reported the box not working three
+   // times; this is the version of that bug I can actually find.
+   ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY + idx * (InpBoxSize + 6));
+   ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, InpBoxSize);
+   ObjectSetInteger(0, nm, OBJPROP_ANCHOR,
+        (InpBoxCorner == 1 || InpBoxCorner == 3) ? ANCHOR_RIGHT_UPPER
+                                                 : ANCHOR_LEFT_UPPER);
    ObjectSetString(0, nm, OBJPROP_TEXT, txt);
    ObjectSetInteger(0, nm, OBJPROP_COLOR, c);
 }
@@ -2825,6 +2964,34 @@ void DrawBox()
    for(int i = r; i < 40; i++)
       ObjectDelete(0, StringFormat("STS_box_%02d", i));
 
+   // THE FALLBACK THAT CANNOT FAIL.
+   // Chart objects can be hidden by a template, pushed off-screen by a stale
+   // corner, or suppressed by "Show objects" being off. Comment() is drawn by
+   // the terminal itself, needs no objects and cannot be misplaced. If the
+   // panel above is ever invisible again, these six lines still tell Veer what
+   // the EA is doing.
+   if(InpBoxComment)
+   {
+      Comment(StringFormat(
+         "SNIPERBOT  %s %s\n"
+         "open %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
+         "KEPT OF PEAK %.0f%%    GREEN->RED %d of %d\n"
+         "today %d trades  %s     equity %s\n"
+         "spread now %.*f  avg %.*f  worst %.*f\n"
+         "run %d bars / %.1f ATR   stall %d   risk %d/3   %s",
+         _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+         b.n, b.lots, Money(b.money), Money(b.peakMoney), Money(b.givenBack),
+         (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
+         g_stGreenRed, g_stTrades,
+         g_stDayTrades, Money(g_stDayRealized), Money(eq),
+         _Digits, SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID),
+         _Digits, (g_spN > 0 ? g_spSum / (double)g_spN : 0.0),
+         _Digits, g_spMax,
+         RunBars(), RunMoveAtr(), b.stall, risk,
+         g_lockedPerm ? "LOCKED" : (g_lockedDay ? "locked today" : "trading")));
+   }
+
    // WITHOUT THIS THE BOX DOES NOT UPDATE.
    // Veer: "the profit box is see thru and not good can't see clearly also it
    // doesn't update at all". Object text changes are not shown until the chart
@@ -2919,6 +3086,7 @@ void OnDeinit(const int reason)
    SaveStats();
    BoxClear();
    ObjectDelete(0, "STS_box_bg");
+   Comment("");
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    if(g_adxHandle != INVALID_HANDLE) IndicatorRelease(g_adxHandle);
 }
