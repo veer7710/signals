@@ -174,6 +174,26 @@ slMax    = input.float(4.0, "Maximum stop that still qualifies (points)", group 
 spread   = input.float(0.46,"Assumed spread (points)", group = gR, step = 0.01,
      tooltip = "MEASURED off your own screenshots (0.41 / 0.46 / 0.47 / 0.50), not assumed. Your 3.5 had 0.30 here, which made every net target on the chart look 0.32 points better than it was. On a Prime/ECN account set this to 0.20 and add the commission. Worth knowing: with the 2.0 ATR stop this number barely moves the result - E-069 measured +0.111R at zero spread against +0.090R at 0.46 - because a wide stop makes R large enough that the spread is a rounding error.")
 
+// ── THE MIDDLE OF THE RANGE (E-084 / E-085) ─────────────────────────────────
+// Nine price-action descriptors were measured against every SuperTrend trade.
+// One showed a clean U: a flip AT a range extreme is a real break or reversal,
+// a flip in the MIDDLE of the range is the market changing its mind inside
+// noise. On GOLD 1h the two middle quintiles carry 53% OF ALL LOSSES, and the
+// split HOLDS OUT OF SAMPLE in all four splits tested.
+// The EA sizes down to a quarter here rather than skipping (that keeps every
+// trade and 96% of the benefit). On the chart the signal is simply DIMMED, so
+// you can see it is a weaker one without it disappearing.
+gRP      = "RANGE POSITION"
+rpLook   = input.int(20, "Bars for the range position", minval = 5, maxval = 200, group = gRP)
+rpLo     = input.float(0.35, "Weak band starts", minval = 0.0, maxval = 1.0, step = 0.05, group = gRP)
+rpHi     = input.float(0.70, "Weak band ends", minval = 0.0, maxval = 1.0, step = 0.05, group = gRP)
+rpDim    = input.bool(true, "Dim signals inside the weak band", group = gRP)
+
+rpHiV = ta.highest(high, rpLook)
+rpLoV = ta.lowest(low, rpLook)
+rangePos = rpHiV > rpLoV ? (close - rpLoV) / (rpHiV - rpLoV) : 0.5
+midRange = rangePos >= rpLo and rangePos <= rpHi
+
 gD        = "DISPLAY"
 cBuy      = input.color(#00A6E8, "BUY colour",  group = gD)
 cSell     = input.color(#F0435A, "SELL colour", group = gD)
@@ -298,14 +318,19 @@ plot(ratio, "Signal spacing ratio", display = display.status_line)
 // four graded cases each get their own plotshape and the ungraded case gets the
 // plain word. Exactly one can be true per bar, so only one ever draws.
 gradeTxt = sType == "" ? "" : sType
-plotshape(buy  and sType == "SNAP",  "BUY SNAP",   shape.labelup,   location.belowbar, color = cBuy,  text = "BUY SNAP",   textcolor = color.white, size = size.tiny)
-plotshape(buy  and sType == "SWEEP", "BUY SWEEP",  shape.labelup,   location.belowbar, color = cBuy,  text = "BUY SWEEP",  textcolor = color.white, size = size.tiny)
-plotshape(buy  and sType == "BREAK", "BUY BREAK",  shape.labelup,   location.belowbar, color = cBuy,  text = "BUY BREAK",  textcolor = color.white, size = size.tiny)
-plotshape(buy  and sType == "",      "BUY",        shape.labelup,   location.belowbar, color = cBuy,  text = "BUY",        textcolor = color.white, size = size.tiny)
-plotshape(sell and sType == "SNAP",  "SELL SNAP",  shape.labeldown, location.abovebar, color = cSell, text = "SELL SNAP",  textcolor = color.white, size = size.tiny)
-plotshape(sell and sType == "SWEEP", "SELL SWEEP", shape.labeldown, location.abovebar, color = cSell, text = "SELL SWEEP", textcolor = color.white, size = size.tiny)
-plotshape(sell and sType == "BREAK", "SELL BREAK", shape.labeldown, location.abovebar, color = cSell, text = "SELL BREAK", textcolor = color.white, size = size.tiny)
-plotshape(sell and sType == "",      "SELL",       shape.labeldown, location.abovebar, color = cSell, text = "SELL",       textcolor = color.white, size = size.tiny)
+// A mid-range flip is DIMMED, not hidden: it is a weaker signal, and the EA
+// takes it at quarter size rather than refusing it. E-085.
+cBuyN  = rpDim and midRange ? color.new(cBuy, 62)  : cBuy
+cSellN = rpDim and midRange ? color.new(cSell, 62) : cSell
+
+plotshape(buy  and sType == "SNAP",  "BUY SNAP",   shape.labelup,   location.belowbar, color = cBuyN,  text = "BUY SNAP",   textcolor = color.white, size = size.tiny)
+plotshape(buy  and sType == "SWEEP", "BUY SWEEP",  shape.labelup,   location.belowbar, color = cBuyN,  text = "BUY SWEEP",  textcolor = color.white, size = size.tiny)
+plotshape(buy  and sType == "BREAK", "BUY BREAK",  shape.labelup,   location.belowbar, color = cBuyN,  text = "BUY BREAK",  textcolor = color.white, size = size.tiny)
+plotshape(buy  and sType == "",      "BUY",        shape.labelup,   location.belowbar, color = cBuyN,  text = "BUY",        textcolor = color.white, size = size.tiny)
+plotshape(sell and sType == "SNAP",  "SELL SNAP",  shape.labeldown, location.abovebar, color = cSellN, text = "SELL SNAP",  textcolor = color.white, size = size.tiny)
+plotshape(sell and sType == "SWEEP", "SELL SWEEP", shape.labeldown, location.abovebar, color = cSellN, text = "SELL SWEEP", textcolor = color.white, size = size.tiny)
+plotshape(sell and sType == "BREAK", "SELL BREAK", shape.labeldown, location.abovebar, color = cSellN, text = "SELL BREAK", textcolor = color.white, size = size.tiny)
+plotshape(sell and sType == "",      "SELL",       shape.labeldown, location.abovebar, color = cSellN, text = "SELL",       textcolor = color.white, size = size.tiny)
 
 // (3.5) GRADED vs UNGRADED COUNT, status line. If the ungraded count dominates
 // and the graded flips are the ones that run, the size lever writes itself --

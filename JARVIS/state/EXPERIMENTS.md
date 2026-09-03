@@ -3111,3 +3111,77 @@ an argument for keeping it: it would behave completely differently on M1, and
 the R version means the same thing on every timeframe. That is the whole point.
 
 File: `JARVIS/research/st_parity.py`.
+
+---
+
+## E-084 / E-085 — Where SuperTrend loses: the middle of the range. Validated out of sample.
+
+Veer: *"see where super trend could make loss in terms of price actions same w
+liquidity strat ... there's areas where signals themselves make loss ... or
+enter based of false move which is ok as profits will and should heavily
+outweigh loss."*
+
+That last clause changes the task. He is **not** asking for a filter that
+removes losers — E-074 already measured that road and found the
+highest-expectancy gate set banked the least money. He is asking **which price
+action produces the losses**, so they can be made smaller while the trade count
+stays high.
+
+Nine backward-looking descriptors were measured against every trade: signal-bar
+size, run length, run distance, distance from the last swing, ATR(5)/ATR(20),
+position in the 20-bar range, 20-bar efficiency, body ratio, and HTF agreement.
+
+### Eight showed nothing coherent. One showed a clean U.
+GOLD 1h, **position in the last 20-bar range**, by quintile:
+
+| bucket | n | expectancy | points | share of all losses |
+|---|---|---|---|---|
+| bottom 0.36 | 66 | **+0.221R** | +526 | 17% |
+| 0.36–0.50 | 66 | −0.013R | −234 | 26% |
+| 0.50–0.63 | 67 | **−0.159R** | −709 | 27% |
+| 0.63–0.78 | 66 | **+0.341R** | +789 | 15% |
+| top 0.78 | 67 | **+0.372R** | +739 | 15% |
+
+**The two middle quintiles carry 53% of all losses.** A U-shape with a
+mechanism: a SuperTrend flip **at a range extreme** is a genuine break or
+reversal; the same flip **in the middle** is the market changing its mind
+inside noise — precisely the "false move" Veer describes.
+
+It replicates on 15m (−0.038R and −0.028R in the middle, +0.241/+0.281/+0.414
+at the edges).
+
+### The finding was distrusted and tested
+45 cells were inspected, so some negatives are expected by chance. The band was
+read off the **first half** and applied to the **second**:
+
+| | inside the band | outside | separation | |
+|---|---|---|---|---|
+| 1h, first half (in-sample) | −0.055R | +0.169R | +0.225R | HOLDS |
+| **1h, second half (OOS)** | +0.044R | **+0.497R** | **+0.453R** | **HOLDS** |
+| 15m, first half | −0.034R | +0.314R | +0.347R | HOLDS |
+| **15m, second half (OOS)** | +0.154R | +0.247R | +0.093R | HOLDS |
+
+**All four splits hold, and the 1h separation is larger out of sample than in.**
+
+### What to do about it — points, pooled 1h+15m
+| policy | trades | points |
+|---|---|---|
+| leave it alone | 447 | +1551 |
+| **quarter size in the band** | **447** | **+1801** |
+| half size in the band | 447 | +1718 |
+| skip the band entirely | 219 | +1885 |
+
+Skipping books 4.5% more and costs **half the trades**. Quarter size keeps every
+trade and 96% of the benefit — the right trade for someone who wants signal
+count. `InpMidRangeSize = 0.0` skips instead.
+
+### The liquidity strategy has no losing bucket at all
+Across every descriptor, every quintile is positive. It is already selecting its
+context by construction — it only enters *at* levels, so it is never taking a
+mid-range entry in the first place. That is a structural property, not luck, and
+it is the clearest argument for the liquidity entry over the flip entry.
+
+Shipped: `SuperTrendSniper.mq5` 2.16 (quarter size mid-range), and
+`XAUUSD_CLEAN_3_6.pine` dims those signals rather than hiding them.
+
+Files: `JARVIS/research/failure_map.py`, `rangepos.py`.

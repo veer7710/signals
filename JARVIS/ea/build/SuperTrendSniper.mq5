@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.15"
+#property version   "2.16"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-03 / 2.15 / R decides, money is only a floor"
+#define STS_BUILD "2026-09-03 / 2.16 / mid-range flips sized down"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -424,6 +424,39 @@ input group "=== CHOP GUARD (present so it can be tested, not argued about) ==="
 // and E-053 measured that filters only drag a system toward zero. Every
 // signal is still taken. The bad regimes are taken SMALLER and the good one
 // BIGGER, so the edge is weighted rather than the trades deleted.
+// ── THE MIDDLE OF THE RANGE (E-084 / E-085) ──────────────────────────────────
+// Nine backward-looking price-action descriptors were measured against every
+// trade. Eight showed nothing coherent. One showed a clean U:
+//
+//   GOLD 1h, where the entry sits in the last 20-bar range, by quintile
+//     bottom 36%   +0.221R      <- at the range low: a real reversal
+//     0.36-0.50    -0.013R
+//     0.50-0.63    -0.159R      <- these two carry 53% OF ALL LOSSES
+//     0.63-0.78    +0.341R
+//     top 22%      +0.372R      <- at the range high: a real break
+//
+// A SuperTrend flip AT an extreme is a genuine break or reversal. The same flip
+// in the MIDDLE of a range is the market changing its mind inside noise - the
+// "false move" Veer describes, and exactly where a trend signal should fail.
+//
+// It is not a fluke of one bucket: it is a U with a mechanism, it replicates on
+// 15m, and it HOLDS OUT OF SAMPLE in all four splits tested - the separation is
+// actually LARGER out of sample on 1h (+0.453R against +0.225R in-sample).
+//
+// Pooled 1h+15m, points banked per 0.01 lot:
+//     leave it alone            447 trades   +1551
+//     QUARTER SIZE in the band  447 trades   +1801   <- shipped
+//     half size in the band     447 trades   +1718
+//     skip the band entirely    219 trades   +1885
+//
+// Skipping books slightly more and costs HALF THE TRADES. Quarter size keeps
+// every trade and 96% of the benefit, which is the right trade for someone who
+// wants the signal count. Set InpMidRangeSize to 0.0 to skip instead.
+input int    InpRangeLook     = 20;     // bars for the range position
+input double InpMidRangeLo    = 0.35;   // the losing band starts here...
+input double InpMidRangeHi    = 0.70;   // ...and ends here
+input double InpMidRangeSize  = 0.25;   // size multiplier inside it (0 = skip)
+
 input bool   InpUseRegimeSize = true;   // size by market shape (E-066)
 input double InpRegimeChopX   = 0.70;   // multiplier in dead chop
 input double InpRegimeMixX    = 1.25;   // ...in the middle, where the money is
@@ -850,6 +883,7 @@ long   g_readN = 0;   // readout beats, so a frozen box is visibly frozen
 void   SaveStats();
 void   LoadGuards();
 double MinStopDist();
+double RangePos();
 void   CheckGuardsTick();
 void   LoadStats();
 
@@ -1589,6 +1623,33 @@ void TryEntry()
       lots = sized;
    }
 
+   // ── THE MIDDLE OF THE RANGE (E-085) ──────────────────────────────────────
+   // Applied AFTER every other sizing rule, because it is the one with the
+   // out-of-sample evidence behind it and it must not be diluted by them.
+   double rp = RangePos();
+   if(rp >= InpMidRangeLo && rp <= InpMidRangeHi)
+   {
+      if(InpMidRangeSize <= 0.0)
+      {
+         SkipLog(sdir, StringFormat("range position %.2f is mid-range - the "
+                                    "flip is inside noise, not at an extreme", rp));
+         return;
+      }
+      double step3 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+      double cut   = lots * InpMidRangeSize;
+      if(step3 > 0) cut = MathFloor(cut / step3) * step3;
+      double vmin3 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+      cut = MathMax(vmin3, cut);
+      if(cut < lots - 1e-9)
+      {
+         Log(StringFormat("range position %.2f is mid-range (%.2f-%.2f): "
+                          "sizing %.2f -> %.2f. A flip here is the market "
+                          "changing its mind inside noise.",
+                          rp, InpMidRangeLo, InpMidRangeHi, lots, cut));
+         lots = cut;
+      }
+   }
+
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
@@ -2311,6 +2372,24 @@ void RegisterSignal(int dir)
 // re-derive the lot from the wider distance, so the money at risk is
 // unchanged and only the geometry moves. Refusing the trade instead would
 // silently delete whole sessions on exactly the timeframe Veer trades.
+// Where the last closed bar sits in the recent range. 0 = at the low,
+// 1 = at the high, 0.5 = dead centre, which is where the losses are.
+double RangePos()
+{
+   int n = InpRangeLook;
+   if(n < 3) return 0.5;
+   double hi = -DBL_MAX, lo = DBL_MAX;
+   for(int k = 1; k <= n; k++)
+   {
+      double h = iHigh(_Symbol, _Period, k);
+      double l = iLow(_Symbol, _Period, k);
+      if(h > hi) hi = h;
+      if(l < lo) lo = l;
+   }
+   if(hi <= lo) return 0.5;
+   return (iClose(_Symbol, _Period, 1) - lo) / (hi - lo);
+}
+
 double MinStopDist()
 {
    long   lvl = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
