@@ -3389,3 +3389,51 @@ Setting the target to zero exposed both, and neither is visible to any checker:
   when `tp = 0`, which is not a price at all. Now returns 0.
 
 File: `JARVIS/research/fattail.py`.
+
+---
+
+## E-091 — The disaster brake. Every tight version loses money.
+
+Veer: *"stop loss initially is way too far, if news or reversals happens that's
+a massive massive loss unless we can close immediately thru ea."*
+
+He is right, and it is a consequence of my own fix — E-089 forced the stop wider
+(7 round trips) so the spread could not own it, which makes a full stop-out a
+big loss. A wide stop with nothing faster behind it is not risk management.
+
+But "cut early" is the classic rule that feels safe and costs money, so it was
+measured. GOLD, **points against leaving the trade alone**:
+
+| brake | 1h | 15m |
+|---|---|---|
+| never green, 0.40 of stop against | **−779** | +35 |
+| never green, 0.55 of stop against | −682 | +6 |
+| never green, 0.70 of stop against | −487 | −25 |
+| velocity 0.8 ATR in 2 bars | +16 | −185 |
+| velocity 1.2 ATR in 2 bars | +181 | −251 |
+| **velocity 1.8 ATR in 2 bars** | **−6** | **−4** |
+
+**Every tight brake loses money — the trades they cut recover.** Only the
+far-out one is free: it fires on ~6% of trades and its cost is inside the noise.
+
+Shipped at 1.8 ATR / 2 bars, plus a **spread-blowout close** at 3× the running
+average (what news looks like from inside an EA; a stop is not dependable while
+it lasts). Both EAs, checked on every tick **before anything else**.
+
+It is insurance priced at zero, not a trading rule. Tightening it below ~1.5 ATR
+is measurably paying to feel safer.
+
+## Audit of every change this session
+Ran a static audit for the bug classes my edits could introduce: unguarded
+division, unbounded array index, unchecked `PositionModify`, orders sent without
+`NormalizeDouble`. **59 sites flagged, all verified by hand, no real defects** —
+every division guarded (`atr <= 0` returns, `g_tkRisk[ti] <= 0` continues), every
+`g_tk` index bounded by `TrackFind`, all three of `lvl/stop/tgt` normalized
+before every order.
+
+**One real bug was found and fixed during the work**: a replacement landed in
+the forward-declaration block, leaving a bare `CheckGuards();` at file scope — a
+guaranteed compile error that no check in `check_mq5.py` looked for. Added
+check 6b (bare statement outside any function), regression-tested.
+
+File: `JARVIS/research/brake.py`.

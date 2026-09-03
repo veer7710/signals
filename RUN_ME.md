@@ -4,14 +4,30 @@ Four files. Two EAs for MT5, two indicators for TradingView.
 
 | file | put it | what it is |
 |---|---|---|
-| `JARVIS/ea/build/SuperTrendSniper.mq5` | MQL5/Experts | build **2.20** |
-| `JARVIS/ea/build/LiquiditySniper.mq5` | MQL5/Experts | build **3.04** |
+| `JARVIS/ea/build/SuperTrendSniper.mq5` | MQL5/Experts | build **2.21** |
+| `JARVIS/ea/build/LiquiditySniper.mq5` | MQL5/Experts | build **3.05** |
 | `JARVIS/pine/XAUUSD_CLEAN_3_7.pine` | TradingView | SuperTrend, by eye |
-| `JARVIS/pine/LIQUIDITY_CLEAN_1_4.pine` | TradingView | Liquidity, by eye |
+| `JARVIS/pine/LIQUIDITY_CLEAN_1_5.pine` | TradingView | Liquidity, by eye |
 
 **Recompile both EAs (F7).** The chart prints its build stamp on the first line.
-If it does not read 2.20 / 3.04, MetaEditor has not rebuilt and none of this is
+If it does not read 2.21 / 3.05, MetaEditor has not rebuilt and none of this is
 running.
+
+## The stop is wide on purpose, and this is what makes that safe
+
+`InpMinStopCostX = 7` forces the stop wide enough that the spread is at most a
+seventh of the risk — without that the edge is gone (E-089). A wide stop with
+nothing faster behind it is just a bigger bet, so there is now a **disaster
+brake**, checked on every tick, ahead of everything else:
+
+- **1.8 ATR against an open loser inside 2 bars → closed at market.**
+- **Spread blows out past 3x its own average → closed at market.** That is what
+  news looks like from inside an EA, and a stop is not dependable while it lasts.
+
+Every TIGHTER brake was measured and every one LOSES money — the trades they cut
+recover. Cutting at 0.40 of the stop costs 779 points on 1h. This one fires on
+about 6% of trades and its cost is inside the noise. It is insurance priced at
+zero, and tightening it is measurably paying to feel safer.
 
 ---
 

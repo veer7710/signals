@@ -247,6 +247,25 @@ def check(path: str):
                     bad(i, "%s has %d format specifier(s) but %d argument(s)"
                            % (fn, want, got))
 
+    # ---- 6b. a bare statement at FILE SCOPE ------------------------------
+    # A stray "foo();" outside any function is a guaranteed compile error and
+    # is exactly what a careless edit leaves behind - a replacement that landed
+    # in the forward-declaration block instead of in OnTick. Nothing here
+    # looked for it. Depth is tracked by counting braces on stripped code.
+    depth = 0
+    for i, l in enumerate(lines, 1):
+        c = strip_code(l)
+        stripped = c.strip()
+        if depth == 0 and re.match(r'^[A-Za-z_]\w*\s*\(.*\)\s*;\s*$', stripped):
+            # a prototype is "type name(args);" - a CALL has no leading type
+            if not re.match(r'^(void|int|double|bool|string|long|ulong|datetime|color|char|short|uint|ushort|float)\b',
+                            stripped):
+                bad(i, "statement '%s' sits OUTSIDE any function - will not compile"
+                       % stripped[:48])
+        depth += c.count("{") - c.count("}")
+        if depth < 0:
+            depth = 0
+
     # ---- 7. #define used but never defined ------------------------------
     defs = set(re.findall(r'#define\s+([A-Za-z_]\w*)', code))
     for i, l in enumerate(lines, 1):

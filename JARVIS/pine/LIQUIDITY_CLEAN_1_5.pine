@@ -93,7 +93,7 @@
 //  come from the LuxAlgo scripts and from Veer's own reading of his charts.
 // ===========================================================================
 
-indicator("Liquidity Clean 1.4", "LIQ", overlay = true,
+indicator("Liquidity Clean 1.5", "LIQ", overlay = true,
      max_lines_count = 300, max_boxes_count = 300, max_labels_count = 300,
      max_bars_back = 2000)
 
@@ -161,7 +161,14 @@ tgtLvl  = input.bool(true, "Target the NEXT LEVEL, not a fixed R", group = gS,
 tgtMinA = input.float(0.50, "Ignore levels nearer than (x ATR)", minval = 0.1, step = 0.05, group = gS)
 tgtR    = input.float(2.0, "Fallback target if no level is found (x risk)", minval = 0.5, step = 0.25, group = gS,
      tooltip = "2R. Measured, not chosen. On GOLD 1h every combination of a 0.45-0.90 ATR stop with a 1.5R-2.5R target is positive - a plateau, not a cell. The best is 0.75 ATR / 1.5R at +3183 points; 0.60 / 2R sits in the interior because an edge-of-grid optimum is usually a fit.")
-showArm = input.bool(true, "Show the resting orders while they wait", group = gS)
+// EVERYTHING OPTIONAL IS NOW OFF BY DEFAULT. Veer, in his own words:
+// "it should JUST show levels buy sell and dema simple cleanlyyy nothing else
+//  levels should only be the two pine scripts i had sent you ... the bsl ssl
+//  and liquidity sweep by lux algo simply with buy sell entry signals and live
+//  position box's is the only different"
+// So the chart is: the DEMA, the LuxAlgo levels, BUY/SELL, and the box. The
+// take-profit and the stop are NUMBERS IN THE BOX, not more lines on the price.
+showArm = input.bool(false, "Show the resting orders while they wait", group = gS)
 
 gM2      = "SMC  (E-079: these two pay, iFVG / BOS / CHoCH do not)"
 useFvg   = input.bool(true,  "Rest orders at fair value gaps", group = gM2)
@@ -186,7 +193,7 @@ gV    = "LOOK"
 cBuy  = input.color(#089981, "Buyside / BUY", group = gV)
 cSell = input.color(#f23645, "Sellside / SELL", group = gV)
 showBox = input.bool(true, "Position box", group = gV)
-showTgt = input.bool(true, "Draw the target zone line", group = gV)
+showTgt = input.bool(false, "Draw the target line (the box already has it)", group = gV)
 
 // ── the zone type ───────────────────────────────────────────────────────────
 type Zone
@@ -637,10 +644,10 @@ plot(showTgt and pDir != 0 ? pTgt : na, "Target zone",
      color = pDir > 0 ? cBuy : cSell, style = plot.style_linebr, linewidth = 1)
 
 // the one closing mark, at the price the trade actually ended at
-plotshape(pExit, "closed", shape.xcross, location.absolute,
+plotshape(showTgt ? pExit : na, "closed", shape.xcross, location.absolute,
      color = color.new(#8b949e, 10), size = size.tiny)
 
-plot(pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
+plot(showTgt and pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
      style = plot.style_linebr, linewidth = 1)
 
 

@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.20"
+#property version   "2.21"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-03 / 2.20 / LIVE — stop scales to the spread"
+#define STS_BUILD "2026-09-03 / 2.21 / disaster brake"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -626,6 +626,37 @@ input bool   InpUseGiveBack   = true;   // leave when profit is handed back
 // that was already made. A stop at 1R of peak costs nothing while the trade
 // keeps running - it only ever moves up - and it is the only mechanism here
 // that works when no tick reaches the EA.
+
+// ── THE DISASTER BRAKE (E-091) ───────────────────────────────────────────────
+// Veer: "stop loss initially is way too far, if news or reversals happens
+// that's a massive massive loss unless we can close immediately thru ea."
+//
+// He is right, and it is a consequence of my own fix: E-089 forced the stop
+// WIDER (7 round trips) so the spread could not own it, which makes a full
+// stop-out a big loss. A wide stop with no faster brake is not risk management,
+// it is a bigger bet.
+//
+// But "cut early" is the classic rule that feels safe and costs money, so it
+// was measured rather than assumed. GOLD, points against leaving the trade
+// alone:
+//
+//   cut when never green and 0.40 of the stop against us    1h  -779   15m  +35
+//   cut when never green and 0.55 of the stop against us    1h  -682   15m   +6
+//   cut on 0.8 ATR against us in 2 bars                     1h   +16   15m -185
+//   cut on 1.2 ATR against us in 2 bars                     1h  +181   15m -251
+//   cut on 1.8 ATR against us in 2 bars                     1h    -6   15m   -4
+//
+// EVERY TIGHT BRAKE COSTS MONEY. The trades they cut recover. Only the far-out
+// one is free: it fires on about 6% of trades and its cost is inside the noise.
+//
+// So this brake is set to catch a DISASTER and nothing else. It is insurance,
+// not a trading rule, and it is priced at zero. Tightening it below about 1.5
+// ATR is measurably paying to feel safer.
+input bool   InpUseBrake      = true;   // emergency close on a violent move against us
+input double InpBrakeAtr      = 1.8;    // ...this many ATR against us...
+input int    InpBrakeBars     = 2;      // ...within this many bars
+input double InpMaxSpreadX    = 3.0;    // also close if the spread blows out this much
+
 input bool   InpUseProfitStop = true;   // push the give-back level to the BROKER as a stop
 input double InpProfitStopArmR= 1.0;    // arm the profit stop at this peak R
 
@@ -915,6 +946,7 @@ void   ProtectBasket();
 void   LockBasket();
 void   LockPositions();
 void   TrailProfitStop();
+void   DisasterBrake();
 bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
 void   RegisterSignal(int dir);
@@ -2779,6 +2811,74 @@ void UpdatePeaks()
    }
 }
 
+
+//===================================================================
+//  MODULE: THE DISASTER BRAKE
+//===================================================================
+// Runs on EVERY TICK. It is the only thing in this EA that can close a losing
+// trade before its stop, and it exists because the stop is deliberately wide.
+//
+// TWO TRIGGERS, both aimed at the same event - the market moving faster than a
+// stop can be relied on:
+//   VELOCITY  price has travelled InpBrakeAtr against us within InpBrakeBars.
+//   SPREAD    the spread has blown out past InpMaxSpreadX times its own
+//             running average, which is what news looks like from inside an
+//             EA. A stop is not dependable while that is true, and neither is
+//             the fill we would get - so the position goes now, at a spread we
+//             can still see, rather than after a gap we cannot.
+void DisasterBrake()
+{
+   if(!InpUseBrake) return;
+   if(PositionsTotal() == 0) return;
+
+   double a = ATR(1);
+   if(a <= 0.0) return;
+
+   double spNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spAvg = (g_spN > 20) ? g_spSum / (double)g_spN : 0.0;
+   bool   blown = (spAvg > 0.0 && InpMaxSpreadX > 0.0
+                   && spNow > InpMaxSpreadX * spAvg);
+
+   int look = MathMax(InpBrakeBars, 1);
+   double was = iClose(_Symbol, _Period, look);
+   double now = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double prof = PositionGetDouble(POSITION_PROFIT);
+
+      // only ever cuts a trade that is ALREADY LOSING. A violent move in our
+      // favour is not a disaster and the trail already owns it.
+      if(prof >= 0.0) continue;
+
+      double against = (was - now) * dir;      // positive = moved against us
+      bool   fast    = (against >= InpBrakeAtr * a);
+
+      if(!fast && !blown) continue;
+
+      string why = fast ? StringFormat("%.1f ATR against us in %d bars",
+                                       against / a, look)
+                        : StringFormat("spread blew out to %.*f against an "
+                                       "average of %.*f", _Digits, spNow,
+                                       _Digits, spAvg);
+      if(trade.PositionClose(tk))
+         Log("DISASTER BRAKE: closed because " + why
+             + ". The stop is wide on purpose; this is what makes that safe.");
+      else
+         Log(StringFormat("DISASTER BRAKE could not close: %d %s",
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+   }
+}
+
 //===================================================================
 //  MODULE: THE PROFIT STOP  —  the fix for "up 4-5 pound, closed in loss"
 //===================================================================
@@ -3684,7 +3784,8 @@ void OnTick()
 
    Readout();
 
-   CheckGuardsTick();      // before anything else: a breach outranks a rule
+   DisasterBrake();        // FIRST. Nothing outranks getting out of a disaster.
+   CheckGuardsTick();      // then: a breach outranks a rule
    UpdatePeaks();
    ProtectPositions();
    LockPositions();       // each trade out of loss first

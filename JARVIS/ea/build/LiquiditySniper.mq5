@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.04"
+#property version   "3.05"
 #property strict
 
-#define LQS_BUILD "2026-09-03 / 3.04 / LIVE — stop scales to the spread"
+#define LQS_BUILD "2026-09-03 / 3.05 / disaster brake"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -128,6 +128,19 @@ input int    InpArmWait       = 60;     // an unfilled limit is cancelled after 
 input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED
 input double InpEntryLots     = 0.02;   // size for one entry
 input int    InpMaxPositions  = 1;      // one at a time, as measured
+
+input group "=== THE DISASTER BRAKE  (E-091) ==="
+// The stop here is small in ATR terms but floored at 7 round trips, so on M1
+// it is not small in money. Same reasoning as the SuperTrend EA: a stop that
+// cannot be tightened without the spread owning it needs something faster
+// behind it for the case a stop cannot handle at all - a news gap.
+// E-091 measured every tighter brake as a net LOSS: the trades they cut
+// recover. This one fires on about 6% of trades and its cost is inside the
+// noise. It is insurance priced at zero, not a trading rule.
+input bool   InpUseBrake      = true;   // emergency close on a violent move against us
+input double InpBrakeAtr      = 1.8;    // ...this many ATR against us...
+input int    InpBrakeBars     = 2;      // ...within this many bars
+input double InpMaxSpreadX    = 3.0;    // also close if the spread blows out this much
 
 input group "=== RISK ==="
 input double InpMaxDayLossPct = 3.0;    // stop for the day after this drawdown
@@ -198,7 +211,7 @@ bool   HavePosition();
 void   AddZone(Zone &Z[], double &piv[], double at, int dir, double mar, int bar);
 void   ExpireZones(Zone &Z[], int bar);
 void   MarkBroken(Zone &Z[], double c);
-void   CheckGuards();
+void   DisasterBrake();
 double MinStopDist();
 int    PosCount();
 
@@ -804,6 +817,54 @@ void ManageOrders()
    ArmSide(-1);
 }
 
+//==================== THE DISASTER BRAKE ===========================
+// Every tick. The only thing here that closes a losing trade before its stop.
+void DisasterBrake()
+{
+   if(!InpUseBrake) return;
+   if(PosCount() == 0) return;
+
+   double a = ATRv(1);
+   if(a <= 0.0) return;
+
+   double spNow = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double spAvg = (g_spN > 20) ? g_spSum / (double)g_spN : 0.0;
+   bool   blown = (spAvg > 0.0 && InpMaxSpreadX > 0.0
+                   && spNow > InpMaxSpreadX * spAvg);
+
+   int    look = MathMax(InpBrakeBars, 1);
+   double was  = iClose(_Symbol, _Period, look);
+   double now  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+      if(PositionGetDouble(POSITION_PROFIT) >= 0.0) continue;  // losing only
+
+      int    dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      double against = (was - now) * dir;
+      bool   fast = (against >= InpBrakeAtr * a);
+      if(!fast && !blown) continue;
+
+      string why = fast ? StringFormat("%.1f ATR against us in %d bars",
+                                       against / a, look)
+                        : StringFormat("spread blew out to %.*f against an "
+                                       "average of %.*f", _Digits, spNow,
+                                       _Digits, spAvg);
+      if(trade.PositionClose(tk))
+         Log("DISASTER BRAKE: closed because " + why);
+      else
+         Log(StringFormat("DISASTER BRAKE could not close: %d %s",
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+      // a resting order on the other side is now unmanaged, so it goes too
+      KillAll("the disaster brake fired");
+   }
+}
+
 //==================== RISK =========================================
 void CheckGuards()
 {
@@ -975,6 +1036,7 @@ void OnTick()
       Log("new trading day, daily counters reset");
    }
 
+   DisasterBrake();   // FIRST. Nothing outranks getting out of a disaster.
    CheckGuards();
 
    // There is nothing for OnTick to do about the entry: the limit order is at
