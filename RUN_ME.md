@@ -7,7 +7,7 @@ Four files. Two EAs for MT5, two indicators for TradingView.
 | `JARVIS/ea/build/SuperTrendSniper.mq5` | MQL5/Experts | build **2.21** |
 | `JARVIS/ea/build/LiquiditySniper.mq5` | MQL5/Experts | build **3.05** |
 | `JARVIS/pine/XAUUSD_CLEAN_3_7.pine` | TradingView | SuperTrend, by eye |
-| `JARVIS/pine/LIQUIDITY_CLEAN_1_5.pine` | TradingView | Liquidity, by eye |
+| `JARVIS/pine/LIQUIDITY_CLEAN_1_6.pine` | TradingView | Liquidity, by eye |
 
 **Recompile both EAs (F7).** The chart prints its build stamp on the first line.
 If it does not read 2.21 / 3.05, MetaEditor has not rebuilt and none of this is
@@ -67,6 +67,21 @@ account will settle it in a few sessions.** If SAME-DIR goes negative on real
 fills, that is a real finding and the fix is one input.
 
 ---
+
+## What the liquidity Pine draws now
+
+The DEMA, the LuxAlgo levels, BUY/SELL, and the position box. Nothing else is
+on by default.
+
+Two things were added for the manual trade:
+- **M5 and M15 swing levels feed the M1 chart.** An M5 swing high is a real
+  level on an M1 chart — it is where M5 traders' stops sit — and without it an
+  M1 chart only ever sees M1 structure. They feed both the entry search and the
+  take-profit. (`Trade M1 INSIDE M5/M15 levels`, on.)
+- **A dot prints at every level the LIVE trade reaches**, in its favour. That is
+  the bank-some-here moment on a manual trade. It is a mark, not a signal — the
+  EA does not act on it and neither should you unless the trade has already paid
+  for itself.
 
 ## The one number to send me back
 

@@ -93,7 +93,7 @@
 //  come from the LuxAlgo scripts and from Veer's own reading of his charts.
 // ===========================================================================
 
-indicator("Liquidity Clean 1.5", "LIQ", overlay = true,
+indicator("Liquidity Clean 1.6", "LIQ", overlay = true,
      max_lines_count = 300, max_boxes_count = 300, max_labels_count = 300,
      max_bars_back = 2000)
 
@@ -135,6 +135,8 @@ swShow  = input.bool(true, "Draw the sweep box", group = gW)
 // ── HIGHER TIMEFRAME ────────────────────────────────────────────────────────
 gH   = "HIGHER TIMEFRAME  (M15 / M5 sets it, M1 times it)"
 useH = input.bool(true, "Use a higher-timeframe sweep to set direction", group = gH)
+useMtfLevels = input.bool(true, "Trade M1 INSIDE M5/M15 levels", group = gH,
+     tooltip = "The M5 and M15 swing highs and lows become levels on this chart. An M5 swing high is a real level on an M1 chart - it is where M5 traders' stops sit - and without this an M1 chart only ever sees M1 structure. They feed both the entry search and the take-profit.")
 tfA  = input.timeframe("5",  "   timeframe A", group = gH)
 tfB  = input.timeframe("15", "   timeframe B", group = gH)
 hLife= input.int(30, "   a HTF sweep stays live for (bars)", minval = 3, maxval = 300, group = gH)
@@ -169,6 +171,8 @@ tgtR    = input.float(2.0, "Fallback target if no level is found (x risk)", minv
 // So the chart is: the DEMA, the LuxAlgo levels, BUY/SELL, and the box. The
 // take-profit and the stop are NUMBERS IN THE BOX, not more lines on the price.
 showArm = input.bool(false, "Show the resting orders while they wait", group = gS)
+showPP  = input.bool(true, "Dot each level the LIVE trade reaches", group = gS,
+     tooltip = "While a position is open, a dot prints at every level price reaches in the trade's favour. That is the bank-some-here moment on a manual trade. It is a mark, not a signal - the EA does not act on it.")
 
 gM2      = "SMC  (E-079: these two pay, iFVG / BOS / CHoCH do not)"
 useFvg   = input.bool(true,  "Rest orders at fair value gaps", group = gM2)
@@ -351,10 +355,19 @@ f_htf() =>
         ll := p_l
     swU = not na(lh) and high > lh and close < lh
     swD = not na(ll) and low  < ll and close > ll
-    [swU, swD, a]
+    // AND the higher timeframe's own swing levels. Veer: "we need to be using
+    // all timeframes internally to produce signals". An M5 swing high is a
+    // real level on an M1 chart - it is where M5 traders' stops are - and
+    // without this the M1 chart only ever sees M1 structure.
+    [swU, swD, a, lh, ll]
 
-[aU, aD, aA] = request.security(syminfo.tickerid, tfA, f_htf(), lookahead = barmerge.lookahead_off)
-[bU, bD, bA] = request.security(syminfo.tickerid, tfB, f_htf(), lookahead = barmerge.lookahead_off)
+[aU, aD, aA, aH, aL] = request.security(syminfo.tickerid, tfA, f_htf(), lookahead = barmerge.lookahead_off)
+[bU, bD, bB, bH, bL] = request.security(syminfo.tickerid, tfB, f_htf(), lookahead = barmerge.lookahead_off)
+bA = bB
+
+// The four higher-timeframe levels, as plain numbers the level engine can use.
+// lookahead_off throughout, so nothing here sees an unclosed HTF bar.
+htfLevels = array.from(aH, aL, bH, bL)
 
 var int htfDir = 0
 var int htfBar = -9999
@@ -526,6 +539,14 @@ f_next(int dir, float px) =>
             float m2 = (g2.top + g2.bot) / 2.0
             if (m2 - px) * dir >= minD and (na(best) or (m2 - px) * dir < (best - px) * dir)
                 best := m2
+    // the M5 and M15 swing levels count too - that is the whole point of
+    // trading M1 inside higher-timeframe structure
+    if useMtfLevels
+        for i = 0 to array.size(htfLevels) - 1
+            float h = array.get(htfLevels, i)
+            if not na(h) and (h - px) * dir >= minD
+                 and (na(best) or (h - px) * dir < (best - px) * dir)
+                best := h
     best
 
 // THE FILL. A resting limit is live inside the bar, so the wick reaching it is
@@ -678,6 +699,31 @@ if barstate.islast
              kept >= 60 ? cBuy : (kept >= 30 ? color.orange : cSell))
         f_pb(4, "tp    " + str.tostring(pTgt, format.mintick), cBuy)
         f_pb(5, "sl    " + str.tostring(pStop, format.mintick), cSell)
+
+// ── PING-PONG MARKS (while the trade is running) ────────────────────────────
+// Veer: "make sure we can catch m1,m5 pingpong moves eg support resistance as
+// the actual trade is running".
+// While a position is open, every time price REACHES a level in the trade's
+// favour a small dot is printed at it. That is the bank-some-here moment for a
+// manual trade, and it is the only thing on the chart that appears mid-trade.
+// It is a MARK, not a signal: the EA does not act on it, and neither should you
+// unless the trade has already paid for itself.
+var float ppLast = na
+ppHit = false
+if pDir != 0 and not na(pEnt)
+    float lv = f_next(pDir, close)
+    bool reached = pDir > 0 ? (high >= ppLast and not na(ppLast))
+         : (low <= ppLast and not na(ppLast))
+    if reached
+        ppHit := true
+        ppLast := na
+    if na(ppLast) and not na(lv)
+        ppLast := lv
+else
+    ppLast := na
+
+plotshape(showPP and ppHit, "ping-pong level reached", shape.circle,
+     location.absolute, color = color.new(#c9a227, 20), size = size.tiny)
 
 // Everything is ALSO in the status line, so nothing is lost when the box is
 // hidden and nothing has to be read off the chart.
