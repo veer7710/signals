@@ -3566,3 +3566,133 @@ is not moving (+0.0037 vs −0.0021 points, on gold at 4120).
 - **`check_pine.py`** — `max_bars_back` detection scanned only the first 120
   lines and false-fired on 3.8, whose header is longer. Now scans the whole
   script with comments stripped.
+
+## E-093 / Block F — THE CONSISTENCY RULE IS THE FUNDED PROBLEM. Frequency is the answer.
+
+**Verdict: the consistency rule's cost is CONFIRMED (62-70 points of pass rate).
+The frequency fix is SUPPORTED. The pass rates themselves are UNPROVEN — they
+assume this EA's edge is real, which E-092 has just unsettled.**
+
+### First, why `prop_sim.py` could not answer this
+It scores accounts on **closed trades**, and so:
+1. It checks the daily limit only at a day rollover against the closed balance.
+   Every firm measures it on **equity, floating loss included** — PROP_FIRMS.md
+   §4 is a worked example of an account failing while UP $1,500 on the day with
+   nothing closed and no stop hit. The old simulator can never see that event,
+   which is the single most common way a funded account dies.
+2. No consistency rule at all — the thing P84 said kills most passing strategies.
+3. `max_eval_days` compared against **trading** days, so a 30-day window became
+   ten calendar weeks for a strategy trading three days a week.
+4. Its trailing drawdown follows the peak forever; E8 and Alpha Capital both
+   **lock** the trail at the initial balance.
+
+`JARVIS/research/funded.py` simulates **bar by bar**, marking the open position's
+worst excursion to market on every bar.
+
+### One pass through seven real rule sets (GOLD 15m, 101 trades, 0.5% risk)
+```
+FTMO 2-step phase 1                PASS  target reached                 best day 42.8%
+FundedNext Stellar 2-step          PASS  target reached                          47.2%
+FundingPips 2 Step Pro             FAIL  CONSISTENCY: best day too large         52.9%
+E8 Classic phase 1                 PASS  target reached                          52.9%
+E8 performance (funded)            FAIL  CONSISTENCY: best day too large         78.4%
+Alpha Capital Alpha One            FAIL  CONSISTENCY: best day too large         42.8%
+The5ers High Stakes                PASS  target reached                          48.0%
+```
+**It hits the profit target every time and fails on consistency.**
+
+### The cost of the rule, isolated. 2000 attempts per cell, block bootstrap.
+```
+firm                          no consistency   with it     cost
+FTMO 2-step                            98.2%     98.2%     0.0     no such rule
+FundedNext Stellar                     96.0%     96.0%     0.0     no such rule
+E8 Classic (challenge)                 90.8%     90.8%     0.0     no such rule
+The5ers High Stakes                    98.2%     98.2%     0.0     no such rule
+Alpha Capital Alpha One                78.7%     60.2%   -18.4
+FundingPips 2 Step Pro                 92.1%     29.7%   -62.4
+E8 performance (funded)                92.7%     23.1%   -69.7
+```
+iid and block bootstraps agree to within 1.5 points everywhere.
+
+**Bigger than the daily loss limit and the max drawdown combined.** And the E8
+trap: the challenge has no such rule and passes 90.8%; the funded stage enforces
+40% and passes 23.1%. **You pass, then cannot get paid.**
+
+### Two fixes that do NOT work
+**Sizing.** best-day/total-profit is a RATIO, so it is scale-free. At E8
+performance: 0.25% risk → 52.0% ratio, 0.50% → 78.4%, 1.00% → 90.8%. Cutting
+risk made it worse.
+
+**A daily profit lock alone.** Swept 2.0% down to 0.5% of account: 78.4% → 50-58%,
+still over the 40% cap. A lock can only refuse new ENTRIES; an open trade runs on.
+
+**This is E-090 in direct conflict with the consistency rule: the uncapped fat
+tail that carries the profit is exactly what produces an oversized best day.**
+
+### The fix that does work: FREQUENCY. Veer has been right about this.
+Daily risk budget held constant, only trade count changed:
+```
+trades/day  risk/trade   FundingPips 35%   E8 perf 40%   Alpha One 40%
+     2        0.560%      24.0%             19.9%          53.5%
+     5        0.224%      89.2%             80.3%          97.0%
+    10        0.112%      99.9%             99.5%         100.0%
+    20        0.056%     100.0%            100.0%         100.0%
+```
+
+### But frequency costs R, and there is an optimum — not a maximum
+Frequency is bought by dropping timeframe; E-089 says the edge needs
+cost/stop ≤ ~0.11. Shifting every trade's R down by the extra cost/stop:
+```
+                     drag on R:  0.00   0.05   0.10   0.14   0.20   0.30
+                     mean R  ->  0.182  0.132  0.082  0.042 -0.018 -0.118
+trades/day     2                 23.5%  15.2%  11.4%   8.1%   4.2%   1.0%
+               5                 88.2%  86.0%  74.2%  57.6%  22.4%   1.7%
+              10                100.0%  99.9%  98.4%  86.2%  19.7%   0.0%
+              20                100.0% 100.0% 100.0%  95.0%   5.9%   0.0%
+              50                100.0% 100.0% 100.0%  98.8%   0.2%   0.0%
+             100                100.0% 100.0%  97.6%  16.5%   0.0%   0.0%
+```
+`InpMinStopCostX = 7` holds cost/stop at ≤ 0.14, so that is the real column.
+**100/day COLLAPSES to 16.5%** — 662 of 800 attempts "ran out of days", because
+the size per trade gets too small to reach the target in the window. **Aim for
+10-50 trades a day.** At 0.20 every row dies, so holding cost/stop is not optional.
+
+### The derived daily cap
+best_day ≤ X × total_profit, and at the pass, total_profit IS the target. So the
+cap is `X × target × account`. At full strength it barely helps (the overshoot is
+one open trade). At **half** strength it measured well:
+```
+                     no lock   1.00x   0.75x   0.50x   0.35x
+FundingPips  2/day    23.5%   23.2%   27.4%   37.2%   37.4%
+             5/day    88.2%   89.0%   94.7%   98.6%   99.4%
+E8 perf      2/day    20.8%   20.8%   29.5%   41.7%   44.7%
+             5/day    79.7%   81.8%   91.0%   96.6%   99.0%
+```
+Shipped as `InpConsistencyLock = 0.50`.
+
+### Shipped — LiquiditySniper build 3.10
+- **P80/P89** one input block: `InpFirm` + `InpAccountSize`, seven firm presets,
+  every limit derived.
+- **The floor is the firm's floor, not the equity peak.** 3.05 measured drawdown
+  from the running equity high — harsher than any rule in the table. A trade that
+  went +4% and returned to flat had spent 4% of its allowance under the old code
+  and 0% under every real firm, locking the EA out of days it was entitled to.
+- **Trailing drawdown locks at the initial balance**, as E8 and Alpha do.
+- **The firm's reset clock**, not broker midnight (FTMO 00:00 CET, FundedNext
+  GMT+3). The wrong clock puts the baseline hours from where the firm measures.
+- **State persists across restarts** via terminal globals. `g_dayStartEq` and
+  `g_peakEq` were re-seeded from live equity in `OnInit`, so a restart, recompile
+  or parameter change silently handed the EA a fresh daily allowance the firm had
+  not given it. Same defect class as the SuperTrend recursion.
+- **`InpSafetyBuffer = 0.80`** — every limit enforced at 80% of its value, because
+  acting AT a 3% daily limit means acting after the breach.
+- **The consistency guard** and a "passed, stop trading" state.
+- **P90 card:** `JARVIS/ea/FUNDED_CARD.md`.
+
+### What this does NOT prove
+The pass rates are bootstrapped from this EA's own historical trades, so they
+assume the edge is real and stationary — they measure **sequence risk, not
+whether the edge exists**, and E-092 has just shown its main filter is not
+established. Everything is measured on GOLD 15m/1h; the EA is for M1, and the
+row that matters most — how many trades M1 actually gives — is the one that
+cannot be filled in without the data.

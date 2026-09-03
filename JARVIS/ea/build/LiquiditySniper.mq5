@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.05"
+#property version   "3.10"
 #property strict
 
-#define LQS_BUILD "2026-09-03 / 3.05 / disaster brake"
+#define LQS_BUILD "3.10"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -142,10 +142,73 @@ input double InpBrakeAtr      = 1.8;    // ...this many ATR against us...
 input int    InpBrakeBars     = 2;      // ...within this many bars
 input double InpMaxSpreadX    = 3.0;    // also close if the spread blows out this much
 
-input group "=== RISK ==="
+//==================== FUNDED ACCOUNTS (Block F, P79-P90) ===========
+// ONE INPUT BLOCK RE-SIZES EVERYTHING. Pick the firm and set the account size;
+// every limit below is derived. Nothing else needs touching to move this EA
+// from a 10k challenge to a 200k funded account at a different firm.
+//
+// WHAT THE MEASUREMENT SAYS (E-093, JARVIS/research/funded.py, 2000 attempts
+// per cell, bootstrapped from the EA's own trade distribution):
+//
+//   THE CONSISTENCY RULE IS THE LARGEST SINGLE OBSTACLE. Larger than the daily
+//   loss limit and the max drawdown put together. Holding everything else
+//   fixed and switching only that rule on:
+//        FundingPips   92.1% -> 29.7%   (-62.4 points)
+//        E8 performance 92.7% -> 23.1%   (-69.7 points)
+//        Alpha One      78.7% -> 60.2%   (-18.4 points)
+//        FTMO, FundedNext, E8 Classic, The5ers:  no such rule, no cost.
+//
+//   YOU CANNOT SIZE YOUR WAY OUT OF IT. best-day / total-profit is a RATIO, so
+//   it is scale-free. Measured on one path at E8 performance: 0.25% risk gave a
+//   52.0% ratio, 0.50% gave 78.4%, 1.00% gave 90.8%. Cutting risk made it
+//   WORSE, because the smaller account takes longer and banks its profit in
+//   fewer, larger relative days.
+//
+//   FREQUENCY IS WHAT DISSOLVES IT, and Veer has been right to demand it. With
+//   the daily risk budget held constant and only the trade count changed:
+//        2 trades/day   24.0% pass        10 trades/day   99.9%
+//        5 trades/day   89.2%             20 trades/day  100.0%
+//   But frequency is bought by dropping timeframe, and E-089 says that costs R.
+//   At the cost/stop of 0.14 this EA holds (InpMinStopCostX = 7) the frontier
+//   is 5/day 57.6%, 10/day 86.2%, 20/day 95.0%, 50/day 98.8% - and 100/day
+//   COLLAPSES to 16.5%, because the size per trade gets too small to reach the
+//   target before the window closes (662 of 800 attempts simply ran out of
+//   days). The target is 10 to 50 trades a day, not as many as possible.
+//
+//   THE DERIVED DAILY CAP. To pass a best-day rule of X you need
+//   best_day <= X * total_profit, and at the moment you pass, total_profit IS
+//   the profit target. So the cap is X * target * account. That exact number
+//   barely helps, because a lock can only refuse new ENTRIES and a trade
+//   already open still runs. HALF of it is what measured well: at 2 trades/day
+//   FundingPips went 23.5% -> 37.2% and E8 performance 20.8% -> 41.7%.
+//   InpConsistencyLock defaults to 0.50 for that reason.
+enum ENUM_FIRM
+  {
+   FIRM_CUSTOM,            // Custom - use the manual numbers below
+   FIRM_FTMO_2STEP,        // FTMO 2-step phase 1 (no consistency rule)
+   FIRM_FUNDEDNEXT,        // FundedNext Stellar 2-step (no consistency rule)
+   FIRM_FUNDINGPIPS,       // FundingPips 2 Step Pro (35% best day)
+   FIRM_E8_CLASSIC,        // E8 Classic challenge (no consistency rule)
+   FIRM_E8_PERF,           // E8 performance / funded (40% best day)
+   FIRM_ALPHA_ONE,         // Alpha Capital Alpha One (40% best day)
+   FIRM_5ERS               // The5ers High Stakes (no consistency rule)
+  };
+
+input group "=== FUNDED ACCOUNT (set these two, the rest derives) ==="
+input ENUM_FIRM InpFirm       = FIRM_FTMO_2STEP; // firm rule set
+input double InpAccountSize   = 0.0;    // 0 = read the balance from the account
+input double InpSafetyBuffer  = 0.80;   // act at this fraction of every limit
+input double InpConsistencyLock = 0.50; // day cap, as a fraction of the derived one
+input bool   InpStopWhenPassed= true;   // stop trading once the target is met
+
+input group "=== RISK (used when InpFirm = FIRM_CUSTOM) ==="
 input double InpMaxDayLossPct = 3.0;    // stop for the day after this drawdown
 input double InpMaxDDPct      = 10.0;   // stop permanently after this drawdown
 input int    InpMaxTradesDay  = 60;     // hard cap on entries per day
+input double InpProfitTgtPct  = 10.0;   // the challenge profit target
+input double InpConsistPct    = 0.0;    // best-day cap. 0 = the firm has none
+input int    InpResetHourUTC  = 0;      // the firm's daily reset clock, UTC
+input bool   InpTrailingDD    = false;  // does the drawdown floor follow the peak
 
 input group "=== READOUT ==="
 input bool   InpComment       = true;   // the chart readout
@@ -174,6 +237,23 @@ double   g_pivL[];
 // accounting
 double   g_dayStartEq = 0.0;
 double   g_peakEq     = 0.0;
+
+// ---- funded-account state, all derived in ApplyFirmPreset()
+double   g_fBalance   = 0.0;   // the account size every limit is a % of
+double   g_fDayLoss   = 0.0;   // daily loss limit, fraction
+double   g_fMaxDD     = 0.0;   // max drawdown, fraction
+double   g_fTarget    = 0.0;   // profit target, fraction
+double   g_fConsist   = 0.0;   // best-day cap, fraction. 0 = none
+bool     g_fTrailing  = false;
+int      g_fResetHour = 0;
+int      g_fMinDays   = 0;
+double   g_fFloor     = 0.0;   // the ACTUAL equity floor, in money
+double   g_fDayCap    = 0.0;   // stop entering for the day above this profit
+double   g_dayProfit  = 0.0;   // today'"'"'s REALISED profit, in money
+bool     g_lockedProf = false; // locked because today has gone well enough
+bool     g_passed     = false;
+int      g_daysTraded = 0;
+string   g_firmName   = "";
 int      g_dayStamp   = 0;
 int      g_tradesToday = 0;
 bool     g_lockedDay  = false;
@@ -192,6 +272,10 @@ void   Log(string m);
 string Money(double v);
 double ATRv(int shift);
 int    DayStamp();
+int    FundedDayStamp();
+void   ApplyFirmPreset();
+void   FundedSave();
+void   FundedLoad();
 void   Readout();
 void   BuildZones();
 double EntryLevel(const Zone &z, double a);
@@ -668,7 +752,7 @@ void MarkUsed(double lvl)
 
 void ArmSide(int dir)
 {
-   if(g_lockedDay || g_lockedPerm) return;
+   if(g_lockedDay || g_lockedPerm || g_lockedProf || g_passed) return;
    if(PosCount() >= InpMaxPositions) return;
    if(g_tradesToday >= InpMaxTradesDay) return;
 
@@ -808,7 +892,8 @@ void ManageOrders()
    if(g_tkBuy  != 0 && !OrderSelect(g_tkBuy))  { g_tkBuy = 0;  g_lvlBuy = 0.0;  g_barBuy = -1; }
    if(g_tkSell != 0 && !OrderSelect(g_tkSell)) { g_tkSell = 0; g_lvlSell = 0.0; g_barSell = -1; }
 
-   if(PosCount() >= InpMaxPositions || g_lockedDay || g_lockedPerm)
+   if(PosCount() >= InpMaxPositions || g_lockedDay || g_lockedPerm
+      || g_lockedProf || g_passed)
    {
       KillAll("a position is open, or trading is locked");
       return;
@@ -865,24 +950,218 @@ void DisasterBrake()
    }
 }
 
+//==================== FUNDED ACCOUNT ===============================
+// P89 - the preset table. Every number is from JARVIS/research/PROP_FIRMS.md
+// and is tagged OFFICIAL-SUMMARY there, which means: taken from the firm's own
+// help centre via a search summary, NOT from a page opened and read line by
+// line. That document's standing instruction applies and is repeated here
+// because it is the one that costs money if ignored:
+//
+//   BEFORE ANY REAL MONEY IS COMMITTED, OPEN THE FIRM'S OWN HELP CENTRE AND
+//   CONFIRM FOUR NUMBERS: the daily-loss %, the daily-loss BASIS, the
+//   daily-loss RESET TIME, and whether the max drawdown TRAILS.
+//
+// An unverified drawdown rule in a risk engine is worse than no rule, because
+// it is trusted.
+void ApplyFirmPreset()
+{
+   // defaults = the manual inputs; each preset overwrites what it knows
+   g_firmName   = "Custom";
+   g_fDayLoss   = InpMaxDayLossPct / 100.0;
+   g_fMaxDD     = InpMaxDDPct      / 100.0;
+   g_fTarget    = InpProfitTgtPct  / 100.0;
+   g_fConsist   = InpConsistPct    / 100.0;
+   g_fTrailing  = InpTrailingDD;
+   g_fResetHour = InpResetHourUTC;
+   g_fMinDays   = 0;
+
+   switch(InpFirm)
+     {
+      case FIRM_FTMO_2STEP:
+         g_firmName = "FTMO 2-step phase 1";
+         g_fDayLoss = 0.05; g_fMaxDD = 0.10; g_fTarget = 0.10;
+         g_fConsist = 0.00; g_fTrailing = false; g_fResetHour = 23;
+         g_fMinDays = 4;  break;
+      case FIRM_FUNDEDNEXT:
+         g_firmName = "FundedNext Stellar 2-step";
+         g_fDayLoss = 0.05; g_fMaxDD = 0.10; g_fTarget = 0.08;
+         g_fConsist = 0.00; g_fTrailing = true;  g_fResetHour = 21;
+         g_fMinDays = 5;  break;
+      case FIRM_FUNDINGPIPS:
+         g_firmName = "FundingPips 2 Step Pro";
+         g_fDayLoss = 0.03; g_fMaxDD = 0.06; g_fTarget = 0.08;
+         g_fConsist = 0.35; g_fTrailing = false; g_fResetHour = 0;
+         g_fMinDays = 2;  break;
+      case FIRM_E8_CLASSIC:
+         g_firmName = "E8 Classic challenge";
+         g_fDayLoss = 0.04; g_fMaxDD = 0.08; g_fTarget = 0.08;
+         g_fConsist = 0.00; g_fTrailing = true;  g_fResetHour = 0;
+         g_fMinDays = 0;  break;
+      case FIRM_E8_PERF:
+         g_firmName = "E8 performance (funded)";
+         g_fDayLoss = 0.04; g_fMaxDD = 0.08; g_fTarget = 0.06;
+         g_fConsist = 0.40; g_fTrailing = true;  g_fResetHour = 0;
+         g_fMinDays = 0;  break;
+      case FIRM_ALPHA_ONE:
+         g_firmName = "Alpha Capital Alpha One";
+         g_fDayLoss = 0.04; g_fMaxDD = 0.06; g_fTarget = 0.10;
+         g_fConsist = 0.40; g_fTrailing = true;  g_fResetHour = 21;
+         g_fMinDays = 0;  break;
+      case FIRM_5ERS:
+         g_firmName = "The5ers High Stakes";
+         g_fDayLoss = 0.05; g_fMaxDD = 0.10; g_fTarget = 0.10;
+         g_fConsist = 0.00; g_fTrailing = false; g_fResetHour = 0;
+         g_fMinDays = 0;  break;
+      default: break;
+     }
+
+   g_fBalance = (InpAccountSize > 0.0)
+                ? InpAccountSize : AccountInfoDouble(ACCOUNT_BALANCE);
+
+   // THE FLOOR IS THE FIRM'S FLOOR, NOT THE EQUITY PEAK. Build 3.05 measured
+   // the drawdown from the running equity high, which is harsher than any rule
+   // in the table: a trade that goes +4% and comes back to flat had used 4% of
+   // its allowance under the old code and 0% under every real firm. That locked
+   // the EA out of days it was entitled to trade.
+   g_fFloor = g_fBalance * (1.0 - g_fMaxDD);
+
+   // The derived daily profit cap, at InpConsistencyLock strength. E-093.
+   g_fDayCap = (g_fConsist > 0.0)
+               ? g_fBalance * g_fConsist * g_fTarget * InpConsistencyLock : 0.0;
+
+   PrintFormat("FUNDED: %s | balance %.2f | daily %.1f%% | DD %.1f%% (%s, floor %.2f)"
+               " | target %.1f%% | best-day cap %s | day cap %s | reset %02d:00 UTC",
+               g_firmName, g_fBalance, g_fDayLoss * 100.0, g_fMaxDD * 100.0,
+               g_fTrailing ? "trailing, locks at start" : "static", g_fFloor,
+               g_fTarget * 100.0,
+               g_fConsist > 0.0 ? DoubleToString(g_fConsist * 100.0, 0) + "%" : "none",
+               g_fDayCap > 0.0 ? DoubleToString(g_fDayCap, 2) : "none",
+               g_fResetHour);
+   if(g_fConsist <= 0.0)
+      Print("FUNDED: this firm has no consistency rule, which E-093 measured as "
+            "worth 62 to 70 percentage points of pass rate. Good choice.");
+   else
+      PrintFormat("FUNDED: %s enforces a %.0f%% best-day rule. E-093 measured that "
+                  "as the largest single obstacle here, and frequency is the only "
+                  "thing that dissolves it - 2 trades/day passed 24%%, 10/day 99.9%%.",
+                  g_firmName, g_fConsist * 100.0);
+}
+
+// The day boundary at the FIRM'S clock, not the broker's midnight. FTMO rolls
+// at 00:00 CE(S)T, FundedNext at GMT+3, Maven at 00:00 UTC. Using the wrong one
+// puts the daily-loss baseline hours away from where the firm puts it, and the
+// EA then polices a limit the firm is not measuring.
+int FundedDayStamp()
+{
+   MqlDateTime t;
+   TimeToStruct(TimeGMT() - (datetime)(g_fResetHour * 3600), t);
+   return t.year * 10000 + t.mon * 100 + t.day;
+}
+
+// STATE THAT MUST SURVIVE A RESTART. g_dayStartEq and g_peakEq were re-seeded
+// from the live equity in OnInit, so a terminal restart, a recompile or a
+// parameter change silently reset the day's baseline and handed the EA a fresh
+// allowance the firm had not given it. Terminal globals persist across all
+// three. Same defect class as the SuperTrend recursion, same fix: never keep
+// something in memory that the account depends on.
+void FundedSave()
+{
+   string k = "LQS_" + (string)InpMagic + "_";
+   GlobalVariableSet(k + "dayStamp", (double)g_dayStamp);
+   GlobalVariableSet(k + "dayStartEq", g_dayStartEq);
+   GlobalVariableSet(k + "peakEq", g_peakEq);
+   GlobalVariableSet(k + "dayProfit", g_dayProfit);
+   GlobalVariableSet(k + "daysTraded", (double)g_daysTraded);
+   GlobalVariableSet(k + "floor", g_fFloor);
+}
+
+void FundedLoad()
+{
+   string k = "LQS_" + (string)InpMagic + "_";
+   if(!GlobalVariableCheck(k + "dayStamp")) return;
+   g_dayStamp    = (int)GlobalVariableGet(k + "dayStamp");
+   g_dayStartEq  = GlobalVariableGet(k + "dayStartEq");
+   g_peakEq      = GlobalVariableGet(k + "peakEq");
+   g_dayProfit   = GlobalVariableGet(k + "dayProfit");
+   g_daysTraded  = (int)GlobalVariableGet(k + "daysTraded");
+   double fl     = GlobalVariableGet(k + "floor");
+   if(fl > 0.0) g_fFloor = MathMax(g_fFloor, fl);   // a trailed floor only rises
+   PrintFormat("FUNDED: restored state from disk - day %d, baseline %.2f, "
+               "peak %.2f, floor %.2f, %d day(s) traded",
+               g_dayStamp, g_dayStartEq, g_peakEq, g_fFloor, g_daysTraded);
+}
+
 //==================== RISK =========================================
+// Every limit is enforced at InpSafetyBuffer of its true value. Acting AT the
+// limit means acting after the breach has already happened: a 3% daily limit
+// checked at 3% is a failed account, not a stopped one. At 0.80 the EA stops
+// itself at 2.4% and the firm never sees a breach.
 void CheckGuards()
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    if(eq > g_peakEq) g_peakEq = eq;
 
-   if(!g_lockedPerm && g_peakEq > 0.0
-      && (g_peakEq - eq) / g_peakEq * 100.0 >= InpMaxDDPct)
-   {
+   // ---- the drawdown floor, per the firm's own mechanic
+   if(g_fTrailing)
+     {
+      double nf = g_peakEq * (1.0 - g_fMaxDD);
+      // E8 and Alpha Capital both LOCK the trail at the initial balance once
+      // the account is up. Trailing forever is a rule no firm in the table has.
+      if(nf > g_fBalance) nf = g_fBalance;
+      if(nf > g_fFloor)   g_fFloor = nf;
+     }
+
+   double ddStop = g_fFloor + (g_fBalance - g_fFloor) * (1.0 - InpSafetyBuffer);
+   if(!g_lockedPerm && eq <= ddStop)
+     {
       g_lockedPerm = true;
-      Log("PERMANENT LOCK: max drawdown breached. No further entries.");
-   }
-   if(!g_lockedDay && g_dayStartEq > 0.0
-      && (g_dayStartEq - eq) / g_dayStartEq * 100.0 >= InpMaxDayLossPct)
-   {
-      g_lockedDay = true;
-      Log("LOCKED FOR TODAY: daily loss limit breached.");
-   }
+      PrintFormat("PERMANENT LOCK: equity %.2f reached %.0f%% of the way to the "
+                  "%s floor at %.2f. No further entries.",
+                  eq, InpSafetyBuffer * 100.0, g_firmName, g_fFloor);
+     }
+
+   // ---- the daily loss limit, on EQUITY, so floating loss counts immediately.
+   // PROP_FIRMS.md section 4 is a worked example of an account failing while UP
+   // 1,500 on the day with nothing closed and no stop hit. That is the most
+   // common way a funded account dies and it is invisible to any check that
+   // reads the balance.
+   if(!g_lockedDay && g_dayStartEq > 0.0)
+     {
+      double lost = (g_dayStartEq - eq) / g_dayStartEq;
+      if(lost >= g_fDayLoss * InpSafetyBuffer)
+        {
+         g_lockedDay = true;
+         PrintFormat("LOCKED FOR TODAY: down %.2f%% against a %.2f%% limit "
+                     "(acting at %.0f%% of it). Floating loss counts.",
+                     lost * 100.0, g_fDayLoss * 100.0, InpSafetyBuffer * 100.0);
+         KillAll("daily loss guard");
+        }
+     }
+
+   // ---- the consistency guard. Stop taking NEW trades once the day has made
+   // enough. It cannot cap a trade already open, which is why the cap is set at
+   // half the derived number - see the header block.
+   if(!g_lockedProf && g_fDayCap > 0.0 && g_dayProfit >= g_fDayCap)
+     {
+      g_lockedProf = true;
+      PrintFormat("LOCKED FOR TODAY ON PROFIT: %.2f made against a %.2f cap. "
+                  "This protects the %.0f%% best-day rule, which E-093 measured "
+                  "as worth 62-70 points of pass rate.",
+                  g_dayProfit, g_fDayCap, g_fConsist * 100.0);
+     }
+
+   // ---- have we finished?
+   if(InpStopWhenPassed && !g_passed && g_fTarget > 0.0
+      && eq >= g_fBalance * (1.0 + g_fTarget) && g_daysTraded >= g_fMinDays)
+     {
+      g_passed = true;
+      PrintFormat("TARGET REACHED: equity %.2f against a target of %.2f, over "
+                  "%d trading day(s). No further entries.",
+                  eq, g_fBalance * (1.0 + g_fTarget), g_daysTraded);
+      KillAll("profit target reached");
+     }
+
+   FundedSave();
 }
 
 //==================== READOUT ======================================
@@ -963,8 +1242,11 @@ void Readout()
       (g_nTrades > 0 ? StringFormat("%.1f%%", 100.0 * g_nWins / g_nTrades) : "-"),
       g_nWins, g_nTrades,
       _Digits, sp, _Digits, spAvg, _Digits, g_spMax,
-      g_lockedPerm ? "LOCKED - max drawdown"
-                   : (g_lockedDay ? "locked for today" : "trading")));
+      g_passed     ? "PASSED - target reached"
+      : g_lockedPerm ? "LOCKED - max drawdown"
+      : g_lockedDay  ? "locked for today - daily loss"
+      : g_lockedProf ? "locked for today - best-day rule"
+                     : "trading"));
 }
 
 //==================== EVENTS =======================================
@@ -987,7 +1269,9 @@ int OnInit()
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEq = eq;
    g_peakEq     = eq;
-   g_dayStamp   = DayStamp();
+   ApplyFirmPreset();        // derive every limit from the firm and the size
+   g_dayStamp   = FundedDayStamp();
+   FundedLoad();             // ...then let any persisted state override it
 
    ArrayResize(g_zB, 0);  ArrayResize(g_zS, 0);
    ArrayResize(g_pivH, 0); ArrayResize(g_pivL, 0);
@@ -1025,15 +1309,23 @@ void OnTimer()
 
 void OnTick()
 {
-   int ds = DayStamp();
+   // THE FIRM'S CLOCK, not the broker's midnight. FundedDayStamp() offsets by
+   // the preset's reset hour, so the baseline lands where the firm puts it.
+   int ds = FundedDayStamp();
    if(ds != g_dayStamp)
    {
+      if(g_tradesToday > 0) g_daysTraded++;
       g_dayStamp     = ds;
       g_dayStartEq   = AccountInfoDouble(ACCOUNT_EQUITY);
       g_tradesToday  = 0;
       g_lockedDay    = false;
+      g_lockedProf   = false;
       g_dayRealized  = 0.0;
-      Log("new trading day, daily counters reset");
+      g_dayProfit    = 0.0;
+      FundedSave();
+      PrintFormat("new trading day (%s clock, reset %02d:00 UTC): baseline "
+                  "equity %.2f, %d day(s) traded so far",
+                  g_firmName, g_fResetHour, g_dayStartEq, g_daysTraded);
    }
 
    DisasterBrake();   // FIRST. Nothing outranks getting out of a disaster.
@@ -1094,6 +1386,8 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(p > 0.0) g_nWins++;
    g_realized    += p;
    g_dayRealized += p;
+   if(p > 0.0) g_dayProfit += p;   // the consistency guard counts PROFIT only
+   FundedSave();
    Log(StringFormat("CLOSED %s   running %s over %d trades, %.1f%% won",
                     Money(p), Money(g_realized), g_nTrades,
                     100.0 * g_nWins / MathMax(g_nTrades, 1)));
