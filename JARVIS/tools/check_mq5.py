@@ -208,17 +208,33 @@ def check(path: str):
             bad(ln, "uses global '%s' which is never declared" % nm)
 
     # ---- 6. StringFormat / PrintFormat argument counts ------------------
-    for i, l in enumerate(raw, 1):
+    # A MULTI-LINE CALL USED TO BE SKIPPED HERE. The old code said "call wraps
+    # lines; counted below" and there was no below, so every StringFormat laid
+    # out over several lines - which is most of the interesting ones - went
+    # unchecked. A bad edit then put NINE arguments against THREE specifiers in
+    # DrawBox and nothing in this file noticed. Continuation lines are now
+    # joined until the parentheses balance, so the call is checked as written.
+    for i, l0 in enumerate(raw, 1):
         for fn in ("StringFormat", "PrintFormat"):
             j = 0
+            l = l0
             while True:
                 j = l.find(fn + "(", j)
                 if j < 0:
                     break
                 seg, ok = _balanced(l, j + len(fn))
-                j += len(fn)
                 if not ok:
-                    break                 # call wraps lines; counted below
+                    # pull in following lines until it closes, or give up
+                    joined = l
+                    for k in range(i, min(i + 30, len(raw))):
+                        joined = joined.rstrip("\n") + " " + raw[k]
+                        seg, ok = _balanced(joined, joined.find(fn + "(", j) + len(fn))
+                        if ok:
+                            break
+                    if not ok:
+                        break             # genuinely cannot tell; do not guess
+                    l = joined
+                j += len(fn)
                 args = _split_args(seg)
                 if not args:
                     break

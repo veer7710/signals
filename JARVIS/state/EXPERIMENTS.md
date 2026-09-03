@@ -3185,3 +3185,77 @@ Shipped: `SuperTrendSniper.mq5` 2.16 (quarter size mid-range), and
 `XAUUSD_CLEAN_3_6.pine` dims those signals rather than hiding them.
 
 Files: `JARVIS/research/failure_map.py`, `rangepos.py`.
+
+---
+
+## E-086 + build 2.18 — Veer's forward-test defect list, worked one at a time
+
+Veer, from forward testing on M1 (which he rightly says beats my 1h/15m
+backtests for describing what the EA actually does):
+
+> *"the mistakes are in scale adds at wrong entry same w reentry also back to
+> back same direction signals can cause loss as m1 trends are not often big and
+> the ea shouldn't assume they continue also not capturing peaks ... we never
+> look at total profit eg total profit im up 4-5 pound i somehow close in loss
+> ... this happens 20-40 times a day"*
+
+### 1. "Up 4-5 pound, somehow close in loss" — FIXED, and it was architectural
+The give-back rules existed and were **not** the problem. They are
+**tick-reactive**: `ProtectPositions` and `ProtectBasket` wake on a tick, see
+the profit has fallen through the allowance, and send a **market close**. On M1
+gold a single spike carries price from +£5 to −£2 between two ticks the EA is
+handed. By the time the rule looks, the money is gone.
+
+**A market close cannot beat a fast move.** The only thing that holds a profit
+through one is a **stop order sitting at that price at the broker**, which
+fills whether or not the EA is awake.
+
+New `TrailProfitStop()`: the same give-back allowance, expressed as a **stop
+level** and pushed to the broker every time the peak improves. It is a ratchet —
+it only ever moves in the profitable direction. It arms at **1.0R of peak**,
+much earlier than the give-back's 3R, because its job is not to decide the
+trade is over but to stop a spike taking back money already made. And unlike
+the give-back it does not close the trade: it sets a floor and lets it run.
+
+### 2. "Back to back same direction signals cause loss" — CONTRADICTED
+This one the data disagrees with, clearly. Pooled 1h+15m, 447 trades:
+
+| | n | win% | expectancy | points | share of all profit |
+|---|---|---|---|---|---|
+| **same direction as the last** | 342 | 53.8% | **+0.211R** | **+1341** | **86%** |
+| alternating | 103 | 49.5% | +0.004R | +257 | 17% |
+
+Same-direction signals are not the problem, **they are the profit**. Banning or
+throttling them would delete 86% of it. Nor does it matter how the previous
+trade ended (+0.151R after a win, +0.298R after a loss).
+
+Gap since the previous close: **3–8 bars is the sweet spot** (+0.489R, 53% of
+all points). The existing `InpReentryCool = 3` is already right and there is no
+case for widening it.
+
+**But his mechanism is explicitly about M1** — "m1 trends are not often big" —
+and there is no M1 data here to test it on. So rather than guess, **the EA now
+counts it live**: same-direction and alternating trades are tracked separately
+and both appear in the readout. After a few sessions his own account settles
+the question, on his timeframe, with his fills.
+
+### 3. "Scale adds at wrong entry" — already off
+`InpMaxStack = 1`. The EA takes one position at a time and adds nothing. If
+scale-adds are wanted they have to be measured first; E-072 already found that
+splitting a position costs money on this signal (runner +1274 points, split
++562, split with break-even +99).
+
+### 4. "We never look at total profit"
+The readout now leads with it:
+`>>> TOTAL NOW £x   PEAK £y   GIVEN BACK £z <<<` as the third line, above
+everything else.
+
+### A bug I introduced and the checker missed
+The readout edit leaked into `DrawBox`, leaving a `StringFormat` with **three
+specifiers and nine arguments** — a runtime garbage/crash, invisible to every
+check in `check_mq5.py`. The file *had* an argument-count check; it silently
+skipped calls spanning multiple lines, with a comment reading "counted below"
+and no below. Multi-line calls are now joined until the parens balance and
+checked as written. Regression-tested on a deliberate multi-line mismatch.
+
+Files: `JARVIS/research/reentry.py`, `JARVIS/tools/check_mq5.py`.

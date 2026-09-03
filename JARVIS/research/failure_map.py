@@ -161,7 +161,8 @@ def supertrend_trades(s: Series, costs, warmup=300, max_bars=200):
         px, k = done
         fill = px - side * (half + costs.slippage)
         r = ((fill - entry) * side - comm) / risk
-        out.append({"r": r, "pts": (fill - entry) * side - comm, **desc})
+        out.append({"r": r, "pts": (fill - entry) * side - comm,
+                    "side": side, "i_in": j, "i_out": k, **desc})
         busy = k
     return out
 

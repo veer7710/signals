@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.16"
+#property version   "2.18"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-03 / 2.16 / mid-range flips sized down"
+#define STS_BUILD "2026-09-03 / 2.18 / profit stop + live same-dir count"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -582,6 +582,14 @@ input bool   InpUseGiveBack   = true;   // leave when profit is handed back
 //   GOLD 1h   lock 1.0R + give-back 3.0R   +0.152R  +1112 points
 //   GOLD 15m  lock 1.0R + give-back 2.0R   +0.175R   +463 points
 //             lock 1.0R + give-back 3.0R   +0.174R   +439 points
+// THE PROFIT STOP. Arms EARLIER than the give-back on purpose: its job is not
+// to decide when the trade is over, it is to stop a spike taking back money
+// that was already made. A stop at 1R of peak costs nothing while the trade
+// keeps running - it only ever moves up - and it is the only mechanism here
+// that works when no tick reaches the EA.
+input bool   InpUseProfitStop = true;   // push the give-back level to the BROKER as a stop
+input double InpProfitStopArmR= 1.0;    // arm the profit stop at this peak R
+
 input double InpGbArmR        = 3.0;    // arm once the trade is this good in R
 input double InpGbArmMoney    = 0.30;   // AND at least this much money (noise floor)
 input double InpGbBase        = 0.20;   // give back this much of the peak
@@ -867,6 +875,7 @@ void   ProtectPositions();
 void   ProtectBasket();
 void   LockBasket();
 void   LockPositions();
+void   TrailProfitStop();
 bool   StackAllows(int dir, string &why);
 void   RegisterEntry(int dir);
 void   RegisterSignal(int dir);
@@ -880,6 +889,23 @@ void   BoxClear();
 void   DrawBox();
 void   Readout();
 long   g_readN = 0;   // readout beats, so a frozen box is visibly frozen
+// LIVE ANSWER TO A DISAGREEMENT. Veer, forward testing on M1: "back to back
+// same direction signals can cause loss as m1 trends are not often big". On
+// the 1h/15m data in this repo that is measurably FALSE - same-direction
+// signals are 342 of 447 trades and carry 86% OF ALL THE PROFIT (+0.211R
+// against +0.004R for alternating ones). But his mechanism is explicitly about
+// M1, where a trend may be five bars, and there is no M1 data here to test it.
+// So instead of guessing, the EA COUNTS IT LIVE. After a few sessions his own
+// account settles the question, on his own timeframe, with his own fills.
+int      g_sdN   = 0;                 // same-direction trades
+int      g_sdWin = 0;
+double   g_sdSum = 0.0;
+int      g_altN   = 0;                // alternating ones
+int      g_altWin = 0;
+double   g_altSum = 0.0;
+int      g_lastEntryDir = 0;
+bool     g_sameAsLast = false;
+int      g_thisDir = 0;               // direction of the position now open
 void   SaveStats();
 void   LoadGuards();
 double MinStopDist();
@@ -2119,6 +2145,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    // Every out-deal, partial or full, is money this basket has realised.
    g_bkRealized += money;
 
+   // SAME-DIRECTION vs ALTERNATING, counted live. See g_sdN above for why.
+   if(!PositionSelectByTicket((ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID)))
+   {
+      if(g_sameAsLast) { g_sdN++;  g_sdSum  += money; if(money > 0) g_sdWin++; }
+      else             { g_altN++; g_altSum += money; if(money > 0) g_altWin++; }
+   }
+
    ulong pid = (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID);
    if(PositionSelectByTicket(pid))
    {
@@ -2705,6 +2738,91 @@ void UpdatePeaks()
    }
 }
 
+//===================================================================
+//  MODULE: THE PROFIT STOP  —  the fix for "up 4-5 pound, closed in loss"
+//===================================================================
+// Veer, from forward testing: "we never look at total profit eg total profit
+// im up 4-5 pound i somehow close in loss see what i mean this happens 20-40
+// times a day easily".
+//
+// The give-back rules DID exist and they were not the problem. The problem is
+// that they are TICK-REACTIVE: ProtectPositions and ProtectBasket wake on a
+// tick, see that the profit has fallen below the allowance, and send a MARKET
+// CLOSE. On M1 gold a single spike can carry price from +GBP5 to -GBP2 between
+// two ticks the EA is handed. By the time the rule looks, the money it was
+// protecting has already gone, and it closes at whatever is left.
+//
+// A market close cannot beat a fast move. The only thing that can hold a
+// profit through one is A STOP ORDER SITTING AT THAT PRICE, at the broker,
+// which fills without this EA being awake or the terminal being connected.
+//
+// So the same give-back allowance is now expressed as a STOP LEVEL and pushed
+// to the broker every time the peak improves. The tick-reactive rules stay as
+// a second line - if a tick does arrive in time they still act - but the stop
+// is what actually holds the money.
+//
+// It is a RATCHET: the stop only ever moves in the profitable direction, so a
+// retrace can never widen it.
+void TrailProfitStop()
+{
+   if(!InpUseProfitStop) return;
+
+   int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double mn = MinStopDist();
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+
+      int ti = TrackFind(tk);
+      if(ti < 0 || g_tkRisk[ti] <= 0.0) continue;
+
+      double peakPx = g_tkPeakPx[ti];          // best excursion, in PRICE
+      if(peakPx <= 0.0) continue;
+      double peakR    = peakPx / g_tkRisk[ti];
+      double peakMoney= g_tkPeakMoney[ti];
+
+      // Arm on the SAME terms as the give-back: R decides, money is a floor.
+      if(peakR < InpProfitStopArmR) continue;
+      if(InpGbMinMoney > 0.0 && peakMoney < InpGbMinMoney) continue;
+
+      // keep this much of the peak
+      double allow = GiveBackAllowed(peakR, StallBars(ti), false);
+      double keep  = peakPx * (1.0 - allow);
+
+      // never place it inside the round trip - that is a fee, not a rule
+      double rt = RoundTripCost();
+      if(keep < rt) continue;
+
+      long   type = PositionGetInteger(POSITION_TYPE);
+      int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      double tp   = PositionGetDouble(POSITION_TP);
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+      double want = NormalizeDouble(open + dir * keep, dg);
+
+      // RATCHET: only ever in the profitable direction
+      bool better = (sl == 0.0) || ((dir > 0) ? (want > sl) : (want < sl));
+      bool safe   = (dir > 0) ? (want < px) : (want > px);
+      bool room   = (mn <= 0.0) || (MathAbs(px - want) >= mn);
+      if(!better || !safe || !room) continue;
+
+      if(trade.PositionModify(tk, want, tp))
+         Log(StringFormat("profit stop -> %.*f  (peak %s = %.2fR, keeping "
+                          "%.0f%% = %s). The broker holds this now, so a spike "
+                          "cannot take it back.",
+                          dg, want, Money(peakMoney), peakR,
+                          (1.0 - allow) * 100.0,
+                          Money(peakMoney * (1.0 - allow))));
+   }
+}
+
 // PER-POSITION give-back. This is the E-051 rule, in the EA.
 void ProtectPositions()
 {
@@ -3101,6 +3219,11 @@ bool StackAllows(int dir, string &why)
 
 void RegisterEntry(int dir)
 {
+   // is this the same way as the last trade we took?
+   g_thisDir = dir;
+   g_sameAsLast = (g_lastEntryDir != 0 && dir == g_lastEntryDir);
+   g_lastEntryDir = dir;
+
    g_lastEntryDir = dir;
    g_lastEntryBar = iTime(_Symbol, _Period, 0);
 }
@@ -3249,6 +3372,11 @@ void DrawBox()
    BoxLine(r++, StringFormat("today  %d trades   %s   equity %s",
                              g_stDayTrades, Money(g_stDayRealized), Money(eq)),
            (g_stDayRealized >= 0 ? ok : bad));
+   BoxLine(r++, StringFormat("same-dir %d %.0f%% %s  |  alternating %d %.0f%% %s",
+                             g_sdN, (g_sdN > 0 ? 100.0 * g_sdWin / g_sdN : 0.0),
+                             Money(g_sdSum),
+                             g_altN, (g_altN > 0 ? 100.0 * g_altWin / g_altN : 0.0),
+                             Money(g_altSum)), InpBoxText);
    BoxLine(r++, "", InpBoxText);
 
    BoxLine(r++, StringFormat("run    %s  %d bars  %.1f ATR  risk %d/3",
@@ -3379,17 +3507,22 @@ void Readout()
    Comment(StringFormat(
       "SNIPERBOT  build %s\n"
       "%s %s   equity %s   live %s  (%d)\n"
-      "OPEN  %d pos  %.2f lots   P/L %s   peak %s   given back %s\n"
+      ">>> TOTAL NOW %s      PEAK %s      GIVEN BACK %s <<<\n"
+      "OPEN  %d pos  %.2f lots\n"
       "KEPT OF PEAK %.0f%%   GREEN->RED %d of %d closed\n"
       "TODAY %d trades   %s\n"
+      "SAME-DIR %d trades %.0f%% won %s   |   ALTERNATING %d %.0f%% won %s\n"
       "spread now %.*f   avg %.*f   worst %.*f\n"
       "%s",
       STS_BUILD,
       _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period), Money(eq), beat, (int)g_readN,
-      bq.n, bq.lots, Money(bq.money), Money(bq.peakMoney), Money(bq.givenBack),
+      Money(bq.money), Money(bq.peakMoney), Money(bq.givenBack),
+      bq.n, bq.lots,
       (g_stPeakSum > 0.0 ? 100.0 * g_stRealized / g_stPeakSum : 0.0),
       g_stGreenRed, g_stTrades,
       g_stDayTrades, Money(g_stDayRealized),
+      g_sdN,  (g_sdN  > 0 ? 100.0 * g_sdWin  / g_sdN  : 0.0), Money(g_sdSum),
+      g_altN, (g_altN > 0 ? 100.0 * g_altWin / g_altN : 0.0), Money(g_altSum),
       _Digits, spNow, _Digits, spAvgQ, _Digits, g_spMax,
       g_lockedPerm ? "LOCKED - max drawdown"
                    : (g_lockedDay ? "locked for today" : "trading")));
@@ -3514,6 +3647,7 @@ void OnTick()
    UpdatePeaks();
    ProtectPositions();
    LockPositions();       // each trade out of loss first
+   TrailProfitStop();     // then hand the profit to the broker to hold
    LockBasket();          // then the basket, then the give-back rule
    ProtectBasket();
    DrawBox();
