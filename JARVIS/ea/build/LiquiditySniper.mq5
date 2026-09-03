@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.03"
+#property version   "3.04"
 #property strict
 
-#define LQS_BUILD "2026-09-03 / 3.03 / target the next level"
+#define LQS_BUILD "2026-09-03 / 3.04 / LIVE — stop scales to the spread"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -93,6 +93,13 @@ input int    InpMaxZones      = 40;     // zones tracked each side
 input group "=== THE TRADE  (E-077 - do not tune without re-measuring) ==="
 input double InpEntryPast     = 0.25;   // limit sits this many ATR PAST the zone's far edge
 input double InpStopAtr       = 0.60;   // stop, ATR beyond the FILL. Small, on purpose.
+// ...BUT NEVER SO SMALL THAT THE SPREAD OWNS IT. E-089: this strategy's edge
+// holds at a cost/stop of 0.07 (+0.249R) and is gone by 0.22 (+0.041R). A 0.60
+// ATR stop is 5 points on 15m gold and about 1.3 on M1 - the same setting, a
+// four-fold difference in what the spread costs. So the stop is floored at a
+// number of round trips, and the EA WIDENS it to meet that floor rather than
+// refusing the trade. A tighter spread then buys a tighter stop automatically.
+input double InpMinStopCostX  = 7.0;    // ...but at least this many round trips
 input double InpTargetR       = 2.0;    // fallback target if no level is found
 // ── TARGET THE NEXT LEVEL (E-087) ────────────────────────────────────────────
 // Veer: "provide a real tp and sl based of levels ... you can see price
@@ -687,7 +694,21 @@ void ArmSide(int dir)
    // Re-sending it every bar would churn the order book and reset its age.
    KillSide(dir, "");
 
-   double stop = NormalizeDouble(lvl - dir * InpStopAtr * a, dg);
+   double stopDist = InpStopAtr * a;
+   if(InpMinStopCostX > 0.0)
+   {
+      double rt = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID) + 2 * _Point;
+      double need = InpMinStopCostX * rt;
+      if(stopDist < need)
+      {
+         Log(StringFormat("stop %.*f is only %.1f round trips - widening to %.*f "
+                          "so the spread is not a third of the risk",
+                          dg, stopDist, stopDist / MathMax(rt, 1e-9), dg, need));
+         stopDist = need;
+      }
+   }
+   double stop = NormalizeDouble(lvl - dir * stopDist, dg);
    double risk = (lvl - stop) * dir;
    if(risk <= 0.0) return;
    double tgt  = NormalizeDouble(lvl + dir * InpTargetR * risk, dg);

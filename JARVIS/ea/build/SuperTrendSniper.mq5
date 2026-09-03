@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.19"
+#property version   "2.20"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-03 / 2.19 / no ceiling, the trail decides"
+#define STS_BUILD "2026-09-03 / 2.20 / LIVE — stop scales to the spread"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -370,7 +370,23 @@ input double InpStopAtrMult   = 2.0;    // stop distance in ATR
 // IT MOVES THE RISK. A 4 x ATR M1 stop is 2.0 points = GBP 4.74 at 0.03 lots
 // against GBP 1.78 before. Turn InpUseFixedLots OFF so InpRiskPct carries the
 // sizing once the stop is honest, or the wider stop simply risks more money.
-input double InpMinStopCostX   = 4.0;   // stop must be at least this many round trips
+// 7.0, not 4.0. This one input solves the M1 cost problem WITHOUT hardcoding a
+// timeframe, and the mechanism was already here - the EA WIDENS the stop to
+// meet it rather than refusing the trade.
+//
+// E-089 measured where the edge dies as the spread grows relative to the stop:
+//     cost/stop 0.07   +0.249R      cost/stop 0.22   +0.041R
+//     cost/stop 0.12   +0.177R      cost/stop 0.29   -0.077R
+// It needs to stay at or under about 0.14, which is 7 round trips of stop.
+// At 4.0 it allowed 0.25, which is inside the range where the edge is gone.
+//
+// What it does in practice, at 0.01 lots on M1 gold:
+//     spread 0.46 -> stop widens to 3.92 points = GBP3.09 a trade
+//     spread 0.20 -> stop widens to 2.10 points = GBP1.65 a trade
+// So a tighter spread buys a tighter stop automatically, on every timeframe,
+// with no setting to change. Veer says his spread is not large; this is the
+// input that turns that into money rather than into an argument.
+input double InpMinStopCostX   = 7.0;   // stop must be at least this many round trips
 input double InpMaxSpreadAtr  = 0.15;   // skip entry if spread > this x ATR
 
 input group "=== COST GATE (E-053: this is the real M1 problem) ==="
