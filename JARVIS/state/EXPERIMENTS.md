@@ -3259,3 +3259,77 @@ and no below. Multi-line calls are now joined until the parens balance and
 checked as written. Regression-tested on a deliberate multi-line mismatch.
 
 Files: `JARVIS/research/reentry.py`, `JARVIS/tools/check_mq5.py`.
+
+---
+
+## E-087 / E-088 / E-089 — Level targets, the £/day chain, and the M1 squeeze
+
+### E-087 — Level-based TP works. Level-based SL does not.
+Veer: *"provide a real tp and sl based of levels ... price reacting and playing
+ping pong with levels."* Measured on identical top-tick entries, GOLD:
+
+| | win% | expectancy | points |
+|---|---|---|---|
+| target 2R, 1h | 43% | +0.25R | +2714 |
+| **target NEXT LEVEL, 1h** | 31% | +0.26R | +2382 |
+| target 2R, 15m | 46% | +0.31R | +536 |
+| **target NEXT LEVEL, 15m** | 33% | +0.30R | **+563** |
+
+Same money, **different shape**: the level target wins less often and wins far
+bigger — **average win +3.21R against +1.9R**, median distance 1.89 ATR. That
+is the "banger" profile, so it ships on by default.
+
+**The level STOP is a disaster: −0.36R, 9–28% win rate.** Obvious once seen —
+the entry *is* at the level, so a stop just beyond it lands on top of the entry,
+the risk is a rounding error and every wick takes it. The stop stays at 0.60 ATR.
+
+### E-088 — The £/day chain, with every link visible
+`£/day = trades/day × expectancy × risk in £`. Two terms measured, one (M1
+trade count) scaled by bar count and **not measured**.
+
+| | expectancy | trades/day (M1, scaled) | £/day @0.01 | @0.02 | @0.03 |
+|---|---|---|---|---|---|
+| liquidity | +0.249R | 84 | 21.39 | 42.78 | 64.17 |
+| supertrend | +0.152R | 33 | 17.24 | 34.48 | 51.73 |
+| **both** | | | **38.63** | **77.27** | **115.90** |
+
+£50–100/day is inside what the measured edges imply at 0.02–0.03 lots — **if**
+they hold on M1.
+
+### E-089 — They do not hold on M1 at a 0.60 ATR stop. This is the finding.
+The M1 trade count can't be measured here. **The cost burden can**: raise the
+spread on real bars until cost/stop matches M1's.
+
+| cost/stop | GOLD 1h expectancy | GOLD 15m |
+|---|---|---|
+| 0.07 (15m today) | **+0.249R** | +0.309R |
+| 0.12 | +0.177R | +0.216R |
+| 0.17 | +0.123R | +0.088R |
+| **0.22–0.38 (M1's burden)** | **+0.041R** | **−0.020R** |
+| 0.29–0.49 | −0.077R | −0.225R |
+
+**The edge dies of costs before it ever gets to M1's trade count.** Widening the
+stop restores it — at M1's burden on 1h, a 2.0 ATR stop gives +0.159R and
++1968 points against +0.041R and +1363 at 0.60 ATR.
+
+### The squeeze, stated plainly
+The spread wants a **wide** stop; a £40 account wants a **small** one.
+
+- cost/stop ≤ 0.11 on M1 needs ≥ 2.7 points of stop **even at a 0.20 spread** —
+  £2.12 at 0.01 lots, **5.3% of £40 on one trade**.
+- At the **0.46** measured off Veer's own terminal it needs ~5 points: **£3.94,
+  or 10% of £40**.
+
+**0.01 lots on M1 with a 0.6 ATR stop does not work at any realistic spread.**
+That exact combination is what has been asked for, and the arithmetic refuses
+it — the spread is a third of the risk and takes the edge with it.
+
+Three routes, most-controllable first:
+1. **A lower spread.** Every 0.10 off buys ~0.9 points of stop back. The EA
+   already logs spread on every entry — check it before anything else.
+2. **M5 instead of M1.** ATR 4.86 → a 0.6 ATR stop is 2.92 points, cost/stop
+   0.10 at a 0.20 spread — *inside the measured range* — at £2.30 a trade.
+3. **A bigger account.** At £150 the same £3.94 stop is 2.6%, and every
+   constraint above disappears.
+
+Files: `level_exit.py`, `daily.py`, `m1_cost.py`.

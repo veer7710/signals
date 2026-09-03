@@ -156,7 +156,10 @@ stopBuf = input.float(0.60, "Stop beyond the FILL (x ATR)", minval = 0.05, step 
      tooltip = "SMALL, on purpose - this is the whole point of entering at the tick rather than after it. 0.15 ATR is too tight and loses everywhere: the poke overshoots. 0.40-0.90 is the plateau. 1.5 ATR, which version 1.1 used, is not a top-tick stop at all.")
 entPast = input.float(0.25, "Limit sits this far PAST the zone edge (x ATR)", minval = 0.0, step = 0.05, group = gS,
      tooltip = "The order rests INSIDE the zone, past its far edge, and the sweep fills it. It does not wait for confirmation. E-076 measured what waiting costs: entering on the sweep bar's close scores MINUS 0.003R with ZERO costs, and waiting for the retest leaves the wick so far behind that the stop can no longer be small.")
-tgtR    = input.float(2.0, "Target (multiples of risk)", minval = 0.5, step = 0.25, group = gS,
+tgtLvl  = input.bool(true, "Target the NEXT LEVEL, not a fixed R", group = gS,
+     tooltip = "E-087. Measured against a flat 2R on identical entries: the same money, a completely different shape. The level target wins LESS often (31% against 43%) and wins far BIGGER - average win +3.21R against +1.9R, median distance 1.89 ATR. That is the banger profile. NOTE the stop stays at 0.60 ATR: a stop just beyond the level was measured at -0.36R, because the ENTRY is at the level so a stop past it lands on top of the entry.")
+tgtMinA = input.float(0.50, "Ignore levels nearer than (x ATR)", minval = 0.1, step = 0.05, group = gS)
+tgtR    = input.float(2.0, "Fallback target if no level is found (x risk)", minval = 0.5, step = 0.25, group = gS,
      tooltip = "2R. Measured, not chosen. On GOLD 1h every combination of a 0.45-0.90 ATR stop with a 1.5R-2.5R target is positive - a plateau, not a cell. The best is 0.75 ATR / 1.5R at +3183 points; 0.60 / 2R sits in the interior because an edge-of-grid optimum is usually a fit.")
 showArm = input.bool(true, "Show the resting orders while they wait", group = gS)
 
@@ -494,6 +497,30 @@ f_best(int dir) =>
 armBuy  = f_best(1)
 armSell = f_best(-1)
 
+// THE TAKE-PROFIT: the nearest level in the trade's favour that is far enough
+// away to be worth aiming at. This is where the ping-pong is going.
+f_next(int dir, float px) =>
+    float best = na
+    float minD = tgtMinA * atr
+    if not na(nearB) and (nearB - px) * dir >= minD
+        best := nearB
+    if not na(nearS) and (nearS - px) * dir >= minD
+        if na(best) or (nearS - px) * dir < (best - px) * dir
+            best := nearS
+    if array.size(FV) > 0
+        for i = 0 to array.size(FV) - 1
+            Lvl g = array.get(FV, i)
+            float m = (g.top + g.bot) / 2.0
+            if (m - px) * dir >= minD and (na(best) or (m - px) * dir < (best - px) * dir)
+                best := m
+    if array.size(OB) > 0
+        for i = 0 to array.size(OB) - 1
+            Lvl g2 = array.get(OB, i)
+            float m2 = (g2.top + g2.bot) / 2.0
+            if (m2 - px) * dir >= minD and (na(best) or (m2 - px) * dir < (best - px) * dir)
+                best := m2
+    best
+
 // THE FILL. A resting limit is live inside the bar, so the wick reaching it is
 // a fill. This is the one place the script may use high/low.
 if showSig and pDir == 0 and n - lastSig >= sigCool
@@ -567,6 +594,10 @@ if sigBuy or sigSell
     pEnt  := sigBuy ? armBuy : armSell   // filled AT the resting order, not at the close
     pStop := pEnt - pDir * stopBuf * atr
     pTgt  := pEnt + pDir * tgtR * math.abs(pEnt - pStop)
+    if tgtLvl
+        float nx = f_next(pDir, pEnt)
+        if not na(nx)
+            pTgt := nx
     pPeak := 0.0
     pBar  := n
 
@@ -612,9 +643,37 @@ plotshape(pExit, "closed", shape.xcross, location.absolute,
 plot(pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
      style = plot.style_linebr, linewidth = 1)
 
-// NO PANEL. Veer's own spec: "THE SIZE READOUT IS IN THE STATUS LINE, NOT ON
-// THE CHART." It sat over the candles showing "flat" and a column of dashes.
-// Every value it held is here instead, where it costs nothing to look at.
+
+// ── LIVE POSITION BOX ───────────────────────────────────────────────────────
+// Back, because Veer trades these signals by hand and needs to see the trade.
+// But COMPACT and CONDITIONAL, which is what was wrong with the last one:
+//   TOP RIGHT, not over the candles on the left where price is being read
+//   ONE COLUMN of short lines, not a seven-row grid
+//   IT DISAPPEARS WHEN FLAT. The old panel sat there showing "flat" and six
+//   dashes forever, occupying the chart to say nothing.
+var table PB = table.new(position.top_right, 1, 6, border_width = 0,
+     bgcolor = color.new(#0d1117, 12), frame_color = color.new(#30363d, 30),
+     frame_width = 1)
+
+f_pb(int r, string t, color c) =>
+    table.cell(PB, 0, r, t, text_color = c, text_size = size.small,
+         text_halign = text.align_left, bgcolor = color.new(#0d1117, 12))
+
+if barstate.islast
+    table.clear(PB, 0, 0, 0, 5)
+    if pDir != 0
+        f_pb(0, (pDir > 0 ? "LONG " : "SHORT ") + str.tostring(lots, "#.##")
+             + " @ " + str.tostring(pEnt, format.mintick),
+             pDir > 0 ? cBuy : cSell)
+        f_pb(1, "now   " + str.tostring(netNow, "#.##"), netNow >= 0 ? cBuy : cSell)
+        f_pb(2, "peak  " + str.tostring(netPk, "#.##"), color.white)
+        f_pb(3, "kept  " + (pPeak > 0 ? str.tostring(kept, "#") + "%" : "-"),
+             kept >= 60 ? cBuy : (kept >= 30 ? color.orange : cSell))
+        f_pb(4, "tp    " + str.tostring(pTgt, format.mintick), cBuy)
+        f_pb(5, "sl    " + str.tostring(pStop, format.mintick), cSell)
+
+// Everything is ALSO in the status line, so nothing is lost when the box is
+// hidden and nothing has to be read off the chart.
 plot(pDir == 0 ? na : pEnt,    "Entry",          display = display.status_line)
 plot(pDir == 0 ? na : netNow,  "Net now",        display = display.status_line)
 plot(pDir == 0 ? na : netPk,   "Net at peak",    display = display.status_line)

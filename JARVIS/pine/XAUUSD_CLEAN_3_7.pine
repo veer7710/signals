@@ -484,11 +484,38 @@ peakCash = peakPts * lots * ccyPt
 backCash = (peakPts - livePts) * lots * ccyPt
 keptPct  = peakPts > 0 ? 100.0 * livePts / peakPts : 0.0
 
-// THE PANEL IS GONE TOO, for the same reason and by your own instruction:
-// "THE SIZE READOUT IS IN THE STATUS LINE, NOT ON THE CHART." It sat over the
-// candles in every screenshot, it showed "flat" and six dashes most of the
-// time, and it covered exactly the price action it was meant to describe.
-// Every number it held is below, in the status line, where it costs no pixels.
+
+// ── LIVE POSITION BOX ───────────────────────────────────────────────────────
+// Back, because Veer trades these signals by hand and needs to see the trade.
+// But COMPACT and CONDITIONAL, which is what was wrong with the last one:
+//   TOP RIGHT, not over the candles on the left where price is being read
+//   ONE COLUMN of short lines, not a seven-row grid
+//   IT DISAPPEARS WHEN FLAT. The old panel sat there showing "flat" and six
+//   dashes forever, occupying the chart to say nothing.
+var table PB = table.new(position.top_right, 1, 6, border_width = 0,
+     bgcolor = color.new(#0d1117, 12), frame_color = color.new(#30363d, 30),
+     frame_width = 1)
+
+f_pb(int r, string t, color c) =>
+    table.cell(PB, 0, r, t, text_color = c, text_size = size.small,
+         text_halign = text.align_left, bgcolor = color.new(#0d1117, 12))
+
+if barstate.islast
+    table.clear(PB, 0, 0, 0, 5)
+    if tDir != 0
+        f_pb(0, (tDir > 0 ? "LONG " : "SHORT ") + str.tostring(lots, "#.##")
+             + " @ " + str.tostring(entryPx, format.mintick),
+             tDir > 0 ? cBuy : cSell)
+        f_pb(1, "now   " + str.tostring(liveCash, "#.##"),
+             liveCash >= 0 ? cBuy : cSell)
+        f_pb(2, "peak  " + str.tostring(peakCash, "#.##"), color.white)
+        f_pb(3, "kept  " + (peakPts > 0 ? str.tostring(keptPct, "#") + "%" : "-"),
+             keptPct >= 60 ? cBuy : (keptPct >= 30 ? color.orange : cSell))
+        f_pb(4, "tp    " + str.tostring(tTp, format.mintick), cBuy)
+        f_pb(5, "sl    " + str.tostring(tSl, format.mintick), cSell)
+
+// Everything is ALSO in the status line, so nothing is lost when the box is
+// hidden and nothing has to be read off the chart.
 plot(tDir == 0 ? na : entryPx,  "Entry",        display = display.status_line)
 plot(tDir == 0 ? na : liveCash, "Now (money)",  display = display.status_line)
 plot(tDir == 0 ? na : peakCash, "Peak (money)", display = display.status_line)

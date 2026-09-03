@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.02"
+#property version   "3.03"
 #property strict
 
-#define LQS_BUILD "2026-09-02 / 3.02 / spend a level only when it trades"
+#define LQS_BUILD "2026-09-03 / 3.03 / target the next level"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -93,7 +93,29 @@ input int    InpMaxZones      = 40;     // zones tracked each side
 input group "=== THE TRADE  (E-077 - do not tune without re-measuring) ==="
 input double InpEntryPast     = 0.25;   // limit sits this many ATR PAST the zone's far edge
 input double InpStopAtr       = 0.60;   // stop, ATR beyond the FILL. Small, on purpose.
-input double InpTargetR       = 2.0;    // target, multiples of that risk
+input double InpTargetR       = 2.0;    // fallback target if no level is found
+// ── TARGET THE NEXT LEVEL (E-087) ────────────────────────────────────────────
+// Veer: "provide a real tp and sl based of levels ... you can see price
+// reacting and also playing ping pong with levels we need to catch it alllll".
+//
+// Measured on the identical top-tick entries, GOLD:
+//     target 2R          1h  43% win  +0.25R  +2714 points
+//     target NEXT LEVEL  1h  31% win  +0.26R  +2382 points
+//     target 2R          15m 46% win  +0.31R   +536 points
+//     target NEXT LEVEL  15m 33% win  +0.30R   +563 points
+//
+// Statistically the same money, structurally the thing he asked for, and a
+// completely different SHAPE: the level target wins less often and wins far
+// bigger - median distance 1.89 ATR, average WIN +3.21R against +1.9R. That is
+// the "banger" profile, and it is why this ships on by default.
+//
+// THE STOP STAYS AT 0.60 ATR AND THAT IS NOT AN OVERSIGHT. A stop "just beyond
+// the level" was measured too and it is a disaster: -0.36R, a 9-28% win rate.
+// Obvious once seen - the ENTRY is at the level, so a stop just past it lands
+// on top of the entry, the risk is a rounding error and every wick takes it.
+input bool   InpTargetLevel   = true;   // aim at the next opposing level
+input double InpTgtMinAtr     = 0.50;   // ignore levels nearer than this
+input double InpTgtMaxR       = 0.0;    // 0 = uncapped (capping measured worse)
 input int    InpArmLife       = 60;     // a zone stops being armable this many bars after birth
 input int    InpArmWait       = 60;     // an unfilled limit is cancelled after this many bars
 input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED
@@ -157,6 +179,7 @@ void   PushGap(Gap &G[], double top, double bot, int dir, int bar);
 void   AgeGaps(Gap &G[], int bar, double c);
 void   BuildSmc();
 double BestLevel(int dir, double px, double a, string &src);
+double NextLevel(int dir, double px, double a);
 bool   LevelUsed(double lvl);
 void   MarkUsed(double lvl);
 int    NearestZone(const Zone &Z[], int bar, double px, bool above);
@@ -486,6 +509,42 @@ double BestLevel(int dir, double px, double a, string &src)
    return have ? best : 0.0;
 }
 
+// The nearest level IN THE TRADE'S FAVOUR that is far enough away to be worth
+// aiming at. This is the take-profit: where the ping-pong is going.
+double NextLevel(int dir, double px, double a)
+{
+   double best = 0.0;
+   bool   have = false;
+   double minD = InpTgtMinAtr * a;
+
+   for(int i = 0; i < ArraySize(g_zB); i++)
+   {
+      if(g_zB[i].broken) continue;
+      double L = g_zB[i].px;
+      if((L - px) * dir < minD) continue;
+      if(!have || (L - px) * dir < (best - px) * dir) { best = L; have = true; }
+   }
+   for(int i = 0; i < ArraySize(g_zS); i++)
+   {
+      if(g_zS[i].broken) continue;
+      double L = g_zS[i].px;
+      if((L - px) * dir < minD) continue;
+      if(!have || (L - px) * dir < (best - px) * dir) { best = L; have = true; }
+   }
+   for(int pass = 0; pass < 2; pass++)
+   {
+      int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
+      for(int i = 0; i < cnt; i++)
+      {
+         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         double L = (g.top + g.bot) / 2.0;
+         if((L - px) * dir < minD) continue;
+         if(!have || (L - px) * dir < (best - px) * dir) { best = L; have = true; }
+      }
+   }
+   return have ? best : 0.0;
+}
+
 //==================== THE RESTING ORDERS ===========================
 // The whole strategy, in one idea: a limit sits INSIDE the nearest live zone
 // on each side, and the sweep fills it. Nothing waits for confirmation, because
@@ -632,6 +691,20 @@ void ArmSide(int dir)
    double risk = (lvl - stop) * dir;
    if(risk <= 0.0) return;
    double tgt  = NormalizeDouble(lvl + dir * InpTargetR * risk, dg);
+   if(InpTargetLevel)
+   {
+      double nxt = NextLevel(dir, lvl, a);
+      if(nxt != 0.0)
+      {
+         if(InpTgtMaxR > 0.0)
+         {
+            double cap = lvl + dir * InpTgtMaxR * risk;
+            nxt = (dir > 0) ? MathMin(nxt, cap) : MathMax(nxt, cap);
+         }
+         tgt = NormalizeDouble(nxt, dg);
+      }
+      // no level far enough away: the R target above stands
+   }
 
    // the broker's floor. A limit inside the stops level is REJECTED, and a
    // rejected order is a trade silently not taken.
