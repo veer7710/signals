@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.18"
+#property version   "2.19"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-03 / 2.18 / profit stop + live same-dir count"
+#define STS_BUILD "2026-09-03 / 2.19 / no ceiling, the trail decides"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -170,7 +170,30 @@ input group "=== EXIT (measured on THIS strategy, out-of-sample) ==="
 // 3 ATR behind price and only ever ratchets in your favour; break-even parks
 // the stop at entry and gets scratched by noise. That distinction is the whole
 // difference between +0.505R and the worst rule tested.
-input double InpTargetR       = 3.0;    // hard take profit at N x risk
+// NO HARD TAKE PROFIT. 0 = uncapped, and that is the shipped default.
+//
+// Veer: "we can't measure rr because some trades do 40rr some 0.5". He is right
+// and it was a criticism of my method, not of the strategy. Every SuperTrend
+// measurement in this project used a fixed 2R or 3R target, and if the edge
+// lives in a tail then a fixed target is the one thing guaranteed to destroy
+// it: it turns the 28R trade into a 3R trade and then reports the average as
+// though nothing was lost.
+//
+// E-090 removed the ceiling. GOLD 1h, identical entries:
+//     capped at 3R,  stop 2.0 ATR   mean +0.156R   +1035 points   best +3.0R
+//     UNCAPPED,      stop 2.0 ATR   mean +0.178R   +1245 points   best +8.3R
+//     UNCAPPED,      stop 0.6 ATR   mean +0.275R    +601 points   best +28.0R
+//
+// And the tail is real. On the tight-stop run the TOP 5% OF TRADES CARRY 68%
+// OF ALL GROSS PROFIT; trades reaching 10R are 4% of the count and 53% of the
+// money. 16% of trades win. That is the shape he has been describing all along.
+//
+// The 2.0 ATR stop is kept rather than the tight one, because E-090 also asked
+// whether the tail protects against the spread and it does NOT - the tail
+// winners are 4% of trades and the other 84% each pay the full spread. At M1's
+// cost burden the 0.6 ATR version falls to +0.065R and 69 points while the
+// 2.0 ATR version holds +0.114R and 880.
+input double InpTargetR       = 0.0;    // hard take profit at N x risk. 0 = none
 input int    InpMaxBars       = 50;     // absolute ceiling. See InpMaxStall first.
 
 input group "=== STALL (E-056: the strongest result in this project) ==="
@@ -1685,7 +1708,8 @@ void TryEntry()
    if(flipUp)
    {
       double sl = NormalizeDouble(ask - stopDist, dg);
-      double tp = NormalizeDouble(ask + InpTargetR * stopDist, dg);
+      // InpTargetR = 0 means NO ceiling: the trail decides where it ends.
+      double tp = (InpTargetR <= 0.0) ? 0.0 : NormalizeDouble(ask + InpTargetR * stopDist, dg);
       // A target sitting beyond the next level watches price stop just short of
       // it and turn. Park it INSIDE the level instead, by InpLevelBufAtr, so it
       // is reached rather than admired.
@@ -1695,7 +1719,7 @@ void TryEntry()
          if(capLvl > 0)
          {
             double capped = NormalizeDouble(capLvl - InpLevelBufAtr * atr, dg);
-            if(capped > ask && capped < tp)
+            if(tp > 0.0 && capped > ask && capped < tp)
             {
                Log(StringFormat("target pulled in from %.*f to %.*f, level at %.*f",
                                 dg, tp, dg, capped, dg, capLvl));
@@ -1711,7 +1735,7 @@ void TryEntry()
       {
          double lim = NormalizeDouble(ask - InpPullAtr * atr, dg);
          double lsl = NormalizeDouble(lim - stopDist, dg);
-         double ltp = NormalizeDouble(lim + (tp - ask), dg);
+         double ltp = (tp <= 0.0) ? 0.0 : NormalizeDouble(lim + (tp - ask), dg);
          if(trade.BuyLimit(lots, lim, _Symbol, lsl, ltp, ORDER_TIME_GTC, 0,
                            RiskTag(stopDist, dg)))
          {
@@ -1743,14 +1767,15 @@ void TryEntry()
    else
    {
       double sl = NormalizeDouble(bid + stopDist, dg);
-      double tp = NormalizeDouble(bid - InpTargetR * stopDist, dg);
+      // InpTargetR = 0 means NO ceiling: the trail decides where it ends.
+      double tp = (InpTargetR <= 0.0) ? 0.0 : NormalizeDouble(bid - InpTargetR * stopDist, dg);
       if(InpUseLevels && InpTpAtLevel)
       {
          double capLvl = NearestLevel(bid, -1);
          if(capLvl > 0)
          {
             double capped = NormalizeDouble(capLvl + InpLevelBufAtr * atr, dg);
-            if(capped < bid && capped > tp)
+            if(tp > 0.0 && capped < bid && capped > tp)
             {
                Log(StringFormat("target pulled in from %.*f to %.*f, level at %.*f",
                                 dg, tp, dg, capped, dg, capLvl));
@@ -1762,7 +1787,7 @@ void TryEntry()
       {
          double lim = NormalizeDouble(bid + InpPullAtr * atr, dg);
          double lsl = NormalizeDouble(lim + stopDist, dg);
-         double ltp = NormalizeDouble(lim - (bid - tp), dg);
+         double ltp = (tp <= 0.0) ? 0.0 : NormalizeDouble(lim - (bid - tp), dg);
          if(trade.SellLimit(lots, lim, _Symbol, lsl, ltp, ORDER_TIME_GTC, 0,
                             RiskTag(stopDist, dg)))
          {

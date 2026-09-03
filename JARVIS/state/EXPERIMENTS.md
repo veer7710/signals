@@ -3333,3 +3333,59 @@ Three routes, most-controllable first:
    constraint above disappears.
 
 Files: `level_exit.py`, `daily.py`, `m1_cost.py`.
+
+---
+
+## E-090 — "we can't measure rr because some trades do 40rr some 0.5". He was right.
+
+Veer's criticism of my method, and it lands. **Every SuperTrend measurement in
+this project used a fixed 2R or 3R target.** If the edge lives in a tail, a
+fixed target is the one thing guaranteed to destroy it: it turns the 28R trade
+into a 3R trade and then reports the average as though nothing was lost.
+
+### Removing the ceiling, GOLD 1h, identical entries
+| | mean | points | best trade | win% |
+|---|---|---|---|---|
+| capped at 3R, stop 2.0 ATR *(every earlier test)* | +0.156R | +1035 | +3.0R | 37.0% |
+| **uncapped, stop 2.0 ATR** | **+0.178R** | **+1245** | +8.3R | 36.8% |
+| **uncapped, stop 0.6 ATR** | **+0.275R** | +601 | **+28.0R** | 16.1% |
+
+**The cap was costing 13–76% of the expectancy.**
+
+### And the tail is exactly the shape he described
+Tight stop, uncapped, GOLD 1h — 397 trades, **16% of them win**:
+
+| reached | trades | % of all | % of gross profit |
+|---|---|---|---|
+| 2R+ | 49 | 12.3% | **97%** |
+| 5R+ | 31 | 7.8% | 79% |
+| 10R+ | 16 | 4.0% | **53%** |
+| 20R+ | 6 | 1.5% | 28% |
+
+**The top 5% of trades carry 68% of all gross profit.** Mean expectancy was
+never the right summary for this and I had been using it throughout.
+
+### But the tail does NOT protect against the spread
+This was the obvious hope — one 28R winner pays for many losers — and it is
+wrong, because the tail winners are 4% of trades and **the other 84% each pay
+the full spread**:
+
+| spread | stop | mean | points | best |
+|---|---|---|---|---|
+| 0.46 | 0.6 ATR | +0.275R | +601 | +28.0R |
+| **1.80 (M1's burden)** | 0.6 ATR | **+0.065R** | **+69** | +26.4R |
+| 0.46 | **2.0 ATR** | +0.178R | **+1245** | +8.3R |
+| **1.80 (M1's burden)** | **2.0 ATR** | **+0.114R** | **+880** | +7.9R |
+
+So the change his criticism earns is **remove the cap** — not tighten the stop.
+`InpTargetR` **3.0 → 0.0**, uncapped, the trail decides. The 2.0 ATR stop stays.
+
+### Two bugs that came with it
+Setting the target to zero exposed both, and neither is visible to any checker:
+- The **level-cap** test on the sell side reads `capped > tp`. With `tp = 0`
+  that is true for **any** price, because prices are positive — an uncapped
+  sell would silently be given a target. Now guarded on `tp > 0`.
+- The **limit-entry** translation `lim - (bid - tp)` evaluates to `lim - bid`
+  when `tp = 0`, which is not a price at all. Now returns 0.
+
+File: `JARVIS/research/fattail.py`.
