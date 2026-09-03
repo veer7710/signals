@@ -2,6 +2,15 @@
 // ===========================================================================
 //  LIQUIDITY CLEAN 1.3  —  top-tick entries off levels, gaps and blocks
 //
+//  1.4 STRIPPED THE CHART. Same complaint, same cause - mine, not the spec's:
+//    filled zone boxes  -> OUTLINE ONLY. The edges are the information; the
+//                          area between them was paint over the price. Only a
+//                          zone that has actually been SWEPT keeps a fill,
+//                          because that is the one about to be traded.
+//    scalp triangles    -> GONE. Never in the spec, and on M1 they fired on
+//                          almost every bar that drifted near a level.
+//    the position table -> status line, every field.
+//
 //  WHAT IS ON THE CHART, COMPLETE LIST
 //    · the gold DEMA
 //    · BUYSIDE / SELLSIDE LIQUIDITY zones
@@ -84,7 +93,7 @@
 //  come from the LuxAlgo scripts and from Veer's own reading of his charts.
 // ===========================================================================
 
-indicator("Liquidity Clean 1.3", "LIQ", overlay = true,
+indicator("Liquidity Clean 1.4", "LIQ", overlay = true,
      max_lines_count = 300, max_boxes_count = 300, max_labels_count = 300,
      max_bars_back = 2000)
 
@@ -160,7 +169,6 @@ minGap   = input.float(0.10, "Ignore gaps smaller than (x ATR)", minval = 0.0, s
 smcLife  = input.int(200,    "Bars an FVG or block stays live", minval = 20, maxval = 2000, group = gM2)
 minTgt = input.float(1.5, "Minimum target to signal (points)", minval = 0.1, step = 0.1, group = gS,
      tooltip = "1.5 points is where the round trip stops eating the trade: at 0.03 lots it grosses GBP 3.56 and nets GBP 2.44. At 0.5 points the broker takes 94% of it.")
-showScalp = input.bool(true, "Mark the scalps between the two zones", group = gS)
 
 // ── MONEY ───────────────────────────────────────────────────────────────────
 gM    = "MONEY"
@@ -507,14 +515,12 @@ plotshape(sigBuy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
 plotshape(sigSell, "SELL", shape.labeldown, location.abovebar, cSell,
      text = "SELL", textcolor = color.white, size = size.small)
 
-// SCALPS: price working between the two zones, neither swept. Smaller marks,
-// because they are the trades taken INSIDE the move, not the move itself.
-scalpBuy  = showScalp and not na(nearS) and (close - nearS) <= mar * 2 and close > dema
-scalpSell = showScalp and not na(nearB) and (nearB - close) <= mar * 2 and close < dema
-plotshape(scalpBuy and not sigBuy, "scalp buy", shape.triangleup,
-     location.belowbar, color.new(cBuy, 40), size = size.tiny)
-plotshape(scalpSell and not sigSell, "scalp sell", shape.triangledown,
-     location.abovebar, color.new(cSell, 40), size = size.tiny)
+// THE SCALP TRIANGLES ARE GONE. They were never in the spec Veer wrote - "the
+// gold DEMA, the zones, the sweep box, BUY/SELL, one position box, nothing
+// else" - and on M1 they fired on almost every bar that drifted near a level,
+// which is what made the chart unreadable. The strategy trades the limit at the
+// zone; a triangle every time price wanders near one is not a second signal,
+// it is noise wearing the same colours.
 
 // ── DRAW: zones, and the target line ────────────────────────────────────────
 f_draw(array<Zone> Z, color c, string tag) =>
@@ -522,8 +528,14 @@ f_draw(array<Zone> Z, color c, string tag) =>
         for i = 0 to array.size(Z) - 1
             Zone z = array.get(Z, i)
             int x1 = math.max(z.born, n - 1900)
-            color fill = z.broken ? color.new(color.gray, 94)
-                 : (z.swept ? color.new(c, 80) : color.new(c, 88))
+            // OUTLINE ONLY. Filled zone boxes washed large translucent blocks
+            // across the candles - the "random box's everywhere" in Veer's
+            // screenshots. The zone's EDGES are the information; the area
+            // between them is just paint over the price you are reading. A
+            // fill is only used for the one zone that has actually been swept,
+            // because that one is about to be traded.
+            color fill = z.broken ? na
+                 : (z.swept ? color.new(c, 88) : na)
             if na(z.bx)
                 z.bx := box.new(x1, z.top, n + 8, z.bot,
                      border_color = color.new(c, 70), bgcolor = fill)
@@ -531,7 +543,7 @@ f_draw(array<Zone> Z, color c, string tag) =>
                 box.set_lefttop(z.bx, x1, z.top)
                 box.set_rightbottom(z.bx, n + 8, z.bot)
                 box.set_bgcolor(z.bx, fill)
-                box.set_border_color(z.bx, color.new(c, z.broken ? 90 : 60))
+                box.set_border_color(z.bx, color.new(c, z.broken ? 92 : 55))
             string txt = tag + (z.swept ? " swept" : "")
             if na(z.lb)
                 z.lb := label.new(n + 8, z.px, txt, style = label.style_label_left,
@@ -600,43 +612,18 @@ plotshape(pExit, "closed", shape.xcross, location.absolute,
 plot(pDir != 0 ? pStop : na, "Stop", color = color.new(color.gray, 20),
      style = plot.style_linebr, linewidth = 1)
 
-var table BX = table.new(position.bottom_left, 2, 10, border_width = 1,
-     bgcolor = #0d1117, frame_color = #30363d, frame_width = 2,
-     border_color = #30363d)
-
-f_bx(int r, string a, string b, color c) =>
-    table.cell(BX, 0, r, a, text_color = #8b949e, text_size = size.normal,
-         text_halign = text.align_left, bgcolor = #0d1117)
-    table.cell(BX, 1, r, b, text_color = c, text_size = size.normal,
-         text_halign = text.align_right, bgcolor = #0d1117)
-
-if showBox and barstate.islast
-    table.cell(BX, 0, 0, "POSITION", text_color = color.white, bgcolor = #1f6feb,
-         text_size = size.normal)
-    table.cell(BX, 1, 0, pDir == 0 ? "flat" : (pDir > 0 ? "LONG" : "SHORT"),
-         text_color = color.white, bgcolor = #1f6feb, text_size = size.normal)
-    f_bx(1, "entry", pDir == 0 ? "-" : str.tostring(pEnt, format.mintick), color.white)
-    f_bx(9, "last closed", na(pLast) ? "-"
-         : (pLastOk ? "target  " : "stop  ") + str.tostring(pLast, "#.##"),
-         na(pLast) ? #8b949e : (pLast >= 0 ? cBuy : cSell))
-    f_bx(2, "net now", pDir == 0 ? "-" : str.tostring(netNow, "#.##"),
-         netNow >= 0 ? cBuy : cSell)
-    f_bx(3, "net at peak", pDir == 0 ? "-" : str.tostring(netPk, "#.##"), color.white)
-    f_bx(4, "kept of peak", pDir == 0 or pPeak <= 0 ? "-"
-         : str.tostring(kept, "#") + "%",
-         kept >= 60 ? cBuy : (kept >= 30 ? color.orange : cSell))
-    f_bx(5, "target zone", pDir == 0 or tgtPts <= 0 ? "-"
-         : str.tostring(tgtPts, "#.#") + " pts = "
-         + str.tostring(tgtPts * ccyPt - costGbp, "#.##") + " net", color.white)
-    f_bx(6, "stop", pDir == 0 or na(pStop) ? "-"
-         : str.tostring(pStop, format.mintick) + "   ("
-         + str.tostring(math.abs(pEnt - pStop) * ccyPt + costGbp, "#.##") + " risk)",
-         cSell)
-    f_bx(7, "HTF sweep", htfLive ? (htfDir > 0 ? "BUY side taken" : "SELL side taken")
-         : "none live", htfLive ? color.orange : #8b949e)
-    f_bx(8, "evidence", "GOLD 1h +0.487R on 515, PF 1.95, t=+7.4 - PROMISING", cBuy)
+// NO PANEL. Veer's own spec: "THE SIZE READOUT IS IN THE STATUS LINE, NOT ON
+// THE CHART." It sat over the candles showing "flat" and a column of dashes.
+// Every value it held is here instead, where it costs nothing to look at.
+plot(pDir == 0 ? na : pEnt,    "Entry",          display = display.status_line)
+plot(pDir == 0 ? na : netNow,  "Net now",        display = display.status_line)
+plot(pDir == 0 ? na : netPk,   "Net at peak",    display = display.status_line)
+plot(pDir == 0 ? na : kept,    "Kept of peak %", display = display.status_line)
+plot(pDir == 0 ? na : pStop,   "Stop",           display = display.status_line)
+plot(na(pLast) ? na : pLast,   "Last closed",    display = display.status_line)
+plot(htfLive ? htfDir : 0,     "HTF sweep dir",  display = display.status_line)
 
 // ── ALERTS ──────────────────────────────────────────────────────────────────
 alertcondition(sigBuy,  "LIQ BUY",  "Liquidity Clean: BUY - sellside swept")
 alertcondition(sigSell, "LIQ SELL", "Liquidity Clean: SELL - buyside swept")
-alertcondition(scalpBuy or scalpSell, "LIQ scalp", "Liquidity Clean: at a zone")
+// the scalp alert went with the scalp triangles - see above
