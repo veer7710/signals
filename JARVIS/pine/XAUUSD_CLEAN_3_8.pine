@@ -398,6 +398,25 @@ isRange = ratio < sigThr
 plot(ratio,   "Signal spacing ratio", display = display.status_line)
 plot(isRange ? 1 : 0, "SIDEWAYS (1 = yes)", display = display.status_line)
 
+// (3.8) CONTAINMENT — E-094. The best of six sideways detectors tested, and it
+// still does not earn the right to refuse a trade, so it refuses nothing.
+//   (highest high - lowest low) over N bars, divided by the SUM of the bar
+//   ranges. 1.0 = every bar extended the move. Low = the bars overlap each
+//   other, which is what a range actually looks like.
+// MEASURED, and the measurement is why it only reads out: set on past trades
+// and scored on the next block, it was 4 of 4 on GOLD 1h (refusing -378 points,
+// good) and 1 of 3 on GOLD 15m, refusing the OPPOSITE tail of its own
+// distribution. A real regime effect does not move ends. The five others were
+// worse; "alternate", the literal up-down-candle count, threw away 1201 points.
+// It is here so the range is VISIBLE, not so anything is skipped. E-053 and
+// E-094 both found the same thing: the regime is real, the filter is not.
+cLook = input.int(20, "Containment window (bars)", group = gD, minval = 5)
+cHi   = ta.highest(high, cLook)
+cLo   = ta.lowest(low, cLook)
+cSum  = math.sum(high - low, cLook)
+contain = cSum > 0 ? (cHi - cLo) / cSum : 1.0
+plot(contain, "Containment (low = range)", display = display.status_line)
+
 // EVERY LABEL NOW READS JUST "BUY" OR "SELL". The grade still exists and is
 // still in the status line - it decides nothing on the chart. Writing
 // "SELL SWEEP" and "SELL BREAK" next to each other on M1 produced the

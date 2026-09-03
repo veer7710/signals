@@ -3696,3 +3696,77 @@ whether the edge exists**, and E-092 has just shown its main filter is not
 established. Everything is measured on GOLD 15m/1h; the EA is for M1, and the
 row that matters most — how many trades M1 actually gives — is the one that
 cannot be filled in without the data.
+
+## E-094 — SIDEWAYS DETECTION. Six detectors, and none of them earns its place.
+
+**Verdict: REJECTED as a refusal filter, for the second time (E-053 was the
+first). The regime is real and describable; it does not predict which trades to
+skip. Underpowered, and stated as such.**
+
+Veer asked for this explicitly: distinguish a real range — "just up down volume
+candles" — from a trend, using only closed bars. Six candidates, all scale-free
+and all computable with no look-ahead:
+
+| detector | what it reads |
+|---|---|
+| `rangepos` | E-084's range position: where in the last 20 bars' range the close sits |
+| `effratio` | Kaufman efficiency, \|net move\| / summed absolute move |
+| `contain` | (highest high − lowest low) / the SUM of the individual bar ranges |
+| `alternate` | the literal "up down candles": share of bars that flip direction |
+| `flipdens` | SuperTrend flips in the last 20 bars |
+| `spacing` | the Pine's own ClusterRangeNow: signal spread / path travelled |
+
+### THE IN-SAMPLE TABLE, WHICH IS WRONG AND IS SHOWN TO MAKE THE POINT
+Refusing the worst quintile of each detector "worked" on 5 of 6 on GOLD 15m and
+4 of 6 on 1h. It is cherry-picking: the bucket is chosen by looking at its
+answer, so it is negative by construction — that is what "worst" means.
+
+**The tell that it was noise: the detectors do not agree with themselves across
+the two markets.** `rangepos`'s worst quintile is Q4 on 15m and Q3 on 1h.
+`contain`'s is Q1 on 15m — which is POSITIVE, +30 points — and Q5 on 1h. A real
+regime effect does not move to the other end of its own distribution.
+
+### THE HONEST TEST — threshold set on past trades only, scored on the next block
+```
+GOLD 15m             folds better than nothing   refused pts (test)   verdict
+  rangepos                        1 of 3                    +187.8         no
+  effratio                        0 of 3                    +433.1         no
+  contain                         1 of 3                    +177.8         no
+  alternate                       1 of 3                    +328.8         no
+  flipdens                        1 of 3                    +200.3         no
+  spacing                         2 of 3                     -52.7       weak
+
+GOLD 1h
+  rangepos                        3 of 4                     -58.9       weak
+  effratio                        1 of 4                    +779.8         no
+  contain                         4 of 4                    -378.0  SUPPORTED
+  alternate                       2 of 4                   +1201.2         no
+  flipdens                        1 of 4                    +978.3         no
+  spacing                         3 of 4                    +135.8       weak
+```
+A positive "refused pts" means the filter **threw away money**.
+
+`contain` is the only one to go 4 of 4 — and it is **1 of 3 on 15m**, refusing
+the opposite tail. One timeframe is not a result. `alternate`, which is Veer's
+own description taken literally, threw away 1201 points on 1h.
+
+### What this does and does not say
+- It does **not** say the regime is imaginary. Every detector describes the
+  market perfectly well. It says none of them **predicts which trade to skip**,
+  which is the only thing a filter is for.
+- It is **underpowered**: 101 trades on 15m and 338 on 1h, so each of the four
+  test blocks holds ~25 and ~68 trades. M1 would give 10-50× that, and this is
+  one more question the missing data would settle rather than argue.
+- E-084's range position is **not** contradicted. It was validated as a SIZE
+  lever (quarter size in the middle band, 4/4 out of sample) and it stays that.
+  What fails here is using it, or any of the six, to REFUSE a trade.
+
+### What gets shipped
+Nothing gains the power to refuse a signal. `spacing` is already in the Pine's
+status line as "SIDEWAYS (1 = yes)" and that remains the only justified use:
+a reading Veer can see, that gates nothing. `contain` is added beside it on the
+same terms — descriptive, not predictive, and labelled so in the script.
+
+**And the answer to the question underneath the request:** what separates the
+good runs from the bad here is not a range detector. E-093 measured it as
+frequency and cost.
