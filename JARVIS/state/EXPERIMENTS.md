@@ -3770,3 +3770,130 @@ same terms — descriptive, not predictive, and labelled so in the script.
 **And the answer to the question underneath the request:** what separates the
 good runs from the bad here is not a range detector. E-093 measured it as
 frequency and cost.
+
+## E-095 — PEAK CAPTURE. There is nothing to capture on small moves, and arming early kills the tail.
+
+**Verdict: "protect the small trades" is REJECTED — there is no peak there to
+take. The cost of `InpProfitStopArmR = 1.0` is SUPPORTED and measured. The
+default is NOT changed, because 1.0 is Veer's written instruction.**
+
+Veer wants the peak of *every* trade taken — big, small and chop — and the
+engines only protect a trade from 1.0R of peak (E-086).
+
+### First, a correction to my own measurement
+My initial run modelled only the 3.0 ATR trail and reported that the 1-2R bucket
+kept **2-4%** of its move. That was wrong, and wrong in the E-082 way — the
+simulation was not the EA. With a 2.0 ATR risk, a 3.0 ATR trail sits 1.5R below
+the peak and **cannot protect anything under 1.5R**, so the bucket looked
+unprotected. The EA also runs a give-back profit stop at the broker from 1.0R.
+With the full stack modelled the same bucket keeps **80%**. I nearly reported a
+defect that does not exist.
+
+### The prize, correctly measured (GOLD 15m / 1h, full exit stack)
+```
+MFE bucket        n(15m)  points   kept %      n(1h)   points   kept %
+never +0.25R          23  -431.8   -1027%         69  -1876.5  -1219%
+0.25 - 0.50R          12  -190.0    -292%         54  -1892.3   -290%
+0.50 - 1.00R          18  -207.7     -91%         63  -1356.9   -105%
+1.00 - 2.00R          53 +1078.0      80%        167  +5002.1     80%
+2.00 - 4.00R           6  +183.6      83%         20  +1192.4     85%
+over 4R                0       -        -          1    +27.4     87%
+```
+
+**The sub-1R trades are not underprotected winners. They are losses that briefly
+showed a small profit.** 53 of them banked −829.5 points on 15m (186 for −5125.6
+on 1h), with a mean MFE of 0.10-0.74R. There is no peak to take. Protecting them
+turns −1.0R into −0.9R at best, and E-091 already measured every tight brake as
+a loser because the trades it cuts recover.
+
+### But the full stack exposed something else: the ≥4R count
+```
+             GOLD 15m                GOLD 1h
+arm at    points  trades>=4R      points  trades>=4R
+OFF       +406.1       1         +1542.8       9
+0.6R      +242.2       0         +1172.7       0
+1.0R      +432.1       0         +1096.3       0    <- ships
+1.5R      +402.6       0         +1232.4       0
+2.0R      +399.7       0         +1242.5       0
+3.0R      +391.2       1         +1234.2       1
+4.0R      +462.7       2         +1744.5      12
+6.0R      +406.3       1         +1616.1       9
+```
+
+**Arming at 0.6R, 1.0R, 1.5R or 2.0R eliminates every trade that reaches 4R, on
+both timeframes.** This is E-090 wearing a different hat: the give-back stop
+armed early IS a fixed target. On GOLD 1h it costs 446 points against OFF.
+
+`4.0R` is the only value that beats OFF on both (+14% on 15m, +13% on 1h).
+
+### Why the default does not change
+`InpProfitStopArmR = 1.0` is there on Veer's explicit written instruction:
+*"im happy if maximum potential profit on a trend is not taken as long as we
+actually took a solid ammount."* A stated preference is not a defect.
+
+And there is no basis to pick a different *early* value: within the arm-early
+family the timeframes **disagree** — 15m ranks 1.0R best of 1.0/1.5/2.0 (432.1 vs
+402.6 vs 399.7), 1h ranks it last. So 1.0 stands. The table is now in the EA
+beside the input so the price is visible.
+
+E-075 recorded 3R as the best threshold it tested and the file ships 1.0. That
+gap is deliberate and now documented rather than silently inconsistent.
+
+---
+
+## E-096 — THE £40 SQUEEZE, RESOLVED. The account needs to be larger. £100.
+
+**Verdict: £40 is REJECTED as a starting balance for this EA. Not on preference
+— on arithmetic that does not involve the strategy at all.**
+
+### First, the calculation I threw away
+Resampling the strategy's own trades said a £40 account risking 5.3% per trade
+had a **0.7%** chance of losing half and a **median outcome of 11× its money**.
+That is nonsense, and structurally so: the bootstrap is fed the backtest's own
++0.181R mean, so it can only ever confirm it. E-050 and E-064's mistake with a
+different face — no control, so the model confirms its own input. It is kept in
+`small_account.py` with that written on it.
+
+The measured edge is **+0.181R ± 0.101** (1 se, n=112). The 95% interval is
+**[−0.017, +0.380]R — it does not exclude zero.** E-092 has just shown the gate
+that selected these trades is not established. E-089 puts the M1 figure at
++0.041R.
+
+### So the question is turned round: what edge does a given account NEED?
+Same R shape, mean shifted. P(lose half inside 300 trades), 4000 runs per cell.
+A 2.7-point stop is £2.12 at 0.01 lots (E-081: £0.787/point, and it cannot be
+smaller), so the account size sets the risk percentage.
+```
+true mean R    £40 (5.3%)    £60 (3.5%)   £100 (2.1%)   £200 (1.1%)   £500 (0.4%)
+    +0.181    0.8% 10.99x   0.1% 5.51x   0.0% 2.93x   0.0% 1.75x   0.0% 1.26x  as measured
+    +0.120    5.2%  4.19x   0.8% 2.89x   0.0% 1.99x   0.0% 1.44x   0.0% 1.16x
+    +0.082   14.2%  2.21x   3.4% 1.94x   0.1% 1.56x   0.0% 1.27x   0.0% 1.11x
+    +0.041   33.2%  1.09x  12.3% 1.24x   1.0% 1.20x   0.0% 1.12x   0.0% 1.05x  E-089's M1
+    +0.020   46.9%  0.66x  21.3% 0.99x   2.9% 1.05x   0.0% 1.05x   0.0% 1.02x
+     0.000   60.2%  0.50x  33.2% 0.79x   6.0% 0.93x   0.0% 0.98x   0.0% 1.00x  no edge
+    -0.020   72.0%  0.49x  45.8% 0.59x  11.9% 0.82x   0.0% 0.92x   0.0% 0.97x
+```
+
+**At E-089's M1 edge — the honest estimate for the timeframe this EA is for —
+a £40 account has a 33.2% chance of halving. £100 has 1.0%.**
+
+### The answer, stated plainly as the handover asked
+The handover offered three outs: find a tighter entry, make the case for M5, or
+say the account must be larger. **It must be larger, and £100 is the threshold.**
+
+This is not a fact about the strategy. £0.787 per point at 0.01 lots is a floor
+set by the broker, and 2.7 points of stop is a floor set by the spread if
+cost/stop is to stay at 0.14 (E-089). £2.12 of risk is therefore fixed. **Only
+the denominator can move.**
+
+Veer's plan is "£40, 0.01 lots to £100, then 0.01-0.03". The measurement says
+**the £40 → £100 leg is the dangerous one**: a one-in-three chance of halving
+before it ever arrives. Funding £100 directly skips the only phase with
+meaningful ruin risk in the whole plan.
+
+### What would change this answer
+A genuinely tighter entry. The stop floor comes from cost/stop, so an entry that
+survives at 1.5 points of stop would put £40 back at ~2.9% per trade. E-087 is
+the warning: a level-based *stop* measured −0.36R because the entry IS at the
+level. Nothing tested so far holds an edge at that stop width, and M1 data is
+what would settle it.

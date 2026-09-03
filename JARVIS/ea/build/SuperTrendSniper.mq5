@@ -659,6 +659,48 @@ input int    InpBrakeBars     = 2;      // ...within this many bars
 input double InpMaxSpreadX    = 3.0;    // also close if the spread blows out this much
 
 input bool   InpUseProfitStop = true;   // push the give-back level to the BROKER as a stop
+// E-095 — THE PRICE OF THIS NUMBER, MEASURED. It is NOT changed from 1.0,
+// because 1.0 is Veer's written instruction (quoted below) and a preference is
+// not a defect. But the cost was never measured before and now it has been.
+//
+// Sweeping the arming threshold, same entries, same everything else:
+//
+//              GOLD 15m                 GOLD 1h
+//   arm at   points   trades >=4R    points   trades >=4R
+//   OFF      +406.1        1        +1542.8        9
+//   0.6R     +242.2        0        +1172.7        0
+//   1.0R     +432.1        0        +1096.3        0     <- ships
+//   1.5R     +402.6        0        +1232.4        0
+//   2.0R     +399.7        0        +1242.5        0
+//   3.0R     +391.2        1        +1234.2        1
+//   4.0R     +462.7        2        +1744.5       12
+//   6.0R     +406.3        1        +1616.1        9
+//
+// TWO THINGS ARE IN THAT TABLE.
+//
+// 1. ARMING EARLY ELIMINATES THE TAIL, MECHANICALLY. At 0.6R, 1.0R, 1.5R and
+//    2.0R, the number of trades that reach 4R is ZERO on both timeframes. At
+//    4.0R it is 2 and 12. This is E-090 exactly - the finding that a fixed 2R/3R
+//    target was destroying the tail, and that the top 5% of trades carry 68% of
+//    gross profit. The give-back stop armed at 1.0R is a fixed target wearing a
+//    different hat. On GOLD 1h it costs 446 points against leaving it OFF.
+//
+// 2. THERE IS NO BASIS TO PICK A DIFFERENT EARLY VALUE. Within the arm-early
+//    family the two timeframes DISAGREE: 15m prefers 1.0R (432.1) over 1.5R
+//    (402.6) and 2.0R (399.7); 1h ranks 1.0R LAST of those three. So 1.0 stays.
+//    The only setting that beats OFF on both is 4.0R, and that is the opposite
+//    of what Veer asked for.
+//
+// E-075 recorded 3R as the best arming threshold it tested and this file ships
+// 1.0. That gap is deliberate and documented, not an oversight.
+//
+// VEER'S INSTRUCTION, 2026-09-01: "although we wanna claim big big trends we
+// want to actually CLOSE IN PROFIT ... im happy if maximum potential profit on
+// a trend is not taken as long as we actually took a solid ammount."
+//
+// So: set this to 4.0 if you ever want the runners back. It measured +13% on
+// 1h and +14% on 15m against OFF, and it is the only value that beat OFF on
+// both. It will also mean more trades that go +1.5R and come back to the trail.
 input double InpProfitStopArmR= 1.0;    // arm the profit stop at this peak R
 
 input double InpGbArmR        = 3.0;    // arm once the trade is this good in R

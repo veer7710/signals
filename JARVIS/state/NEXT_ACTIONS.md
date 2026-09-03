@@ -1,27 +1,39 @@
 # NEXT ACTIONS
 
-## For Veer, in order of what unblocks the most
+## 1. THE ONE THING ONLY VEER CAN DO
+Run `JARVIS/ea/tools/ExportHistory.mq5` in MT5 and commit `GOLD_M1.json`.
+Re-verified this session: the network gateway returns 403 to CONNECT on every
+market-data host, so this cannot come from inside a session.
 
-1. **Run `JARVIS/ea/tools/ExportHistory.mq5`.** Drag it onto an XAUUSD chart.
-   It writes GOLD_M1/M5/M15.json. This is the single thing blocking every M1
-   conclusion in the project — right now M1 is extrapolated from 15m and 1h.
-2. **Recompile both EAs in MetaEditor (F7)** and check the build stamp on the
-   chart matches: SuperTrend `2.14`, Liquidity `1.00`. If the stamp is old,
-   MetaEditor has not rebuilt and none of this session's changes are running.
-3. **Load `LIQUIDITY_CLEAN_1_1.pine`** and confirm the signal count looks like
-   the chart you actually trade. If it is still sparse, `minPiv` is the dial.
-4. **Send the journal CSV** (`STS_journal_XAUUSD_PERIOD_M1.csv`) once the EA
-   has run a session. Every entry logs spread, stop and cost/stop; every exit
-   logs peak and kept.
+Four of the five findings below name M1 as what would settle them:
+- **E-093** the frequency row — how many trades M1 actually gives is the one
+  cell in the funded table that cannot be filled in, and it decides the whole
+  funded track.
+- **E-096** the edge row — £40 vs £100 turns on whether the M1 edge is +0.041R.
+- **E-094** the sideways work was underpowered at 101 and 338 trades.
+- **E-092** the DEMA gate is unproven, and on M1 it is DEMA(60), never tested.
 
-## For the next session, in order of value
+## 2. WORK THAT DOES NOT NEED IT
+- **Liquidity Pine/EA parity.** E-092 did the SuperTrend pair. The liquidity
+  pair (`LIQUIDITY_CLEAN_1_6.pine` vs `LiquiditySniper.mq5`) has not been
+  checked and is the funded track. Same method: `pine_ea_parity.py`.
+- **The 1.0R vs 4.0R decision is Veer's.** E-095 measured it; the default was
+  deliberately left at his stated preference. He should see the table.
+- **P83 the funded phase** — payout rate and time to first payout, now that
+  `funded.py` can simulate a rule set properly.
+- **P85 trailing vs static drawdown as different strategies.** `funded.py`
+  models both correctly now, and they have not been compared as strategies.
 
-1. **Parity-check LiquiditySniper.mq5 against E-069.** Port the EA's exact
-   logic to Python and confirm it reproduces the measured numbers. The EA is
-   new and about to be run; implementation drift is the obvious risk.
-2. **Re-measure everything on M1** once the data exists. E-069 and E-071 are
-   both 15m/1h results being applied to an M1 EA.
-3. **The basket engine has never been measured**, only reasoned about. It is
-   the last large piece of the SuperTrend EA with no experiment behind it.
-4. **"African scalps on lower tf"** — Veer mentioned this once and it has
-   never been asked about or implemented.
+## 3. DECISIONS WAITING ON VEER
+1. **£100, not £40.** E-096 is unambiguous on the arithmetic. Does he fund to
+   £100 directly and skip the only leg with real ruin risk?
+2. **Which firm.** `JARVIS/ea/FUNDED_CARD.md`. Buy from a firm with no
+   consistency rule — FTMO or The5ers measured 98.2%. This is worth more than
+   any EA setting and it is free.
+3. **`InpProfitStopArmR`.** Stay at 1.0 (his instruction, and 15m agrees) or go
+   to 4.0 (the only value beating OFF on both timeframes, and the only one that
+   keeps any ≥4R trade alive)?
+
+## 4. STANDING
+Nothing in this session touched a live account. Nothing here is a claim of
+profit — the strongest verdict any of it holds is SUPPORTED.
