@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.10"
+#property version   "3.20"
 #property strict
 
-#define LQS_BUILD "3.10"
+#define LQS_BUILD "3.20"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -194,6 +194,49 @@ enum ENUM_FIRM
    FIRM_5ERS               // The5ers High Stakes (no consistency rule)
   };
 
+//==================== RUNNING MORE THAN ONE CHART (E-098) ==========
+// E-097 found that holding several positions AT ONCE ON ONE SYMBOL does not pay
+// risk-adjusted - GOLD 1h fell from 25.4 return-per-drawdown at one slot to 11.2
+// at ten - and found why: the extra trades are GOOD (+0.68R against the base's
+// +0.36R), they are just the same trade twice, so they lose together.
+//
+// E-098 then removed the correlation and kept the frequency, by running the SAME
+// strategy on legs that do not move together. Daily-return correlations measured
+// on this stack:  GOLD 1h vs GOLD 15m  -0.01 |  GOLD 1h vs US500 1h  +0.03 |
+// GOLD 15m vs US500 1h  -0.07.  Essentially independent.
+//
+//   book                              trades  total R  maxDD R   R/DD   /day
+//   GOLD 1h alone                        517  +214.15     8.42  25.45   1.25
+//   + GOLD 15m                           687  +144.58     5.07  28.53   1.59
+//   + US500 1h                          1045  +192.50     5.38  35.79   1.89
+//   GOLD 1h + US500 1h + GOLD 15m       1215  +153.33     3.98  38.54   2.17
+//
+// 51% better return per unit of drawdown, 74% more trades, and LESS THAN HALF
+// the drawdown - with no new edge, no lower timeframe and no extra risk. It is
+// the frequency lever E-093 identified, bought without paying E-089's cost.
+//
+// US500 stands on its own, it is not a passenger: n=528, +0.324R, t=4.96,
+// walk-forward 6 of 6 positive and IMPROVING (+0.213 to +0.486 across blocks),
+// and +0.709R over a 16-seed matched random control = 6.9 control standard
+// errors. That is a stronger control result than GOLD's own 6.4.
+// US500 15m is EXCLUDED - it fails standalone (t=0.86) and drags the book from
+// 38.54 to 31.11. Legs are screened on their own merit, not on what they do to
+// the portfolio.
+//
+// HOW TO RUN IT: attach one instance per leg, set InpBooks to the number of
+// legs, and give every instance a DIFFERENT InpMagic. Size is divided by
+// InpBooks so the total risk is unchanged, and the funded guards below share
+// one account-wide state so three instances cannot each spend the full daily
+// allowance.
+//
+// AGAINST THE MANDATE, AND SAID SO. D-010 settles XAUUSD only, M1/M5/M15, with
+// H1 as context that is never traded. This result is mostly H1 and one leg is
+// an index. It is brought as evidence, not slipped in: the defaults below are
+// unchanged and single-leg. Overruling D-010 is Veer's call, not this file's.
+input group "=== MULTI-BOOK (E-098) ==="
+input int    InpBooks         = 1;      // how many charts this EA runs on
+input bool   InpSharedGuards  = true;   // pool the funded guards across them
+
 input group "=== FUNDED ACCOUNT (set these two, the rest derives) ==="
 input ENUM_FIRM InpFirm       = FIRM_FTMO_2STEP; // firm rule set
 input double InpAccountSize   = 0.0;    // 0 = read the balance from the account
@@ -273,6 +316,8 @@ string Money(double v);
 double ATRv(int shift);
 int    DayStamp();
 int    FundedDayStamp();
+string FundedKey();
+double BookLots();
 void   ApplyFirmPreset();
 void   FundedSave();
 void   FundedLoad();
@@ -842,10 +887,15 @@ void ArmSide(int dir)
       return;
    }
 
+   // E-098: the size is split across the books so that running three legs is a
+   // DIVERSIFICATION of the same risk, not three times the risk. Three charts at
+   // full size is not the measured result - it is 3x leverage, and it would blow
+   // the daily limit the shared guards are there to protect.
+   double lots = BookLots();
    bool ok = (dir > 0)
-      ? trade.BuyLimit(InpEntryLots, lvl, _Symbol, stop, tgt,
+      ? trade.BuyLimit(lots, lvl, _Symbol, stop, tgt,
                        ORDER_TIME_GTC, 0, "LQS toptick")
-      : trade.SellLimit(InpEntryLots, lvl, _Symbol, stop, tgt,
+      : trade.SellLimit(lots, lvl, _Symbol, stop, tgt,
                         ORDER_TIME_GTC, 0, "LQS toptick");
    if(ok)
    {
@@ -857,7 +907,7 @@ void ArmSide(int dir)
       // as valid as it was before, and measured 0.166R against 0.249R.
       Log(StringFormat("ARMED %s LIMIT %.2f at %.*f   stop %.*f (%.*f risk)   "
                        "target %.*f   source %s",
-                       dir > 0 ? "BUY" : "SELL", InpEntryLots, dg, lvl,
+                       dir > 0 ? "BUY" : "SELL", lots, dg, lvl,
                        dg, stop, dg, risk, dg, tgt, src));
    }
    else
@@ -1047,6 +1097,39 @@ void ApplyFirmPreset()
                   g_firmName, g_fConsist * 100.0);
 }
 
+// E-098. One entry's size, divided across the books this EA is running on and
+// clamped to what the broker will actually accept. At InpBooks = 1 this returns
+// InpEntryLots unchanged, so the single-chart default is untouched.
+//
+// The floor matters here and is not cosmetic: E-081 measured 0.01 lots as
+// GBP 0.787 per point and it CANNOT go smaller. So on a small account three
+// books do NOT divide the risk into thirds - each leg is still 0.01 - and the
+// account carries 3x the exposure the measurement assumed. That is why this
+// warns rather than silently rounding up.
+double BookLots()
+{
+   double want = InpEntryLots / MathMax(1, InpBooks);
+   double mn = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double st = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   if(st > 0.0) want = MathFloor(want / st + 0.5) * st;
+   if(mn > 0.0 && want < mn)
+   {
+      static bool warned = false;
+      if(!warned)
+      {
+         warned = true;
+         PrintFormat("WARNING: %d books at %.2f lots wants %.4f, but the broker "
+                     "minimum is %.2f. Each leg will trade %.2f, so the account "
+                     "carries %.1fx the risk the E-098 measurement assumed. "
+                     "Either reduce InpBooks or fund a larger account (E-096).",
+                     InpBooks, InpEntryLots, InpEntryLots / MathMax(1, InpBooks),
+                     mn, mn, mn * InpBooks / InpEntryLots);
+      }
+      want = mn;
+   }
+   return want;
+}
+
 // The day boundary at the FIRM'S clock, not the broker's midnight. FTMO rolls
 // at 00:00 CE(S)T, FundedNext at GMT+3, Maven at 00:00 UTC. Using the wrong one
 // puts the daily-loss baseline hours away from where the firm puts it, and the
@@ -1064,9 +1147,22 @@ int FundedDayStamp()
 // allowance the firm had not given it. Terminal globals persist across all
 // three. Same defect class as the SuperTrend recursion, same fix: never keep
 // something in memory that the account depends on.
+// THE STATE KEY. With InpSharedGuards the key carries the ACCOUNT, not the
+// magic, so every instance on this account reads and writes the SAME day
+// baseline, peak and floor. Without it three charts would each believe they had
+// the full daily allowance and the account would breach at three times the limit
+// the EA thought it was enforcing - the most expensive possible way to find out
+// that a per-instance guard is not an account guard.
+string FundedKey()
+{
+   if(InpSharedGuards)
+      return "JVS_FUNDED_" + (string)AccountInfoInteger(ACCOUNT_LOGIN) + "_";
+   return "LQS_" + (string)InpMagic + "_";
+}
+
 void FundedSave()
 {
-   string k = "LQS_" + (string)InpMagic + "_";
+   string k = FundedKey();
    GlobalVariableSet(k + "dayStamp", (double)g_dayStamp);
    GlobalVariableSet(k + "dayStartEq", g_dayStartEq);
    GlobalVariableSet(k + "peakEq", g_peakEq);
@@ -1077,7 +1173,7 @@ void FundedSave()
 
 void FundedLoad()
 {
-   string k = "LQS_" + (string)InpMagic + "_";
+   string k = FundedKey();
    if(!GlobalVariableCheck(k + "dayStamp")) return;
    g_dayStamp    = (int)GlobalVariableGet(k + "dayStamp");
    g_dayStartEq  = GlobalVariableGet(k + "dayStartEq");

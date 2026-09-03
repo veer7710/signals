@@ -3897,3 +3897,118 @@ survives at 1.5 points of stop would put £40 back at ~2.9% per trade. E-087 is
 the warning: a level-based *stop* measured −0.36R because the entry IS at the
 level. Nothing tested so far holds an edge at that stop width, and M1 data is
 what would settle it.
+
+## E-097 / E-098 — THE LEVER NOBODY PULLED. Diversification, not a better signal.
+
+**Verdict: same-symbol concurrency REJECTED. Cross-leg diversification
+SUPPORTED, and it is the largest free improvement found in this project.**
+
+Veer, on the last four sessions of work: *"again not deep enough ... where can
+we make moreeeee"*. He is right. Those sessions audited existing edge and
+narrowed it. This one went looking for more, and found it in a place nobody had
+looked because a single line of code has hidden it since the repository began.
+
+### E-097 — every experiment here has been SINGLE-POSITION
+`engine.backtest` has `one_at_a_time=True`. `smc_combine.simulate` drops any
+overlapping candidate with `if i <= busy: continue`. Both EAs ship
+`InpMaxPositions = 1`. **Every signal arriving while a trade was open has been
+silently discarded for the entire life of the project — 96 experiments.**
+
+That matters because E-093 measured frequency as the dominant lever for a funded
+account (2 trades/day passes 24%, 10/day passes 99.9%) while E-089 showed
+frequency bought by dropping timeframe costs R. Concurrency is frequency at the
+same timeframe, same stop, same cost/stop — so it cannot cost R.
+
+Compared at scale-free return-per-drawdown (R/DD):
+```
+GOLD 1h    slots     1      2      3      4      6     10   unlim
+           R/DD  25.45  18.37  17.22  15.68  13.26  11.15    7.69
+GOLD 15m   R/DD   7.86   8.62   8.14   7.61   8.83   7.50    3.71
+```
+**Same-symbol concurrency does not pay.** But the diagnosis is the valuable part:
+the trades it adds are **not bad trades, they are better than average** — at ten
+slots the added trades score **+0.68R against the base's +0.36R** on 1h and
+**+0.96R against +0.39R** on 15m. They arrive during strong moves, which is
+exactly when signals cluster. What kills the ratio is that they are *the same
+trade twice*: opened together, they lose together.
+
+### E-098 — so remove the correlation and keep the frequency
+Every symbol in `data/` on E-080's toptick+FVG+OB stack, one slot each, 1h:
+```
+symbol       n    mean R      t   total R  maxDD R   R/DD
+GOLD       517    +0.414   6.27   +214.15     8.42  25.45
+US500      528    +0.324   4.96   +170.85    11.20  15.25
+EURUSD     686    -0.099  -1.77    -68.05    81.67  -0.83
+GBPUSD     671    -0.028  -0.48    -18.52    43.66  -0.42
+```
+**E-069's rejection of FX holds on the newer stack too** — measured, not assumed.
+**US500 was never in any EA and stands on its own.**
+
+Daily-return correlations are essentially zero:
+`GOLD 1h / GOLD 15m −0.01 · GOLD 1h / US500 1h +0.03 · GOLD 15m / US500 1h −0.07`
+
+```
+book                              trades  total R  maxDD R   R/DD   /day
+GOLD 1h alone (what exists)          517  +214.15     8.42  25.45   1.25
++ GOLD 15m                           687  +144.58     5.07  28.53   1.59
++ US500 1h                          1045  +192.50     5.38  35.79   1.89
+GOLD 1h + US500 1h + GOLD 15m       1215  +153.33     3.98  38.54   2.17
+all four legs (adds US500 15m)      1382  +119.15     3.83  31.11   2.47
+```
+
+**+51% return per unit of drawdown, +74% trades, and LESS THAN HALF the maximum
+drawdown (8.42R → 3.98R)** — with no new edge, no lower timeframe and no extra
+risk. This is E-093's frequency lever bought without paying E-089's cost.
+
+### Attacking the US500 leg before believing it
+```
+n=528, mean +0.324R, t=4.96, total +170.8R, maxDD 11.20R
+walk-forward, 6 blocks: 6 of 6 positive, and IMPROVING
+   block means  +0.213  +0.255  +0.212  +0.397  +0.379  +0.486
+control, 16 seeds, matched geometry and costs: -0.3857R, se of mean 0.1025
+edge over control: +0.709R  =  6.9 control standard errors
+```
+**Stronger on the control test than GOLD's own 6.4 sd.** It clears the project's
+multiple-comparison bar (t ≈ 3.65 at ~780 configurations).
+
+US500 15m is **excluded**: it fails standalone (t=0.86) and drags the book from
+38.54 to 31.11. Legs are screened on their own merit, not on portfolio fit —
+otherwise the selection is circular.
+
+### And it removes the funded problem entirely
+```
+                                GOLD alone          GOLD + US500
+                            no consist / with    no consist / with
+FTMO 2-step                     100.0% / 100.0%     100.0% / 100.0%
+FundingPips 2 Step Pro           99.4% /  95.9%     100.0% / 100.0%
+E8 performance (funded)          99.9% /  95.3%     100.0% / 100.0%
+Alpha Capital Alpha One          96.6% /  96.6%     100.0% / 100.0%
+```
+
+**This also CORRECTS E-093 as I reported it.** Those 23-30% pass rates were the
+**SuperTrend** distribution (+0.181R, 101 trades). The liquidity stack — which is
+the designated funded EA under D-007 — already passes 95-100% on gold alone. The
+consistency crisis was a SuperTrend problem, not a funded-account problem, and I
+should have separated the two when I first reported it.
+
+### AGAINST THE MANDATE, AND SAID SO
+**D-010 settles XAUUSD only, M1/M5/M15, with H1 as context that is never
+traded.** This result is mostly H1 and one leg is an index. It is brought as
+evidence, not slipped in: **the EA defaults are unchanged and single-leg.**
+Overruling D-010 is Veer's call.
+
+### Shipped — LiquiditySniper build 3.20
+- `InpBooks` divides one entry's size across the legs, so three charts are a
+  DIVERSIFICATION of the same risk rather than 3× the leverage.
+- **`InpSharedGuards` keys the funded state on the ACCOUNT, not the magic.**
+  Without it three instances each believe they hold the full daily allowance and
+  the account breaches at three times the limit the EA thinks it is enforcing.
+- `BookLots()` **warns rather than silently rounding**: E-081's 0.01-lot floor
+  means a small account cannot actually divide into thirds, so three books on
+  £100 carry 3× the measured risk. The EA now says so by name.
+
+### What would make this bigger
+More uncorrelated legs. US500 works and FX does not, which points at **indices
+as a class** — NAS100, US30, GER40. Each one that passes standalone adds
+frequency at near-zero correlation. **That is a concrete export request, and it
+is the cheapest remaining upside in the project.**
