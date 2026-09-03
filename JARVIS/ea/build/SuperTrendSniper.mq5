@@ -57,13 +57,13 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.14"
+#property version   "2.15"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
 // in the message that shipped it, MetaEditor has not rebuilt: open the file and
 // press F7. An .ex5 does not update itself when the .mq5 changes.
-#define STS_BUILD "2026-09-02 / 2.14 / give-back arms at 3R, not 0.6R"
+#define STS_BUILD "2026-09-03 / 2.15 / R decides, money is only a floor"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -527,8 +527,30 @@ input bool   InpUseGiveBack   = true;   // leave when profit is handed back
 // Honest note: on POINTS the trail alone still wins (+4622 vs +4313). Keeping
 // the give-back armed high is a deliberate concession to a preference Veer has
 // stated three times in writing, and it now costs about 7% rather than 65%.
-input double InpGbArmR        = 3.0;    // arm once the trade is this good in R...
-input double InpGbArmMoney    = 2.00;   // ...OR this much money, whichever first
+// ARMING IS IN R, AND THE MONEY IS A FLOOR - NOT AN ALTERNATIVE TRIGGER.
+//
+// This used to read "arm at 3R OR at GBP2.00, whichever comes first", and that
+// OR was a bug that made the money term decide everything, on every timeframe:
+//
+//   GOLD 1h, one R is about 28 points, so GBP2.00 at 0.03 lots is 0.03R
+//   M1,      one R is about 1.3 points, so GBP2.00 is about 0.65R
+//
+// Either way the money branch fires long before 3R, so the R setting never did
+// anything and the give-back armed almost immediately - which E-075 measured
+// as the worst end of the dial (+0.136R armed at 1R against +0.368R at 3R).
+// P91b then found the same disease in the trail: sweeping its arming level
+// from 0R to 2R changed NOTHING, because the trade was always already closed.
+//
+// A money threshold does not survive a change of timeframe OR of lot size, and
+// this EA has to run on M1 at 0.01 lots after being measured on 1h at 0.03.
+// So R decides, and the money is only a floor that stops the rule acting on
+// noise. Scale-free, in the R grid, both timeframes agree:
+//
+//   GOLD 1h   lock 1.0R + give-back 3.0R   +0.152R  +1112 points
+//   GOLD 15m  lock 1.0R + give-back 2.0R   +0.175R   +463 points
+//             lock 1.0R + give-back 3.0R   +0.174R   +439 points
+input double InpGbArmR        = 3.0;    // arm once the trade is this good in R
+input double InpGbArmMoney    = 0.30;   // AND at least this much money (noise floor)
 input double InpGbBase        = 0.20;   // give back this much of the peak
 input double InpGbTier2R      = 1.5;    // once the peak passes this...
 input double InpGbTier2       = 0.16;   // ...allow only this much give-back
@@ -585,7 +607,8 @@ input bool   InpBasketCloseAll= true;   // false = only close the losers, keep t
 // "often it can hit that sl and then just run off" himself. The threshold is
 // therefore set ABOVE noise: a trade has to have made real money before its
 // downside is removed, and a trade still finding its feet is left alone.
-input double InpLockPosMoney  = 0.50;   // lock a POSITION out of loss once this green
+input double InpLockPosR      = 1.0;    // lock a POSITION out of loss once this good in R
+input double InpLockPosMoney  = 0.30;   // AND at least this much money (noise floor)
 input double InpLockAtMoney   = 1.20;   // once the BASKET is this green, stops go to break-even+
 input bool   InpLockOnlyOnce  = true;   // and are never pulled back afterwards
 // STACKING IS OFF AND SHOULD STAY OFF.
@@ -2621,13 +2644,15 @@ void ProtectPositions()
 
       double peakR = g_tkPeakPrev[ti] / g_tkRisk[ti];   // NOT this tick's high
 
-      // ARM ON MONEY OR ON R, WHICHEVER COMES FIRST. On 0.01 lots a trade can
-      // be worth real money long before it is worth 1 R, and those are exactly
-      // the trades that were being handed back with the rule never firing.
-      bool armedR     = (peakR >= InpGbArmR);
-      bool armedMoney = (InpGbArmMoney > 0.0
-                      && g_tkPeakMoney[ti] >= InpGbArmMoney);
-      if(!armedR && !armedMoney) continue;
+      // R DECIDES, MONEY IS A FLOOR. This was an OR, and the OR was a bug:
+      // GBP2.00 at 0.03 lots is 0.03R on 1h and 0.65R on M1, so the money
+      // branch always fired first and InpGbArmR never did anything at all.
+      // P91b proved it by sweeping the TRAIL's arming level from 0R to 2R and
+      // getting byte-identical results - the trade was always already shut.
+      // R is scale-free; money is not, and this EA is measured on 1h at 0.03
+      // lots and run on M1 at 0.01.
+      if(peakR < InpGbArmR) continue;
+      if(InpGbArmMoney > 0.0 && g_tkPeakMoney[ti] < InpGbArmMoney) continue;
       if(InpGbMinMoney > 0.0 && g_tkPeakMoney[ti] < InpGbMinMoney) continue;
 
       long   type = PositionGetInteger(POSITION_TYPE);
@@ -2713,7 +2738,7 @@ void ProtectPositions()
 // fires, the worst that trade can do is zero.
 void LockPositions()
 {
-   if(InpLockPosMoney <= 0.0) return;
+   if(InpLockPosR <= 0.0 && InpLockPosMoney <= 0.0) return;
 
    double cost = RoundTripCost();
    double mn   = MinStopDist();
@@ -2728,7 +2753,15 @@ void LockPositions()
 
       int ti = TrackFind(tk);
       if(ti < 0) continue;
-      if(g_tkPeakMoney[ti] < InpLockPosMoney) continue;   // never got green enough
+      // R first, money only as a noise floor - same fix as the give-back.
+      // GBP0.50 at 0.03 lots is 0.21 points, which is INSIDE the spread: the
+      // lock was arming before the trade had covered its own cost. In the
+      // scale-free grid a 1.0R lock with a 3R give-back is the best pair on
+      // both timeframes tested.
+      if(g_tkRisk[ti] <= 0.0) continue;
+      double peakRl = g_tkPeakPx[ti] / g_tkRisk[ti];
+      if(InpLockPosR > 0.0 && peakRl < InpLockPosR) continue;
+      if(InpLockPosMoney > 0.0 && g_tkPeakMoney[ti] < InpLockPosMoney) continue;
 
       long   type = PositionGetInteger(POSITION_TYPE);
       int    dir  = (type == POSITION_TYPE_BUY) ? 1 : -1;

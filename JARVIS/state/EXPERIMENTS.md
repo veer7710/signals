@@ -3043,3 +3043,71 @@ now printed on its own chart. Every previous quote of +0.487R for this EA was
 the backtest's number, not its own.
 
 Files: `JARVIS/research/account.py`, `ea_parity.py`.
+
+---
+
+## E-083 / P91b — The SuperTrend EA was holding trades for 0.9 bars. A money threshold was doing it.
+
+E-082 asked whether the liquidity EA trades what was measured. This asks it of
+the EA on Veer's **live** account, and the answer is worse.
+
+E-075 compared clean single exit policies. The EA runs **six at once** — hard
+3R target, 3-ATR trail, give-back, per-position lock, 25-bar stall, 50-bar cap —
+and whichever fires first wins. That is not any of the policies measured, and
+the interaction is not guessable.
+
+### What it was actually doing, GOLD 1h
+**Average hold: 0.9 bars.** 93.1% "win rate" — and the wins were **+0.013R
+scratches**. Of 451 trades: 53% closed as `locked` for +66 points total, 42%
+as `giveback` for +1383, 4% as `stop` for −466.
+
+The cause: **`InpLockPosMoney = £0.50`. At 0.03 lots that is 0.21 points of
+gold — less than half the 0.46 spread.** The lock armed before the trade had
+covered its own cost and flattened it to breakeven on the next wobble.
+
+### Three things I expected and got wrong
+- **"The tight lock must be bad."** No: at £0.50 it makes +1263 points; loosen
+  it to £8 and that falls to +263; turn it off and it is **−147**. The lock's
+  job is not to make money, it is to neutralise losers. The win rate is cosmetic.
+- **"A 0.21-point stop will be destroyed by slippage."** No: at 0.50 points of
+  extra adverse slippage on *every* stop-type exit, points fall only 1263 → 1040.
+  The scratches contribute ~5% of the total either way.
+- **"The trail arming level is the difference from E-075."** No: sweeping it
+  from 0R to 2R gave **byte-identical results**. The trail never fires at all.
+
+### The actual bug
+`armed = (peakR >= InpGbArmR) OR (peakMoney >= InpGbArmMoney)`.
+**The OR made the money term decide everything, on every timeframe:**
+
+| | one R | £2.00 is |
+|---|---|---|
+| GOLD 1h @ 0.03 lots | ~28 points | **0.03R** |
+| M1 @ 0.03 lots | ~1.3 points | **0.65R** |
+
+Either way the money branch fires long before 3R, so `InpGbArmR` never did
+anything — and E-075 had already measured early arming as the worst end of the
+dial (+0.136R at 1R against +0.368R at 3R). Same disease in the lock.
+
+**A money threshold does not survive a change of timeframe or of lot size**, and
+this EA is measured on 1h at 0.03 lots and will run on M1 at 0.01.
+
+### The fix, and the scale-free grid it came from
+R decides; money is only a floor that stops a rule acting on noise. Both
+timeframes agree on the same cell:
+
+| | lock 1.0R + give-back 3.0R |
+|---|---|
+| GOLD 1h | n=332, 51.8% win, **+0.152R**, PF 1.33, t=+1.97, +1112 points |
+| GOLD 15m | n=115, 54.8% win, **+0.174R**, PF 1.40, t=+1.34, +439 points |
+
+**Hold time goes from 0.9 bars to 16.6.** It is a strategy again rather than a
+scratch machine.
+
+### Honest verdict
+**UNPROVEN.** t=+1.97 on 1h and +1.34 on 15m — neither clears 2.0. And the
+money-denominated config still books more raw points on 1h (+1263 vs +1112),
+because on 1h it accidentally behaves like an ultra-tight scalper. That is not
+an argument for keeping it: it would behave completely differently on M1, and
+the R version means the same thing on every timeframe. That is the whole point.
+
+File: `JARVIS/research/st_parity.py`.
