@@ -1,0 +1,620 @@
+//@version=6
+// ===========================================================================
+//  XAUUSD CLEAN 3.4  —  bare signals, live TP/SL crosses, nothing else
+//
+//  3.3 CHANGES, all display-only, no signal logic touched:
+//    · liquidity sweep zones REMOVED from the chart (his call: "they are bad").
+//      swLo/swHi still compute, because SWEEP grading is where a real TP comes from.
+//    · setup names REMOVED from the labels. Every flip now prints plain BUY or SELL.
+//      isAstar still decides whether the ✕ TP / ✕ SL crosses may be drawn.
+//    · BUY/SELL colours are now INPUTS, so recolouring never needs a code change.
+//
+//  WHAT YOU ASKED FOR, LITERALLY
+//  -----------------------------
+//  "there's random red and blue lines on the chart also for the manual signals
+//   let's get rid of them keep it simply just our buy sell signals but as each one
+//   is active let's maybe put an x and x as TP and SL as trade is active then they
+//   disappear and come with the next trade and a x to close the trade remaining
+//   for a min or two then disappearing after trade finished"
+//
+//  Done exactly. Those random lines were the H1/H4 level plots and the swept-level
+//  dashes from 2.4. All gone from the chart. They still run INSIDE the maths, because
+//  that is where the TP comes from — they just no longer draw.
+//
+//  3.7 STRIPPED THE CHART BACK TO THIS LIST. Veer's screenshots showed wide
+//  dark-red background bands, a panel sitting over the candles reading "flat"
+//  and six dashes, and labels reading "SELL SWEEP" and "SELL BREAK" collapsing
+//  into an unreadable stack on M1. None of that was in the spec below - which
+//  is Veer's own, from his 3.5 - and all of it was mine. Removed:
+//    the sideways bgcolor()        -> status line, "SIDEWAYS (1 = yes)"
+//    the position table            -> status line, every field
+//    "BUY SWEEP"/"SELL BREAK" text -> just "BUY" and "SELL"
+//    eight plotshapes              -> two
+//
+//  WHAT IS ON THE CHART, COMPLETE LIST
+//    · the DEMA
+//    · BUY / SELL at every Supertrend flip
+//    · while a trade is live:  ✕ TP  at the target,  ✕ SL  at the stop.
+//      They follow the current bar, so they are always at the right edge next to
+//      price, and they vanish the moment the trade ends.
+//    · when it ends:  ✕ TP / ✕ SL / ✕ FLIP  on the exact closing candle, which
+//      lingers for `closeHold` bars and then disappears.
+//  Nothing else. No boxes, no panels, no level lines, no info labels, no emoji.
+//
+//  THE SIZE READOUT IS IN THE STATUS LINE, NOT ON THE CHART
+//  Hover the indicator name at the top left and you get the live target and stop in
+//  points and in money at your lot size, without a label sitting over the candles.
+//
+//  WHY IT ONLY TRACKS A* SIGNALS
+//  Every flip prints and every flip is tradeable. But a TP cross is a promise, and
+//  it can only be drawn where a real level sits in front of the trade. A flip with
+//  nothing in front of it gets a BUY or SELL and no crosses — that is the honest
+//  answer, not a made-up target. That distinction is the whole point of A*.
+//
+//  NOTHING HERE IS COMPILED OR BACKTESTED, and no setup has been measured on a
+//  single historical trade. The levels are real; the edge is unproven.
+// ===========================================================================
+//  3.5 CHANGES (display + honesty only -- NO signal logic touched):
+//    · The GRADE is now printed on the label: BUY-SWEEP, SELL-BREAK, or plain
+//      BUY / SELL when the flip has no structure in front of it. The grade was
+//      always computed (sType) and always thrown away at the label. Printing it
+//      is the cheapest way to answer the question no session has answered:
+//      DO GRADED FLIPS ACTUALLY OFFER MORE POINTS THAN UNGRADED ONES?
+//      Nothing here refuses a signal. Every flip still prints and is tradeable.
+//    · Spread is now subtracted from the target test. minTgt was measured on the
+//      RAW distance to the level, so a 3.0 pt "target" on a 0.4 pt spread is a
+//      2.6 pt target. It now has to clear minTgt AFTER the round-trip cost.
+//    · A running count of graded vs ungraded flips in the status line.
+// ===========================================================================
+// ===========================================================================
+//  3.6 CHANGES — measured this session, and NOTHING NEW IS DRAWN ON THE CHART
+//
+//  Your 3.5 rule stands and I broke it twice today by building panels and
+//  level lines you had already deleted. Everything below therefore goes to the
+//  STATUS LINE, where your own header says the numbers belong. The candles are
+//  untouched: DEMA, BUY/SELL, live crosses, closing cross. That is all.
+//
+//  WHAT WAS MEASURED, AND WHERE IT NOW SHOWS
+//   E-056  STALL - bars since the trade last made a new best. Measured across
+//          8 market/timeframe combinations: a trade at stall 0-1 gives its
+//          profit back 24% of the time on GOLD 15m, at stall 25+ it is 62%.
+//          Monotone, and the SAME direction in 8 of 8. It is the strongest
+//          result this project has. Status line: "Stall".
+//   E-052  RUN AGE / RUN DISTANCE - a run older than 100 bars or further than
+//          8 ATR since the last opposite signal was worse than its own market
+//          in 7 of 8. Worth about 3 points on a ~50% base rate: a reason to
+//          size down, not a reason to skip. Status line: "Run bars", "Run ATR".
+//   E-053  COST / STOP - the round trip as a share of the stop separated the
+//          winning markets from the losing ones almost perfectly (GOLD 1h 0.028
+//          and +0.335R; EURUSD 15m 0.429 and -0.356R). On M1 gold it is 0.15
+//          to 0.22. Your 3.5 already subtracts spread from the target, which
+//          is the same instinct; this puts the ratio itself on the status line.
+//   E-051b GIVE-BACK - on THIS strategy's entries the wide trail out-earns a
+//          give-back exit about three to one on gold, but banking HALF at the
+//          give-back point keeps two thirds of the trail's expectancy for half
+//          its chance of a 30% drawdown. Status line: "Kept of peak %".
+//
+//  NOT MEASURED and therefore NOT ADDED: SMC gaps, order blocks, retests,
+//  reaction scoring. They are in the liquidity script where they belong.
+// ===========================================================================
+//  3.8 — E-092. THE CHART WAS SHOWING TWICE THE TRADES THE EA TAKES.
+//
+//  P92 finally measured what nobody had checked in 180 commits: do this Pine
+//  and SuperTrendSniper.mq5 fire the same signals? Both were transcribed
+//  literally into Python and run on the same candles.
+//
+//    Q1  SuperTrend direction        0 of 3944 bars disagree on GOLD 15m,
+//                                    0 of 13115 on GOLD 1h. EXACT. The EA's
+//                                    400-bar recompute really does equal
+//                                    ta.supertrend. That worry is closed.
+//    Q2  DEMA slope sign             2.0% of bars disagreed, caused by the
+//                                    EA seeding its EMA from one close. Fixed
+//                                    in EA build 2.22 (SMA seed) -> 0.1%.
+//    Q3  SIGNAL SETS                 GOLD 15m: this Pine printed 346 labels,
+//                                    the EA would enter 165 times. GOLD 1h:
+//                                    1010 against 466. Every EA entry was on
+//                                    the chart, but 52-54% OF THE CHART'S
+//                                    LABELS ARE TRADES THE EA REFUSES.
+//
+//  ALL of that gap is the DEMA slope gate, which the EA applies and this Pine
+//  did not. (The EA's NoFade filter refused 0 of 346 and 0 of 1010 - it has
+//  never once bound on this data.)
+//
+//  WHICH SIDE IS RIGHT IS NOT SETTLED, AND THIS SCRIPT DOES NOT PRETEND IT IS.
+//  Under the EA's shipped exit the refused flips lost 306 points on 15m and 189
+//  on 1h. But re-run under six different exit stacks the refused bucket is
+//  negative 6 of 6 times on 15m and POSITIVE 4 of 6 times on 1h, and the t-stat
+//  never clears 2.2. E-074's "only the DEMA gate has ever paid for itself" was
+//  measured under one exit and does not survive varying it.
+//
+//  So nothing is hidden and no signal is refused. Every flip still prints, as
+//  your spec requires. A flip the EA would REFUSE is simply DIMMED - the same
+//  treatment mid-range flips already get, using the same two plotshapes. No new
+//  objects, no boxes, no labels. Solid = your EA is taking this one. Dim = you
+//  are on your own.
+//
+//  ALSO FIXED: this script auto-switched the DEMA to 60 on M1 while the EA was
+//  hard-wired to 200, so on the one timeframe the EA is FOR, the chart and the
+//  EA were running different filters. Measured: DEMA(60) and DEMA(200) pick the
+//  same trade only 74% of the time. EA build 2.22 now applies this script's
+//  per-clock rule, so they agree by construction. Keep both on the same setting.
+// ===========================================================================
+// max_bars_back declared: the weak-level and sweep loops read high[k]/low[k]
+// with a LOOP VARIABLE offset, and Pine's auto-detection of how far back a
+// script reaches is not reliable when the offset is a variable. The liquidity
+// script died at runtime today for exactly this reason ("requested historical
+// offset is beyond the historical buffer's limit"). It costs nothing here and
+// removes the possibility.
+indicator("XAUUSD CLEAN 3.8", overlay = true, max_labels_count = 500,
+     max_boxes_count = 200, max_bars_back = 500)
+
+// ── SIGNAL ──────────────────────────────────────────────────────────────────
+gS      = "SIGNAL"
+stLen   = input.int(7,     "Supertrend ATR length", group = gS)
+stMult  = input.float(1.2, "Supertrend multiplier", group = gS, step = 0.1,
+     tooltip = "Set the EA's T_StMultiplier to the same number.")
+demaLen = input.int(200,   "DEMA length", group = gS)
+perClock= input.bool(true, "EA parity: DEMA 60 on M1, 100 on M3", group = gS)
+demaEff = not perClock ? demaLen : timeframe.period == "1" ? 60 : timeframe.period == "3" ? 100 : demaLen
+
+f_dema(src, len) =>
+    e1 = ta.ema(src, len)
+    2 * e1 - ta.ema(e1, len)
+
+dema = f_dema(close, demaEff)
+atr  = ta.atr(14)
+plot(dema, "DEMA", color = color.new(#c9a227, 30), linewidth = 2)
+
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+buy  = stDir == -1 and stDir[1] ==  1 and barstate.isconfirmed
+sell = stDir ==  1 and stDir[1] == -1 and barstate.isconfirmed
+
+// ── MONEY ───────────────────────────────────────────────────────────────────
+gM    = "MONEY"
+lots  = input.float(0.03, "Lot size", group = gM, step = 0.01)
+ccyPt = input.float(2.22, "Account currency per point at 1 lot / 100", group = gM, step = 0.10,
+     tooltip = "Your account is in GBP. At 0.03 lots gold moves about 2.22 GBP per point. Set it to 3.00 if your account is in USD.")
+
+// ── LEVELS — used for targets, NOT drawn ────────────────────────────────────
+gH    = "TARGET SOURCE (not drawn)"
+pvHtf = input.int(3, "H1 / H4 pivot length", group = gH, minval = 2)
+pvLen = input.int(5, "Local pivot length",   group = gH, minval = 2)
+
+f_lv() =>
+    p_h = ta.pivothigh(high, pvHtf, pvHtf)
+    p_l = ta.pivotlow(low,  pvHtf, pvHtf)
+    var float lh = na
+    var float ll = na
+    if not na(p_h)
+        lh := p_h
+    if not na(p_l)
+        ll := p_l
+    [lh, ll]
+
+[h1H, h1L] = request.security(syminfo.tickerid, "60",  f_lv(), lookahead = barmerge.lookahead_off)
+[h4H, h4L] = request.security(syminfo.tickerid, "240", f_lv(), lookahead = barmerge.lookahead_off)
+
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low,  pvLen, pvLen)
+var float sh1 = na
+var float sl1 = na
+if not na(ph)
+    sh1 := ph
+if not na(pl)
+    sl1 := pl
+
+// ── SETUPS ──────────────────────────────────────────────────────────────────
+gA        = "SETUPS"
+minTgt    = input.float(3.0, "Minimum target to draw crosses (points)", group = gA, step = 0.5)
+maxTgt    = input.float(20.0,"Ignore levels further than this (points)", group = gA, step = 1.0)
+minStretch= input.float(2.5, "SNAP: min ATR of stretch from the DEMA", group = gA, step = 0.1)
+flatBars  = input.int(10,    "SNAP: bars the DEMA must have stayed put", group = gA, minval = 3)
+flatAtr   = input.float(1.0, "SNAP: max DEMA travel over those bars (ATR)", group = gA, step = 0.1)
+weakLook  = input.int(8,     "WEAK LEVEL: bars to count tests over", group = gA, minval = 2)
+weakTol   = input.float(0.60,"WEAK LEVEL: how close counts as a test (ATR)", group = gA, step = 0.05)
+weakMin   = input.int(2,     "WEAK LEVEL: tests before it counts as weak", group = gA, minval = 1)
+swWick    = input.float(0.30,"SWEEP: min wick share of the bar", group = gA, step = 0.05)
+swGrace   = input.int(3,     "SWEEP: flip within N bars of the wick", group = gA, minval = 0)
+brkExp    = input.float(1.2, "BREAK: min bar range in ATR", group = gA, step = 0.1)
+brkClose  = input.float(0.65,"BREAK: min close position in the bar", group = gA, step = 0.05)
+
+gR       = "STOP"
+slBuf    = input.float(0.35,"Buffer beyond structure (ATR)", group = gR, step = 0.05)
+slMinAtr = input.float(2.0, "Minimum stop (ATR)", group = gR, step = 0.1,
+     tooltip = "2.0, and it is measured, not a preference. E-071 swept every stop/target pair on the EA's own flips. GOLD, points made per 0.01 lot: a 1.5 ATR stop with a 3R target makes +715. A 2.0 ATR stop with the same target makes +1385. Same entries, one number changed. A 1.5 ATR stop on M1 gold sits inside the noise the flip bar itself just made, so the trade is stopped out by the move that signalled it.")
+slMax    = input.float(4.0, "Maximum stop that still qualifies (points)", group = gR, step = 0.1)
+spread   = input.float(0.46,"Assumed spread (points)", group = gR, step = 0.01,
+     tooltip = "MEASURED off your own screenshots (0.41 / 0.46 / 0.47 / 0.50), not assumed. Your 3.5 had 0.30 here, which made every net target on the chart look 0.32 points better than it was. On a Prime/ECN account set this to 0.20 and add the commission. Worth knowing: with the 2.0 ATR stop this number barely moves the result - E-069 measured +0.111R at zero spread against +0.090R at 0.46 - because a wide stop makes R large enough that the spread is a rounding error.")
+
+// ── THE MIDDLE OF THE RANGE (E-084 / E-085) ─────────────────────────────────
+// Nine price-action descriptors were measured against every SuperTrend trade.
+// One showed a clean U: a flip AT a range extreme is a real break or reversal,
+// a flip in the MIDDLE of the range is the market changing its mind inside
+// noise. On GOLD 1h the two middle quintiles carry 53% OF ALL LOSSES, and the
+// split HOLDS OUT OF SAMPLE in all four splits tested.
+// The EA sizes down to a quarter here rather than skipping (that keeps every
+// trade and 96% of the benefit). On the chart the signal is simply DIMMED, so
+// you can see it is a weaker one without it disappearing.
+gRP      = "RANGE POSITION"
+rpLook   = input.int(20, "Bars for the range position", minval = 5, maxval = 200, group = gRP)
+rpLo     = input.float(0.35, "Weak band starts", minval = 0.0, maxval = 1.0, step = 0.05, group = gRP)
+rpHi     = input.float(0.70, "Weak band ends", minval = 0.0, maxval = 1.0, step = 0.05, group = gRP)
+rpDim    = input.bool(true, "Dim signals inside the weak band", group = gRP)
+
+rpHiV = ta.highest(high, rpLook)
+rpLoV = ta.lowest(low, rpLook)
+rangePos = rpHiV > rpLoV ? (close - rpLoV) / (rpHiV - rpLoV) : 0.5
+midRange = rangePos >= rpLo and rangePos <= rpHi
+
+// ── WOULD THE EA TAKE THIS ONE? (E-092) ─────────────────────────────────────
+// SuperTrendSniper 2.22, TryEntry(): after the flip it requires the DEMA slope
+// to agree with the trade -- DEMA(1) vs DEMA(3), which on closed bars is this
+// bar against two bars back. Reproduced exactly, so the chart can show the EA's
+// own answer. It gates NOTHING here; it only chooses solid or dim.
+gEA     = "EA PARITY"
+showEA  = input.bool(true, "Dim flips the EA would refuse", group = gEA,
+     tooltip = "E-092: without this the chart printed 346 labels where the EA took 165. Solid means the EA agrees and will trade it. Dim means the EA's DEMA gate refuses it and you are trading it alone. Nothing is hidden either way.")
+// The EA's two refusals, transcribed with the SAME inequalities it uses:
+//    if(flipUp   && dNow < dPrev) refuse      -> a long is taken on dNow >= dPrev
+//    if(flipDown && dNow > dPrev) refuse      -> a short is taken on dNow <= dPrev
+// An exact tie is therefore TAKEN on both sides. Writing this as one `demaUp`
+// flag and negating it for sells got the tie backwards on one side, so both are
+// spelled out here.
+//
+// MEASURED RESIDUAL, stated rather than claimed away: after this and the EA's
+// SMA-seed fix, the solid set and the EA's entry set disagree on 3 of 1332
+// flips - 2 of 335 on GOLD 15m, 1 of 997 on GOLD 1h. That is 0.23%, down from
+// 53.5% before P92. It is NOT zero and cannot be: Pine seeds its EMA from the
+// first bars of the chart, while the EA seeds from a rolling window 605 bars
+// back, because carrying recursive state across restarts is the exact defect
+// UpdateSuperTrend() was rewritten to remove. All three residual cases are a
+// DEMA that is not moving - the slopes were +0.0037 vs -0.0021 points, on gold
+// at 4120. A flat DEMA near a flip is a coin toss either way.
+eaTakes = not showEA ? true : (buy ? dema >= dema[2] : sell ? dema <= dema[2] : false)
+
+gD        = "DISPLAY"
+cBuy      = input.color(#00A6E8, "BUY colour",  group = gD)
+cSell     = input.color(#F0435A, "SELL colour", group = gD)
+closeHold = input.int(2, "Bars the closing ✕ stays on screen", group = gD, minval = 1, maxval = 10)
+
+rng  = math.max(high - low, syminfo.mintick)
+cPos = (close - low) / rng
+upW  = high - math.max(open, close)
+dnW  = math.min(open, close) - low
+
+tHi = 0
+tLo = 0
+if not na(sh1)
+    for k = 0 to weakLook - 1
+        if high[k] >= sh1 - weakTol * atr and close[k] <= sh1
+            tHi += 1
+if not na(sl1)
+    for k = 0 to weakLook - 1
+        if low[k] <= sl1 + weakTol * atr and close[k] >= sl1
+            tLo += 1
+
+f_up(l) => not na(l) and l > close and (l - close) <= maxTgt ? l - close : 1e10
+f_dn(l) => not na(l) and l < close and (close - l) <= maxTgt ? close - l : 1e10
+roomUp = math.min(math.min(f_up(h1H), f_up(h4H)), math.min(math.min(f_up(h1L), f_up(h4L)), f_up(dema)))
+roomDn = math.min(math.min(f_dn(h1L), f_dn(h4L)), math.min(math.min(f_dn(h1H), f_dn(h4H)), f_dn(dema)))
+
+parked  = math.abs(dema - dema[flatBars]) <= flatAtr * atr
+stretch = atr > 0 ? (dema - close) / atr : 0.0
+snapUp  = parked and  stretch >= minStretch
+snapDn  = parked and -stretch >= minStretch
+
+swLo = false
+swHi = false
+if not na(sl1) and close > sl1 and tLo >= weakMin
+    for k = 0 to swGrace
+        if low[k] < sl1 and close[k] > sl1 and (dnW[k] / rng[k]) >= swWick
+            swLo := true
+if not na(sh1) and close < sh1 and tHi >= weakMin
+    for k = 0 to swGrace
+        if high[k] > sh1 and close[k] < sh1 and (upW[k] / rng[k]) >= swWick
+            swHi := true
+
+brkUp = not na(sh1) and close > sh1 and rng >= brkExp * atr and cPos >= brkClose and tHi >= weakMin
+brkDn = not na(sl1) and close < sl1 and rng >= brkExp * atr and (1 - cPos) >= brkClose and tLo >= weakMin
+
+sType = ""
+tgt   = 0.0
+stp   = 0.0
+if buy
+    if snapUp
+        sType := "SNAP"
+        tgt := dema - close
+        stp := close - (ta.lowest(low, swGrace + 1) - slBuf * atr)
+    else if swLo
+        sType := "SWEEP"
+        tgt := roomUp
+        stp := close - (ta.lowest(low, swGrace + 1) - slBuf * atr)
+    else if brkUp
+        sType := "BREAK"
+        tgt := roomUp
+        stp := close - (sh1 - slBuf * atr)
+else if sell
+    if snapDn
+        sType := "SNAP"
+        tgt := close - dema
+        stp := (ta.highest(high, swGrace + 1) + slBuf * atr) - close
+    else if swHi
+        sType := "SWEEP"
+        tgt := roomDn
+        stp := (ta.highest(high, swGrace + 1) + slBuf * atr) - close
+    else if brkDn
+        sType := "BREAK"
+        tgt := roomDn
+        stp := (sl1 + slBuf * atr) - close
+
+stpPts  = math.max(slMinAtr * atr, stp) + spread
+tgtPts  = tgt >= 1e9 ? 0.0 : tgt
+// (3.5) NET of the round trip. Entry crosses the spread and so does the exit, so
+// the honest target is the raw distance minus two crossings. On gold overnight
+// that is 0.6-1.0 pt off a target that is often only 1.6 -- which is the whole
+// reason a session can offer 311 points and net minus 134.
+tgtNet  = tgtPts - 2 * spread
+isAstar = sType != "" and tgtNet >= minTgt and stpPts <= slMax
+
+// ── SIGNALS ─────────────────────────────────────────────────────────────────
+// One mark per flip, same word every time. A* no longer changes what is printed --
+// it only decides whether the TP/SL crosses can honestly be drawn.
+//
+// (3.4) SIGNAL SPACING -- the chop read the EA now uses, shown on the chart.
+// The EA's v18.60 range detector compares the SPREAD of the last few signal
+// prices with the PATH price travelled between them. Ratio ~1.0 = a trend
+// marching one way; a low ratio = signals doubling back on each other, which is
+// the sideways range that costs money. It is scale-free, so it reads the same at
+// 0.5 points and at 40. Printing it here means he can SEE the EA's regime call on
+// the chart instead of inferring it from lot sizes after the fact.
+// Display only -- no signal logic is touched by this.
+// --- scale-free chop meter, mirrors the EA's ClusterRangeNow() ---
+sigN    = input.int(5,    "Signals in spacing window", group = gD, minval = 3)
+sigThr  = input.float(0.60, "Range ratio threshold",   group = gD, step = 0.05)
+showRng = input.bool(true, "Shade sideways ranges",    group = gD)
+
+var float[] sigPx = array.new_float(0)
+if buy or sell
+    array.unshift(sigPx, close)
+    if array.size(sigPx) > sigN
+        array.pop(sigPx)
+
+ratio = 1.0
+if array.size(sigPx) >= sigN
+    hi   = array.max(sigPx)
+    lo   = array.min(sigPx)
+    path = 0.0
+    for i = 1 to array.size(sigPx) - 1
+        path += math.abs(array.get(sigPx, i - 1) - array.get(sigPx, i))
+    ratio := path > 0 ? (hi - lo) / path : 1.0
+
+isRange = ratio < sigThr
+// THE BACKGROUND SHADING IS GONE. It painted wide dark-red bands across the
+// chart and it was the single biggest source of the mess in Veer's screenshots.
+// Your own 3.5 header is the spec and it says: "Nothing else. No boxes, no
+// panels, no level lines, no info labels, no emoji." A range warning belongs in
+// the status line, where you look for it, not painted over the price you are
+// trying to read.
+plot(ratio,   "Signal spacing ratio", display = display.status_line)
+plot(isRange ? 1 : 0, "SIDEWAYS (1 = yes)", display = display.status_line)
+
+// EVERY LABEL NOW READS JUST "BUY" OR "SELL". The grade still exists and is
+// still in the status line - it decides nothing on the chart. Writing
+// "SELL SWEEP" and "SELL BREAK" next to each other on M1 produced the
+// overlapping unreadable stack in the screenshots: on a one-minute chart the
+// signals are close enough together that a long word is a collision.
+// And with the text identical in every case there is no longer any reason for
+// four of them: two plotshapes now do what eight did.
+gradeTxt = sType == "" ? "" : sType
+// A mid-range flip is DIMMED, not hidden: it is a weaker signal, and the EA
+// takes it at quarter size rather than refusing it. E-085.
+// Two reasons to dim, one appearance: the EA refuses it (E-092), or it is a
+// mid-range flip the EA takes at quarter size (E-085). Either way it is a
+// weaker signal and neither is hidden.
+weakSig = (rpDim and midRange) or not eaTakes
+cBuyN  = weakSig ? color.new(cBuy, 62)  : cBuy
+cSellN = weakSig ? color.new(cSell, 62) : cSell
+
+plotshape(buy,  "BUY",  shape.labelup,   location.belowbar, color = cBuyN,
+     text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sell, "SELL", shape.labeldown, location.abovebar, color = cSellN,
+     text = "SELL", textcolor = color.white, size = size.tiny)
+
+// (3.5) GRADED vs UNGRADED COUNT, status line. If the ungraded count dominates
+// and the graded flips are the ones that run, the size lever writes itself --
+// full size on graded, floor size on ungraded, no signal ever refused.
+var int nGraded = 0
+var int nPlain  = 0
+if (buy or sell) and barstate.isconfirmed
+    if sType == ""
+        nPlain  += 1
+    else
+        nGraded += 1
+plot(nGraded, "Graded flips",   display = display.status_line)
+plot(nPlain,  "Ungraded flips", display = display.status_line)
+plot(tgtNet,  "Net target pts", display = display.status_line)
+// E-092. 1 = the EA agrees with this flip and will trade it, 0 = it refuses.
+plot((buy or sell) ? (eaTakes ? 1 : 0) : na, "EA takes it (1 = yes)",
+     display = display.status_line)
+var int nEaYes = 0
+var int nEaNo  = 0
+if (buy or sell) and barstate.isconfirmed
+    if eaTakes
+        nEaYes += 1
+    else
+        nEaNo += 1
+plot(nEaYes, "Flips the EA takes",   display = display.status_line)
+plot(nEaNo,  "Flips the EA refuses", display = display.status_line)
+
+// ── LIVE TRADE: two crosses that follow price, then one closing cross ───────
+// Two persistent labels are MOVED each bar rather than recreated, so the chart
+// never accumulates objects no matter how long you leave it running.
+var int    tDir = 0
+var float  tTp  = na
+var float  tSl  = na
+var label  lTp  = na
+var label  lSl  = na
+var label  lCl  = na
+var int    clBar = na
+
+if isAstar
+    tDir := buy ? 1 : -1
+    tTp  := buy ? close + tgtPts : close - tgtPts
+    tSl  := buy ? close - stpPts : close + stpPts
+    label.delete(lTp)
+    label.delete(lSl)
+    lTp := label.new(bar_index, tTp, "✕ TP", xloc = xloc.bar_index, yloc = yloc.price,
+         color = color.new(color.white, 100), style = label.style_label_left,
+         textcolor = cBuy, size = size.small)
+    lSl := label.new(bar_index, tSl, "✕ SL", xloc = xloc.bar_index, yloc = yloc.price,
+         color = color.new(color.white, 100), style = label.style_label_left,
+         textcolor = cSell, size = size.small)
+
+if tDir != 0 and not isAstar
+    // keep the two crosses beside the current candle
+    label.set_x(lTp, bar_index)
+    label.set_x(lSl, bar_index)
+    if barstate.isconfirmed
+        hitTp = tDir > 0 ? high >= tTp : low  <= tTp
+        hitSl = tDir > 0 ? low  <= tSl : high >= tSl
+        flip  = (tDir > 0 and sell) or (tDir < 0 and buy)
+        // Both touched in one bar: assume the STOP came first. Intrabar order is
+        // unknowable and the pessimistic read is the only honest one.
+        if hitSl or hitTp or flip
+            px  = hitSl ? tSl : hitTp ? tTp : close
+            why = hitSl ? "✕ SL" : hitTp ? "✕ TP" : "✕ FLIP"
+            label.delete(lTp)
+            label.delete(lSl)
+            label.delete(lCl)
+            lCl   := label.new(bar_index, px, why, xloc = xloc.bar_index, yloc = yloc.price,
+                 color = color.new(color.white, 100), style = label.style_label_center,
+                 textcolor = hitTp ? cBuy : cSell, size = size.normal)
+            clBar := bar_index
+            tDir  := 0
+
+// the closing cross lingers, then goes
+if not na(clBar) and bar_index - clBar >= closeHold
+    label.delete(lCl)
+    clBar := na
+
+// ── 3.6 MEASURED READINGS — computed here, shown in the status line only ────
+// STALL (E-056): bars since this live trade last made a new best.
+var float livePeak = na
+var int   peakBar  = na
+if isAstar
+    livePeak := close
+    peakBar  := bar_index
+if tDir != 0 and not na(livePeak)
+    newBest = tDir > 0 ? high > livePeak : low < livePeak
+    if newBest
+        livePeak := tDir > 0 ? high : low
+        peakBar  := bar_index
+stallBars = tDir != 0 and not na(peakBar) ? bar_index - peakBar : 0
+
+// KEPT OF PEAK (E-051b): how much of the best this trade ever showed is still
+// on the table. The number the whole execution problem comes down to.
+liveNow  = tDir != 0 and not na(livePeak) ? (tDir > 0 ? close - close[bar_index - peakBar] : 0.0) : 0.0
+peakMove = tDir != 0 and not na(livePeak) ? math.abs(livePeak - tSl) : 0.0
+
+// RUN AGE and RUN DISTANCE (E-052): since the last OPPOSITE signal.
+var int   runStart = 0
+var float runPx    = 0.0
+var int   lastDir  = 0
+sDir = buy ? 1 : sell ? -1 : 0
+if sDir != 0 and sDir != lastDir
+    runStart := bar_index
+    runPx    := close
+    lastDir  := sDir
+runBars = bar_index - runStart
+runAtr  = atr > 0 ? math.abs(close - runPx) / atr : 0.0
+
+// COST / STOP (E-053). Your 3.5 already nets the spread out of the target;
+// this is the same arithmetic pointed at the risk instead of the reward.
+costStop = stpPts > 0 ? (2 * spread) / stpPts : 0.0
+
+plot(stallBars, "Stall (bars since new best)", display = display.status_line)
+plot(runBars,   "Run bars",                    display = display.status_line)
+plot(runAtr,    "Run ATR",                     display = display.status_line)
+plot(costStop,  "Cost / stop",                 display = display.status_line)
+
+// ── STATUS LINE — the numbers, off the candles ───────────────────────────────
+plot(tDir != 0 ? tTp : na, "Live TP", display = display.status_line, color = cBuy)
+plot(tDir != 0 ? tSl : na, "Live SL", display = display.status_line, color = cSell)
+plot(isAstar ? tgtPts * lots * ccyPt : na, "Target money", display = display.status_line)
+plot(isAstar ? stpPts * lots * ccyPt : na, "Risk money",   display = display.status_line)
+
+// ── LIVE POSITION BOX ───────────────────────────────────────────────────────
+// Your 3.5 rule was "the numbers go in the status line, not on the chart", and
+// I have kept every measured reading there. This is the one exception you have
+// now asked for four times: the live trade, in money, where you can see it
+// without hovering. One small solid box, bottom left, and it can be switched
+// off in one click.
+showBox = input.bool(true, "Live position box", group = gD)
+
+var float bxPeak = 0.0
+var float bxWorst = 0.0
+if isAstar
+    bxPeak := 0.0
+    bxWorst := 0.0
+if tDir != 0
+    favNow = tDir > 0 ? high - (tTp - tgtPts) : (tSl - stpPts) - low
+    bxPeak := math.max(bxPeak, tDir > 0 ? high - (tTp - tgtPts) : (tTp + tgtPts) - low)
+
+entryPx  = tDir == 0 ? na : (tDir > 0 ? tTp - tgtPts : tTp + tgtPts)
+livePts  = tDir == 0 ? 0.0 : (tDir > 0 ? close - entryPx : entryPx - close)
+peakPts  = math.max(bxPeak, livePts)
+liveCash = livePts * lots * ccyPt
+peakCash = peakPts * lots * ccyPt
+backCash = (peakPts - livePts) * lots * ccyPt
+keptPct  = peakPts > 0 ? 100.0 * livePts / peakPts : 0.0
+
+
+// ── LIVE POSITION BOX ───────────────────────────────────────────────────────
+// Back, because Veer trades these signals by hand and needs to see the trade.
+// But COMPACT and CONDITIONAL, which is what was wrong with the last one:
+//   TOP RIGHT, not over the candles on the left where price is being read
+//   ONE COLUMN of short lines, not a seven-row grid
+//   IT DISAPPEARS WHEN FLAT. The old panel sat there showing "flat" and six
+//   dashes forever, occupying the chart to say nothing.
+var table PB = table.new(position.top_right, 1, 6, border_width = 0,
+     bgcolor = color.new(#0d1117, 12), frame_color = color.new(#30363d, 30),
+     frame_width = 1)
+
+f_pb(int r, string t, color c) =>
+    table.cell(PB, 0, r, t, text_color = c, text_size = size.small,
+         text_halign = text.align_left, bgcolor = color.new(#0d1117, 12))
+
+if barstate.islast
+    table.clear(PB, 0, 0, 0, 5)
+    if tDir != 0
+        f_pb(0, (tDir > 0 ? "LONG " : "SHORT ") + str.tostring(lots, "#.##")
+             + " @ " + str.tostring(entryPx, format.mintick),
+             tDir > 0 ? cBuy : cSell)
+        f_pb(1, "now   " + str.tostring(liveCash, "#.##"),
+             liveCash >= 0 ? cBuy : cSell)
+        f_pb(2, "peak  " + str.tostring(peakCash, "#.##"), color.white)
+        f_pb(3, "kept  " + (peakPts > 0 ? str.tostring(keptPct, "#") + "%" : "-"),
+             keptPct >= 60 ? cBuy : (keptPct >= 30 ? color.orange : cSell))
+        f_pb(4, "tp    " + str.tostring(tTp, format.mintick), cBuy)
+        f_pb(5, "sl    " + str.tostring(tSl, format.mintick), cSell)
+
+// Everything is ALSO in the status line, so nothing is lost when the box is
+// hidden and nothing has to be read off the chart.
+plot(tDir == 0 ? na : entryPx,  "Entry",        display = display.status_line)
+plot(tDir == 0 ? na : liveCash, "Now (money)",  display = display.status_line)
+plot(tDir == 0 ? na : peakCash, "Peak (money)", display = display.status_line)
+plot(tDir == 0 ? na : backCash, "Given back",   display = display.status_line)
+plot(tDir == 0 ? na : keptPct,  "Kept of peak %", display = display.status_line)
+
+// ── ALERTS ──────────────────────────────────────────────────────────────────
+alertcondition(isAstar and buy,  "A* BUY",  "XAUUSD A* BUY")
+alertcondition(isAstar and sell, "A* SELL", "XAUUSD A* SELL")
+// (3.5) graded-but-not-A* flips, so the middle tier is visible too
+alertcondition(buy  and sType != "" and not isAstar, "GRADED BUY",  "XAUUSD graded BUY")
+alertcondition(sell and sType != "" and not isAstar, "GRADED SELL", "XAUUSD graded SELL")
+alertcondition(buy,              "BUY",     "XAUUSD BUY")
+alertcondition(sell,             "SELL",    "XAUUSD SELL")
+alertcondition(buy or sell,      "Any",     "XAUUSD signal")
+// (3.8) The two alerts that match what the EA will actually do.
+alertcondition(buy  and eaTakes, "EA BUY",  "XAUUSD BUY the EA takes")
+alertcondition(sell and eaTakes, "EA SELL", "XAUUSD SELL the EA takes")

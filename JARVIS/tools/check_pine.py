@@ -154,9 +154,13 @@ def check_var_offset(src):
     loopvars = set(re.findall(r'^\s*for\s+([a-zA-Z_]\w*)\s*=', "\n".join(src), re.M))
     if not loopvars:
         return []
-    # the indicator() call can sit well past line 40 when the header carries a
-    # long comment block, which this file's does
-    has_mbb = any("max_bars_back" in l for l in src[:120])
+    # `max_bars_back` is an argument to indicator()/strategy(), and that call can
+    # sit anywhere - these files carry long change-log headers and 3.8's pushed
+    # it past line 120, which made this check fire on a file that declares it.
+    # So look at the CODE, not at a fixed window: strip comments and search the
+    # whole script. A commented-out mention no longer counts either.
+    code_only = "\n".join(strip_comment(l) for l in src)
+    has_mbb = "max_bars_back" in code_only
     if has_mbb:
         return []
     out = []

@@ -3437,3 +3437,132 @@ guaranteed compile error that no check in `check_mq5.py` looked for. Added
 check 6b (bare statement outside any function), regression-tested.
 
 File: `JARVIS/research/brake.py`.
+
+## E-092 / P92 — PINE vs EA PARITY. The chart was showing twice the trades the EA takes.
+
+**Verdict: the 52% signal gap is CONFIRMED (it is a count). Which side is right
+is UNPROVEN. Two defects found and fixed; one filter found to be dead.**
+
+Nobody had ever checked whether `XAUUSD_CLEAN_3_7.pine` and
+`SuperTrendSniper.mq5` fire the same signals, in 180 commits. The whole project
+rests on that assumption: Veer reads the chart, the EA trades it, the backtest
+measures it. Both files were transcribed literally into Python
+(`JARVIS/research/pine_ea_parity.py`) and run on the same candles.
+
+### Q1 — SuperTrend indicator parity: EXACT
+The suspicion was that the EA's `UpdateSuperTrend()`, which recomputes the whole
+recursion from a 400-bar warm-up on every closed bar and seeds with
+`dir = (c > basicUpper) ? -1 : 1`, could not equal `ta.supertrend`, which seeds
+once at the start of the chart with `direction := 1`.
+
+```
+GOLD 15m: 0 of 3944 bars disagree (0.000%)
+GOLD 1h:  0 of 13115 bars disagree (0.000%)
+```
+
+**It equals it exactly.** SuperTrend forgets its seed well inside 400 bars. This
+closes a whole suspected defect class and the EA's design here is vindicated.
+
+### Q2 — DEMA slope sign: a real 2% error, now fixed
+Pine's `ta.ema` seeds from an SMA of the first n values; the EA seeded `e1` from
+a SINGLE close. At len=200 the 600-bar warm-up leaves ~1.8% of that error in the
+number, and the gate reads a two-bar SLOPE, so a small level error flips the SIGN.
+
+```
+GOLD 15m: single-close seed  70/3544 (1.975%)  ->  SMA seed   5/3544 (0.141%)
+GOLD 1h:  single-close seed 264/12715 (2.076%) ->  SMA seed  12/12715 (0.094%)
+```
+
+Shipped in build 2.22.
+
+### Q3 — THE SIGNAL SETS. This is the one that matters.
+The Pine's `buy` is `stDir == -1 and stDir[1] == 1` and **that is the entire
+condition — there is no DEMA gate on the Pine signal.** The EA requires the flip
+AND the DEMA slope AND NoFade AND the risk gates.
+
+```
+                            GOLD 15m    GOLD 1h
+Pine prints                      346       1010
+EA would enter                   165        466
+same bar and side                165        466
+PINE ONLY (chart says trade,     181        544
+           the EA will not)    52.3%      53.9%   of the chart's labels
+EA ONLY (EA trades, chart silent)  0          0
+```
+
+**Veer hand-trades this chart. He has been taking roughly twice the signals his
+own EA takes, and no file said so.** Every EA entry is on the chart, so the Pine
+is a strict superset; all of the gap is the DEMA gate.
+
+### Is the gate right? NOT ESTABLISHED — and this killed my own headline.
+Under the EA's shipped exit the refused flips looked clearly bad (15m −306.1
+points, 1h −188.9). Re-run under six exit stacks:
+
+```
+points banked by the flips the DEMA gate REFUSES (negative = the gate pays)
+exit stack                                    GOLD 15m    GOLD 1h   t(1h)
+2.0 ATR stop, 3 ATR trail, 50 bars (ships)      -306.1     -188.9    2.01
+2.0 ATR stop, no trail, 50 bars                 -373.9    +1341.0    1.55
+2.0 ATR stop, 3R target, 50 bars                -498.0     +868.2    1.66
+1.5 ATR stop, 3 ATR trail, 50 bars              -213.2      +31.6    1.78
+3.0 ATR stop, 3 ATR trail, 50 bars              -288.2     -544.7    2.16
+2.0 ATR stop, 3 ATR trail, 20 bars              -181.3     +545.7    1.42
+```
+
+15m: negative 6 of 6. 1h: **POSITIVE 4 of 6.** No t-stat clears 2.2. The shipped
+exit happens to be the one where 1h looks worst for the refused bucket — quoting
+only that would have been a selection effect on my own part.
+
+**E-074's "only the DEMA gate has ever paid for itself" was measured under one
+exit stack and does not survive varying it.** Downgrade it. The gate is not
+established, so the Pine does not adopt it as a filter — it only shows it.
+
+### A filter that has never once bound
+`InpNoFadeAtr = 3.0` refused **0 of 346** and **0 of 1010** flips. It has never
+fired on any data in this repository. Kept (its cost is also zero) but it is
+providing false comfort and is untested on M1, where ATR dynamics differ.
+
+### THE LIVE-ACCOUNT DEFECT: the two files used different DEMA lengths
+Pine 3.7: `demaEff = perClock ? (M1 ? 60 : M3 ? 100 : demaLen) : demaLen`, and
+`perClock` defaults TRUE. EA 2.21: `InpDemaLen = 200`, flat, with the comment
+"(60 on M1, 100 on M3)" — an instruction to the human the code never enforced.
+**So on M1, the only timeframe the EA is for, the chart gated with DEMA(60) and
+the EA gated with DEMA(200).** Measured on the same flip set:
+
+```
+DEMA len   takes   points   pts/trade   agrees with 200 on
+GOLD 15m  200        165    384.5       2.330            -
+           60        164    176.6       1.077   121/164 (74%)
+          100        158    362.8       2.296   135/158 (85%)
+GOLD 1h   200        466   2911.8       6.248            -
+           60        472   3188.2       6.755   349/472 (74%)
+          100        460   2493.4       5.420   386/460 (84%)
+```
+
+**A quarter of every signal differed.** Which length is better is not settled and
+is not the point: 15m preferred 200, 1h preferred 60. Build 2.22 adopts the
+Pine's per-clock rule so they agree by construction.
+
+### After the fixes
+```
+                       GOLD 15m   GOLD 1h
+flips on the chart          335       997
+Pine 3.8 draws SOLID        158       472
+EA 2.22 would enter         158       473
+disagreements                 2         1
+```
+**3 of 1332 flips, 0.23%, down from 53.5%.** Not zero and it cannot be: Pine
+seeds from the chart's first bars, the EA from a rolling window 605 bars back,
+because carrying recursive state across restarts is the defect
+`UpdateSuperTrend()` was rewritten to remove. All three residuals are a DEMA that
+is not moving (+0.0037 vs −0.0021 points, on gold at 4120).
+
+### Shipped
+- **EA build 2.22** — per-clock DEMA length matching the Pine; SMA-seeded DEMA.
+- **Pine 3.8** — a flip the EA would refuse is DIMMED, using the existing
+  mid-range dim and the same two plotshapes. No new chart objects: the clean-chart
+  spec is untouched. Nothing is hidden and nothing is refused. Solid = the EA is
+  taking it. Dim = you are on your own. Plus two `EA BUY`/`EA SELL` alerts.
+- **`check_pine.py`** — `max_bars_back` detection scanned only the first 120
+  lines and false-fired on 3.8, whose header is longer. Now scans the whole
+  script with comments stripped.

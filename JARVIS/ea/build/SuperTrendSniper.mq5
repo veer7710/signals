@@ -57,7 +57,7 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.21"
+#property version   "2.22"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
@@ -152,7 +152,8 @@ CTrade trade;
 input group "=== SIGNAL (identical to your Pine) ==="
 input int    InpStAtrLen      = 7;      // SuperTrend ATR length
 input double InpStMult        = 1.2;    // SuperTrend multiplier
-input int    InpDemaLen       = 200;    // DEMA length (60 on M1, 100 on M3)
+input int    InpDemaLen       = 200;    // DEMA length used when per-clock is OFF
+input bool   InpDemaPerClock  = true;   // E-092: 60 on M1, 100 on M3, else the above
 input bool   InpUseDemaFilter = true;   // only trade with the DEMA slope
 
 input group "=== EXIT (measured on THIS strategy, out-of-sample) ==="
@@ -1103,13 +1104,50 @@ double ADXValue(int shift)
    return buf[0];
 }
 
+// THE DEMA LENGTH ACTUALLY USED. E-092, and this was a live-account defect.
+//
+// Pine 3.7 computes  demaEff = perClock ? (M1 ? 60 : M3 ? 100 : demaLen) : demaLen
+// and `perClock` defaults TRUE. This EA had InpDemaLen = 200 flat, with the
+// comment "(60 on M1, 100 on M3)" -- an instruction to the human that the code
+// never enforced. So on M1, the ONLY timeframe this EA is for, the chart gated
+// with DEMA(60) and the EA gated with DEMA(200) unless Veer edited the input by
+// hand, and neither file said so.
+//
+// MEASURED (E-092d): on the same flip set, DEMA(60) and DEMA(200) select the
+// same trade only 74% of the time on GOLD 15m (121 of 164) and 74% on GOLD 1h
+// (349 of 472). A quarter of every signal differed. Which length is BETTER is
+// not settled and is not the point -- 15m preferred 200 (+384.5 pts vs +176.6)
+// and 1h preferred 60 (+3188.2 vs +2911.8), which is exactly the inconsistency
+// that means neither is chosen on evidence. The point is that the two files
+// must gate identically, and the Pine's rule is the documented intent.
+int DemaEffLen()
+{
+   if(!InpDemaPerClock) return InpDemaLen;
+   if(_Period == PERIOD_M1) return 60;
+   if(_Period == PERIOD_M3) return 100;
+   return InpDemaLen;
+}
+
 // DEMA = 2*EMA(n) - EMA(EMA(n)), computed from closes. Matches the Pine.
+//
+// SEEDING (E-092, Q2). This used to seed e1 from a SINGLE close len*3+shift+5
+// bars back. Pine's ta.ema seeds from the SMA of the first n values, and the
+// difference does not wash out: at len=200 the decay over the 600-bar warm-up
+// leaves about 1.8% of the seeding error in the number, and the gate reads a
+// two-bar SLOPE, so a small level error flips the SIGN near a turn. Measured
+// against a literal Pine transcription: the single-close seed disagreed on the
+// slope sign for 70 of 3544 bars on GOLD 15m (1.975%) and 264 of 12715 on GOLD
+// 1h (2.076%). Seeding from the SMA, as Pine does, takes that to 5 of 3544
+// (0.141%) and 12 of 12715 (0.094%). It costs one extra loop over `len` bars.
 double DEMA(int len, int shift)
 {
    int need = len * 3 + shift + 5;
-   if(Bars(_Symbol, _Period) < need) return 0.0;
+   if(Bars(_Symbol, _Period) < need + len) return 0.0;
    double k = 2.0 / (len + 1.0);
-   double e1 = iClose(_Symbol, _Period, need - 1);
+   // SMA seed over the `len` bars ending at the oldest bar of the warm-up.
+   double sum = 0.0;
+   for(int j = 0; j < len; j++) sum += iClose(_Symbol, _Period, need - 1 + j);
+   double e1 = sum / len;
    double e2 = e1;
    for(int i = need - 2; i >= shift; i--)
    {
@@ -1476,8 +1514,9 @@ void TryEntry()
 
    if(InpUseDemaFilter)
    {
-      double dNow  = DEMA(InpDemaLen, 1);
-      double dPrev = DEMA(InpDemaLen, 3);
+      int    dLen  = DemaEffLen();
+      double dNow  = DEMA(dLen, 1);
+      double dPrev = DEMA(dLen, 3);
       if(dNow <= 0 || dPrev <= 0) return;
       if(flipUp   && dNow < dPrev) { SkipLog(sdir, "DEMA falling"); return; }
       if(flipDown && dNow > dPrev) { SkipLog(sdir, "DEMA rising");  return; }
@@ -3727,7 +3766,7 @@ int OnInit()
                       - SymbolInfoDouble(_Symbol, SYMBOL_BID), InpMinStopCostX);
    PrintFormat("SuperTrendSniper started. ST(%d, %.2f) DEMA(%d) risk %.2f%% "
                "target %.1fR  BE=%s trail=%s",
-               InpStAtrLen, InpStMult, InpDemaLen, InpRiskPct, InpTargetR,
+               InpStAtrLen, InpStMult, DemaEffLen(), InpRiskPct, InpTargetR,
                InpUseBreakEven ? "ON" : "off", InpUseTrail ? "ON" : "off");
    if(InpUseBreakEven)
       Print("WARNING: break-even is ON. It measured as the worst exit rule on "
@@ -3801,7 +3840,7 @@ void OnTick()
    if(bt == g_lastBarTime) return;
    g_lastBarTime = bt;
 
-   if(Bars(_Symbol, _Period) < InpDemaLen * 3 + 10) return;
+   if(Bars(_Symbol, _Period) < DemaEffLen() * 4 + 10) return;
 
    UpdateSuperTrend();
    BuildLevels();          // before anything asks where the levels are
