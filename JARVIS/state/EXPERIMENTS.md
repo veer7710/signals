@@ -4013,7 +4013,7 @@ as a class** — NAS100, US30, GER40. Each one that passes standalone adds
 frequency at near-zero correlation. **That is a concrete export request, and it
 is the cheapest remaining upside in the project.**
 
-## E-099 — RED TEAM: SuperTrendSniper 2.22 on a live £60 account. BLOCKED.
+## E-103 — RED TEAM: SuperTrendSniper 2.22 on a live £60 account. BLOCKED.
 
 **Verdict: the live-£60 deployment is REJECTED. Not on the edge — on three of
 the EA's own defaults being arithmetically incompatible with the 0.01-lot
@@ -4101,7 +4101,7 @@ Files: `JARVIS/state/RED_TEAM_LIVE.md`, `JARVIS/research/rt_live_mae.py`,
 
 ---
 
-## E-099 / E-100 — THE MISSED MOVES. His complaint is real, and it is the EXIT.
+## E-104 / E-105 — THE MISSED MOVES. His complaint is real, and it is the EXIT.
 
 Veer: *"the liquidity ea and pine are not good enough the signals don't use
 levels wisely they miss clear clear moves that could've made us 40-200 pounds
@@ -4391,3 +4391,89 @@ The reviewer confirmed: stops are **real broker stops** attached at OrderSend �
 the worst unattended failure mode is absent. **No look-ahead** anywhere.
 Guard state survives restart, recompile and parameter change. Magics do not
 collide.
+
+## E-106 — THE LIQUIDITY EXIT. E-090 was applied to one EA and never the other.
+
+**Verdict: PROMISING on 1h and the largest single improvement found. NOT SHIPPED
+— the 15m control undercuts it and that has to be explained first.**
+
+### The complaint, and the half of it that reframes everything
+Veer: *"the signals don't use levels wisely they miss clear clear moves that
+could've made us 40-200 pounds easily"*.
+
+E-104/E-105 confirmed the first half: the shipped stack catches **16.3%** of
+40-point moves on GOLD 1h, leaving **84.7% of available points** in legs never
+traded. But the shipped geometry is:
+
+```
+0.60 ATR stop = 7.4 pts   |   2R target = 14.8 pts
+at 0.01 lots (E-081, £0.787/pt):  A WIN IS £11.64. That is the ceiling.
+£40 needs 51 points captured. £200 needs 254.
+```
+
+**Even at a 100% catch rate this geometry cannot pay him £40.** The complaint is
+an EXIT problem wearing an entry problem's clothes.
+
+### And the cause is our own unapplied finding
+**E-090:** *"A fixed 2R/3R target was destroying the tail. Uncapped, the top 5%
+of trades carry 68% of gross profit."* Applied to `SuperTrendSniper`
+(`InpTargetR = 0`). **Never applied to `LiquiditySniper`**, which still ships
+`InpTargetR = 2.0` and writes a hard broker TP at line 856 — and `smc.py` sets
+`TGT_R = 2.0`, so the entire liquidity result set is measured on a geometry
+E-090 had already rejected on the other strategy.
+
+This is exactly the failure Veer named last session: *"you never apply any
+improvements"*.
+
+### Same entries, four exits
+```
+GOLD 1h                          n   mean R   points  avg win £  best £  >£40  >£100
+fixed 2R target (SHIPS)        517   +0.414   2078.7      13.48   76.34     7      0
+uncapped + 3 ATR trail         394   -0.048   -171.0      26.27  383.84    15      3
+uncapped + trail + give-back   514   +0.989   4413.5      14.04  110.64    19      1
+uncapped + trail, arm 4R       447   +0.383   1552.6      30.92  115.18    28      2
+
+GOLD 15m
+fixed 2R target (SHIPS)        170   +0.441    398.1       7.81   18.59     0      0
+uncapped + 3 ATR trail         129   +0.661    415.7      28.89  111.47     8      1
+uncapped + trail + give-back   170   +1.212    984.9       8.39   51.18     2      0
+uncapped + trail, arm 4R       156   +0.461    330.4      18.60   51.18     1      0
+```
+
+**Uncapped + give-back doubles the money on both timeframes** (2079→4414 on 1h,
+398→985 on 15m). And the shipped exit produces **zero £40+ wins on 15m**.
+
+### THE TENSION HE HAS TO RESOLVE, because it is his preference, not a fact
+Most money and most £40+ trades are **different settings**:
+- **give-back armed at 1R** → 4413 points, but the average win is £14.04.
+- **armed at 4R** → **28 wins over £40** and an average win of £30.92, but only
+  1553 points.
+E-074 again: the bigger per-trade number banks less. His own stated preference
+(*"happy if maximum potential profit is not taken as long as we actually took a
+solid amount"*) points at the 1R arming; his *"£40-200 per trade"* points at 4R.
+
+### Attacking it — and the control that stops this shipping today
+```
+GOLD 1h   fixed 2R          n=517  +0.414R  t= 6.27  wf 6/6  OOS +0.447/+0.381
+          uncapped+giveback n=514  +0.989R  t=12.43  wf 6/6  OOS +1.004/+0.975
+          control (same entries, RANDOM hold, 16 seeds): -0.0215R, se 0.0288
+          edge over control: +1.011R = 35.1 control standard errors
+
+GOLD 15m  uncapped+giveback n=170  +1.212R  t= 6.80  wf 6/6  OOS +1.370/+1.053
+          control (same entries, RANDOM hold, 16 seeds): +1.0382R, se 0.0885
+          edge over control: +0.173R = 2.0 control standard errors
+```
+
+**On 15m a RANDOM HOLD with the same entries scores +1.038R.** That is the whole
+result, reproduced by an exit with no logic in it. Either the entries carry
+everything on 15m and the exit is decoration, or the control is capturing the
+sample's own drift (gold rose 7% across the 70-day 15m window, and a long random
+hold banks drift). **Until that asymmetry is explained, +35.1 control se on 1h is
+a number to distrust, not to trade** — no honest effect is 35 standard errors.
+
+### Not shipped, and what would settle it
+`LiquiditySniper` keeps `InpTargetR = 2.0` for now. What would settle it: a
+control that resamples entries as well as holds, a long/short split of both the
+result and the control, and the same test on US500 1h, which shares no drift with
+gold. If it survives those, it is the largest improvement available in this
+project and it doubles the strategy's output.
