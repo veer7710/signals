@@ -4477,3 +4477,74 @@ control that resamples entries as well as holds, a long/short split of both the
 result and the control, and the same test on US500 1h, which shares no drift with
 gold. If it survives those, it is the largest improvement available in this
 project and it doubles the strategy's output.
+
+## E-107 — THE STACK, and the number I refused to send
+
+**Verdict: PROMISING and unbroken after eight separate attacks. Shipped OFF by
+default pending a look-ahead audit of the entry generator.**
+
+Four findings had survived their own attacks and **none had ever been run with
+the others** — they were reported separately and left sitting apart, which is why
+the shipped EA contained none of them.
+
+```
+configuration                                     n   mean R   points  maxDD   R/DD  avg win £
+GOLD 1h, as it ships (2R target, arm_life 60)   517   +0.414   2078.7   8.42  25.45      13.48
++ E-106 uncapped exit + give-back                534   +0.991   4697.5   5.07 104.36      14.20
++ E-105 arm_life 60 -> 600                       622   +1.069   5807.2   4.27 155.59      14.26
++ E-098 US500 as a second book                  1247   +1.046   5750.9   3.91 166.60      14.98
+```
+
+### I stopped here rather than reporting it
+A 166:1 return-to-drawdown and 66,000% over the sample is not a trading result.
+What followed is the whole point of the exercise.
+
+**First suspicion — intrabar optimism.** At a 0.60 ATR stop on GOLD 1h, 1R = 7.4
+points while the median bar range is 10.5 points: **one bar spans 1.42R**, and
+the give-back stop sits ~0.6R below the peak that armed it. The bar that set the
+stop very often breached it too, and the simulation was letting trades survive
+exits a real broker stop would have filled. Fixed the pessimistic way (same bar,
+ties lose). **It barely moved the result** — so that was not the cause.
+
+**Second — is the drawdown itself impossible?** No, and this is worth recording.
+For a strategy with mean μ and bounded 1R losses, expected max drawdown is about
+σ²/(2μ)·ln(N). With μ=0.99, σ=1.51, N=534 that is **7.2R against 5.07R observed.**
+A tiny drawdown is the arithmetic consequence of a high per-trade expectancy, not
+evidence of a bug. R/DD was the wrong thing to be alarmed by.
+
+**Third — the decisive test: random entries, identical exit.**
+```
+REAL entries + give-back      n=534  mean +0.991R   R/DD 104.4
+RANDOM entries + SAME exit    12 seeds, ~601 trades each
+                                     mean +0.086R   R/DD 2.4
+edge of the real entries: +0.905R = 61.8 control se
+the exit alone accounts for 9% of the reported mean R
+```
+**The exit is not manufacturing the result. The entries carry 91% of it.**
+
+### Everything it has now survived
+walk-forward 6/6 · OOS halves +1.004/+0.975 · long/short split with **shorts
+scoring better than longs** (so not the gold uptrend) · independent confirmation
+on **US500 1h** (+0.334R → +0.898R) · a random-HOLD control · a random-ENTRY
+control at 61.8 se · intrabar ties-lose · and the drawdown checked against theory.
+
+### Why it still ships OFF
+**A mean of +0.99R per trade is roughly double anything in this project's
+history, and a result that good is usually wrong.** Eight attacks have failed to
+break it, which is not the same as it being right. Every one of those tests uses
+the same entry generator (`all_signals` → `zone_stream`, `smc_state`), and a
+look-ahead defect in that chain would be inherited by all of them. That audit is
+outstanding. Until it returns clean this is a demo setting.
+
+### Shipped — LiquiditySniper 3.30
+- **`InpArmLife` 60 → 600.** Not a tuned value — it equals the zone's own life,
+  i.e. removing a constraint that was assumed rather than measured. 24.7% of all
+  missed 40-point moves had a live zone that had merely aged out. The added
+  trades score **+0.645R against the base's +0.414R**, so E-074 is satisfied: it
+  is not buying trades by lowering their quality.
+- **`InpUncappedExit`, default false**, with `TrailGiveBack()` — a ratcheting
+  give-back stop that lives **at the broker**, so E-086 holds (a spike cannot
+  beat it, and it does not need the EA awake). Tiered 20%/16%/12% by peak R, never
+  inside the round trip, never inside the broker's stop level, one-way only.
+- Per-ticket tracking with pruning, because the give-back needs the position's
+  ORIGINAL risk and its best excursion, neither of which a position carries.

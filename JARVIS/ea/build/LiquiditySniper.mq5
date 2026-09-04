@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.20"
+#property version   "3.30"
 #property strict
 
-#define LQS_BUILD "3.20"
+#define LQS_BUILD "3.30"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -101,6 +101,42 @@ input double InpStopAtr       = 0.60;   // stop, ATR beyond the FILL. Small, on 
 // refusing the trade. A tighter spread then buys a tighter stop automatically.
 input double InpMinStopCostX  = 7.0;    // ...but at least this many round trips
 input double InpTargetR       = 2.0;    // fallback target if no level is found
+// E-106 / E-107 — THE FIXED TARGET IS THE CEILING ON EVERY TRADE THIS EA TAKES.
+//
+// Veer: "they miss clear clear moves that could've made us 40-200 pounds".
+// The first half is true (this stack catches 16.3% of 40-point moves on GOLD
+// 1h). The second half is arithmetic, and it is not about the entry at all:
+//
+//    0.60 ATR stop = 7.4 pts  |  2R target = 14.8 pts
+//    at 0.01 lots (E-081, GBP 0.787/pt) A WIN IS GBP 11.64. That is the ceiling.
+//    GBP 40 needs 51 points captured. GBP 200 needs 254.
+//
+// EVEN AT A 100% CATCH RATE THIS GEOMETRY CANNOT PAY HIM GBP 40.
+//
+// And the cause is our own unapplied finding. E-090 killed the fixed target on
+// SuperTrendSniper (InpTargetR = 0) and it was never carried here. Same entries,
+// exit swapped for an uncapped run with a give-back stop:
+//
+//                          n     mean R    points   avg win   wins>GBP40
+//    fixed 2R (ships)    517     +0.414    2078.7   GBP13.48       7
+//    uncapped+giveback   534     +0.991    4697.5   GBP14.20      19
+//    GOLD 15m: +0.441R -> +1.212R  |  US500 1h: +0.334R -> +0.898R
+//
+// It survived walk-forward 6/6, OOS halves +1.004/+0.975, a long/short split
+// (SHORTS score better than longs, so it is not the gold uptrend), independent
+// confirmation on US500, and a random-ENTRY control - random entries with this
+// exact exit score only +0.086R against the real entries' +0.991R, so the
+// entries carry 91% of it and the exit is not manufacturing the number.
+//
+// IT IS OFF BY DEFAULT ANYWAY. A mean of +0.99R per trade is roughly double
+// anything in this project's history, and a result that good is usually wrong.
+// What has happened so far is that it has not been broken - which is not the
+// same as it being right. A look-ahead audit of the entry generator is
+// outstanding, and every test above would inherit such a bug. Turn this on for
+// DEMO first, and only after that audit comes back clean.
+input bool   InpUncappedExit  = false;  // E-106: let winners run, give-back stop
+input double InpGiveBackArmR  = 1.0;    // arm the give-back at this peak R
+input double InpGiveBackFrac  = 0.20;   // hand back at most this share of peak
 // ── TARGET THE NEXT LEVEL (E-087) ────────────────────────────────────────────
 // Veer: "provide a real tp and sl based of levels ... you can see price
 // reacting and also playing ping pong with levels we need to catch it alllll".
@@ -123,7 +159,17 @@ input double InpTargetR       = 2.0;    // fallback target if no level is found
 input bool   InpTargetLevel   = true;   // aim at the next opposing level
 input double InpTgtMinAtr     = 0.50;   // ignore levels nearer than this
 input double InpTgtMaxR       = 0.0;    // 0 = uncapped (capping measured worse)
-input int    InpArmLife       = 60;     // a zone stops being armable this many bars after birth
+// E-105. 60 was never measured - it was assumed. Of every 40-point move this
+// stack MISSED on GOLD 1h, 24.7% had a zone that was still LIVE and had simply
+// aged past this number. Raising it to the zone's own life (InpZoneLife = 600)
+// removes the constraint rather than tuning it, and points improve monotonically
+// in 14 of 15 FRAC x timeframe cells:
+//    GOLD 1h  base n=517 +0.414R t=+6.28 +2079 pts  ->  n=600 +0.487R t=+7.95 +2743
+//             the ADDED trades score +0.645R, better than the base, so E-074 is
+//             satisfied: it is not buying trades by lowering their quality.
+//             OOS +0.526/+0.448, walk-forward 6/6, 20-seed control +2.5 sd.
+//    GOLD 15m n=199 +0.510R +565 pts; the added trades score +0.697R; 6/6; +3.4 sd.
+input int    InpArmLife       = 600;    // a zone stops being armable this many bars after birth
 input int    InpArmWait       = 60;     // an unfilled limit is cancelled after this many bars
 input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED
 input double InpEntryLots     = 0.02;   // size for one entry
@@ -341,6 +387,10 @@ void   AddZone(Zone &Z[], double &piv[], double at, int dir, double mar, int bar
 void   ExpireZones(Zone &Z[], int bar);
 void   MarkBroken(Zone &Z[], double c);
 void   DisasterBrake();
+void   TrailGiveBack();
+int    TrackFind(ulong tk);
+void   TrackAdd(ulong tk, double risk);
+void   TrackPrune();
 double MinStopDist();
 int    PosCount();
 
@@ -853,8 +903,13 @@ void ArmSide(int dir)
    double stop = NormalizeDouble(lvl - dir * stopDist, dg);
    double risk = (lvl - stop) * dir;
    if(risk <= 0.0) return;
-   double tgt  = NormalizeDouble(lvl + dir * InpTargetR * risk, dg);
-   if(InpTargetLevel)
+   // E-106: with the uncapped exit there is no broker TP at all - the trade is
+   // closed by the ratcheting give-back stop in ManageOpen(). A TP and an
+   // uncapped run are contradictory instructions, so only one may be live.
+   double tgt = 0.0;
+   if(!InpUncappedExit)
+      tgt = NormalizeDouble(lvl + dir * InpTargetR * risk, dg);
+   if(InpTargetLevel && !InpUncappedExit)
    {
       double nxt = NextLevel(dir, lvl, a);
       if(nxt != 0.0)
@@ -1192,6 +1247,124 @@ void FundedLoad()
 // limit means acting after the breach has already happened: a 3% daily limit
 // checked at 3% is a failed account, not a stopped one. At 0.80 the EA stops
 // itself at 2.4% and the firm never sees a breach.
+//==================== PER-TICKET TRACKING (E-106) ==================
+// The give-back needs two things a position does not carry: the risk it STARTED
+// with (once the stop ratchets past break-even the original distance is gone)
+// and the best excursion it has ever shown. Both are per ticket.
+//
+// Kept in parallel arrays rather than a map because MQL5 has no dictionary, and
+// pruned on every pass so a long run does not grow them without bound.
+ulong  g_tkId[];
+double g_tkRisk[];
+double g_tkPeak[];
+
+int TrackFind(ulong tk)
+{
+   for(int i = 0; i < ArraySize(g_tkId); i++)
+      if(g_tkId[i] == tk) return i;
+   return -1;
+}
+
+void TrackAdd(ulong tk, double risk)
+{
+   int n = ArraySize(g_tkId);
+   ArrayResize(g_tkId, n + 1);
+   ArrayResize(g_tkRisk, n + 1);
+   ArrayResize(g_tkPeak, n + 1);
+   g_tkId[n] = tk; g_tkRisk[n] = risk; g_tkPeak[n] = 0.0;
+}
+
+// Drop tickets that are no longer open. Without this the arrays grow for the
+// life of the terminal and TrackFind gets slower every trade.
+void TrackPrune()
+{
+   for(int i = ArraySize(g_tkId) - 1; i >= 0; i--)
+   {
+      if(PositionSelectByTicket(g_tkId[i])) continue;
+      int last = ArraySize(g_tkId) - 1;
+      g_tkId[i] = g_tkId[last]; g_tkRisk[i] = g_tkRisk[last];
+      g_tkPeak[i] = g_tkPeak[last];
+      ArrayResize(g_tkId, last);
+      ArrayResize(g_tkRisk, last);
+      ArrayResize(g_tkPeak, last);
+   }
+}
+
+// E-106 — THE RATCHETING GIVE-BACK STOP. Only runs when InpUncappedExit is on,
+// because with it on there is NO broker take-profit and this is the only thing
+// that closes a winner.
+//
+// It lives at the BROKER as a stop, not as an EA decision. E-086: the give-back
+// rules used to be TICK-REACTIVE and a spike beat them; a stop order does not
+// need this EA to be awake, connected, or even running.
+//
+// The ratchet is one-way. A stop that can move backwards is not a stop.
+void TrailGiveBack()
+{
+   if(!InpUncappedExit) return;
+   TrackPrune();
+
+   int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double md = MinStopDist();
+
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic)  continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)   continue;
+
+      int    dir  = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      double open = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl   = PositionGetDouble(POSITION_SL);
+      if(sl == 0.0) continue;                  // no stop: leave it to the brake
+
+      // R is measured from the position's OWN original risk, which is the
+      // distance the stop started at. Once the stop has ratcheted past break-
+      // even that distance is gone, so it is tracked per ticket.
+      int ix = TrackFind(tk);
+      if(ix < 0) { TrackAdd(tk, MathAbs(open - sl)); ix = TrackFind(tk); }
+      if(ix < 0) continue;
+      double risk = g_tkRisk[ix];
+      if(risk <= 0.0) continue;
+
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double peak = g_tkPeak[ix];
+      double now  = (px - open) * dir;
+      if(now > peak) { peak = now; g_tkPeak[ix] = peak; }
+
+      double peakR = peak / risk;
+      if(peakR < InpGiveBackArmR) continue;    // not yet worth protecting
+
+      // Bigger peaks are protected harder - the same tiering the SuperTrend EA
+      // uses, and for the same reason (E-090: the tail carries the profit, so
+      // do not hand a large one back).
+      double frac = InpGiveBackFrac;
+      if(peakR >= 1.5) frac = InpGiveBackFrac * 0.80;
+      if(peakR >= 3.0) frac = InpGiveBackFrac * 0.60;
+
+      double keep = peak * (1.0 - frac);
+      double want = NormalizeDouble(open + dir * keep, dg);
+
+      // never inside the round trip: that is a fee, not a rule
+      double rt = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      if(keep < rt) continue;
+      // never closer to price than the broker allows, or the modify is rejected
+      if(md > 0.0 && MathAbs(px - want) < md) continue;
+      // RATCHET: profitable direction only
+      if((dir > 0 && want <= sl) || (dir < 0 && want >= sl)) continue;
+
+      if(!trade.PositionModify(tk, want, PositionGetDouble(POSITION_TP)))
+         Log(StringFormat("give-back modify failed: %d %s",
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+      else
+         Log(StringFormat("give-back stop -> %.*f (peak %.2fR, keeping %.0f%%)",
+                          dg, want, peakR, 100.0 * (1.0 - frac)));
+   }
+}
+
 void CheckGuards()
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -1425,6 +1598,7 @@ void OnTick()
    }
 
    DisasterBrake();   // FIRST. Nothing outranks getting out of a disaster.
+   TrailGiveBack();   // E-106: the only thing that closes a winner when uncapped
    CheckGuards();
 
    // There is nothing for OnTick to do about the entry: the limit order is at

@@ -58,15 +58,37 @@ def resolve(s, costs, j, side, entry, stop, mode, a, tgt_r=2.0, trail=3.0,
             if ht:
                 px, why = tgt, "target"; break
         else:
-            peak = max(peak, s.h[k]) if side > 0 else min(peak, s.l[k])
-            mfe = max(mfe, side * (peak - entry) / risk)
+            # ---- INTRABAR HONESTY. E-107.
+            # The first version of this updated `peak` from bar k's extreme,
+            # moved the stop up behind it, and then only tested that stop from
+            # bar k+1. In price terms the stop sits 20% of the peak below the
+            # high of the very bar that set it - and at a 0.60 ATR stop on GOLD
+            # 1h, ONE BAR SPANS 1.42R while that gap is about 0.6R. So the bar
+            # that armed the stop very often breached it too, and the trade was
+            # allowed to survive an exit a real broker stop would have filled.
+            # It is not look-ahead in the usual sense, but it is the same kind
+            # of lie: the simulation kept trades the market had already taken.
+            # It reported +0.989R and a 161:1 return-to-drawdown, which is not a
+            # trading result.
+            #
+            # Intrabar ORDER is unknowable, so the project's own rule applies -
+            # ties lose. If this bar's extreme would have armed the stop AND
+            # this bar's opposite extreme would have breached it, the stop wins.
+            newpeak = max(peak, s.h[k]) if side > 0 else min(peak, s.l[k])
+            newmfe = max(mfe, side * (newpeak - entry) / risk)
+            cand = stop
             if mode in ("trail", "trail_gb"):
-                t = peak - side * trail * a
-                stop = max(stop, t) if side > 0 else min(stop, t)
-            if mode == "trail_gb" and mfe >= arm:
-                allow = 0.20 if mfe < 1.5 else (0.16 if mfe < 3.0 else 0.12)
-                gb = entry + side * side * (peak - entry) * (1.0 - allow)
-                stop = max(stop, gb) if side > 0 else min(stop, gb)
+                t = newpeak - side * trail * a
+                cand = max(cand, t) if side > 0 else min(cand, t)
+            if mode == "trail_gb" and newmfe >= arm:
+                allow = 0.20 if newmfe < 1.5 else (0.16 if newmfe < 3.0 else 0.12)
+                gb = entry + side * side * (newpeak - entry) * (1.0 - allow)
+                cand = max(cand, gb) if side > 0 else min(cand, gb)
+            worst = s.l[k] if side > 0 else s.h[k]
+            if cand != stop and ((side > 0 and worst <= cand)
+                                 or (side < 0 and worst >= cand)):
+                px, why = cand, "giveback"; break
+            peak, mfe, stop = newpeak, newmfe, cand
     else:
         k = min(j + max_bars, len(s)) - 1
         px, why = s.c[k], "time"
