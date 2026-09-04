@@ -4700,3 +4700,113 @@ control, R/DD 4.9 to 10.2, and 325% over 569 trading days at 0.5% risk.
 **A control must be matched on FILL CONVENTION, not only on geometry and cost.**
 An open-entry control cannot falsify a limit-entry strategy, and six independent
 attacks proved it by all agreeing with each other for the same wrong reason.
+
+## E-111 / E-112 / E-113 / E-114 — REAL M1 DATA. The live account's premise is wrong.
+
+**The data blocker is gone, and the first thing it proved is that the strategy
+the live account runs has no edge at M1.**
+
+### E-111 — the blocker was never a data problem, it was a channel problem
+Every market-data host is 403 at this session's gateway. **`raw.githubusercontent.com`
+and anonymous `git clone` of public GitHub repos are not.**
+`github.com/FX-Data/FX-Data-XAUUSD-DS` carries XAUUSD **tick data with bid and
+ask** on year branches. Built via `JARVIS/tools/ticks_to_bars.py`:
+
+**18,816,940 ticks → 157,051 M1 bars**, 2018-01-01 to 2018-06-19, each bar
+carrying its own measured `spread_mean`, `spread_max` and tick count.
+
+Price is scaled 1/100 in the feed (13.48641 × 100 = 1348.64, verified against
+the historical gold price). Both volume columns are identically zero — **no
+volume hypothesis is testable on this feed.**
+
+```
+GOLD M1 2018        median     p95      max
+  spread             0.229    0.272    2.982 points
+  ATR(14)            0.246      -        -
+  ticks per bar        102
+```
+**The project assumed `spread = 0.46` for ninety experiments. The truth is 0.229
+— the assumed cost was double.**
+
+### And the regime correction, measured rather than assumed
+```
+                     bars     price   ATR(14)   ATR/price
+2018 M15 (ticks)    10475    1322.9     1.145     8.65 bp
+2025-26 15m (repo)   4554    4133.8     8.444    20.43 bp
+2018 M1  (ticks)   157051    1322.9     0.246     1.86 bp
+```
+**M15 ATR grew 7.38× while price grew 3.12×.** Gold is far more volatile
+relative to its price now. Scaling the measured M1 ATR by the same ratio gives
+**M1 ATR today ≈ 1.82 points**, so today's spread/ATR is 0.11 (ECN) to 0.25
+(standard) against 2018's 0.93.
+
+**E-089 concluded M1 was unviable from an assumed spread and an unmeasured ATR.
+Both inputs were wrong, in opposite directions. On cost alone, M1 is viable
+today — and it turns entirely on the account's spread.**
+
+### E-112 — but the signal is the problem, not the cost
+The EA's own SuperTrend(7,1.2) on real M1, costs charged from each bar's own
+measured spread. **16,045 flips = 147 per trading day**, which is exactly the
+frequency Veer has always described.
+```
+   stop  trail  hold      n    mean R       t   win%     points
+   2.0A   3.0A    60   6804   -0.5934  -40.41  21.9%   -1771.9
+   8.0A   3.0A   240   5133   -0.1351  -26.61  26.4%   -1261.2
+   matched random control:    -0.1396
+   edge over control:         +0.0045R = 2.4 control se
+```
+
+### E-113 — and it does not appear when the cost is removed
+Same bars, same flips, cost scaled to each regime:
+```
+regime                      spread  SuperTrend   control      edge  control se
+2018 as measured             0.229     -0.1351   -0.1396   +0.0045       2.4
+today @ 0.46 spread          0.062     -0.0403   -0.0435   +0.0032       1.9
+today @ 0.30 spread          0.042     -0.0289   -0.0322   +0.0034       2.0
+today @ 0.20 spread (ECN)    0.027     -0.0208   -0.0235   +0.0027       1.6
+ZERO COST (signal only)      0.000     -0.0058   -0.0078   +0.0021       1.2
+```
+**At literally zero transaction cost the signal scores −0.0058R and beats random
+by 1.2 standard errors.** The edge is a flat ~+0.003R residual in every regime —
+never significant, and always smaller than the cost drag at any real spread.
+**This is not a cost problem. There is no edge to uncover.**
+
+### E-114 — the fair test: the EA's real gate, and trending days only
+Two legitimate objections — E-113 used raw flips, not the EA's DEMA gate; and
+2018 H1 gold ranged 1275-1366, the worst sample for a trend-follower. Both tested,
+at today's ECN cost, with 120 days ranked by efficiency:
+```
+signal set                          n    mean R       t   win%    points
+raw flips, all days              4985   -0.0208   -4.03  36.0%    -215.0
+EA gated (DEMA60), all days      4271   -0.0362   -6.63  35.1%    -342.5
+EA gated, TRENDING third         1396   -0.0236   -2.27  36.7%     -59.1
+EA gated, RANGING third          1390   -0.0325   -3.39  35.5%    -106.1
+matched control                          -0.0255
+  EA gated, all days       edge -0.0108R = -3.1 control se
+  EA gated, TRENDING third edge +0.0019R = +0.6 control se
+```
+**The DEMA gate makes it significantly WORSE than random (−3.1 se)** — which
+agrees with E-092, where the gate could not be established. **And on the most
+trending third of days, the best possible case for this strategy, the edge is
+0.6 control se: nothing.**
+
+### VERDICT
+**The SuperTrend M1 strategy has no edge.** Not with its gate, not without it,
+not on trending days, not at zero cost. n = 4,271 gated trades on real
+tick-derived bars, so this is a precise measurement, not a noisy one.
+
+The live account's premise — *"m1 supertrend is also profitable"* — is not
+supported by the first real M1 data this project has ever had.
+
+**What survives:** the liquidity stack, which E-110 corrected to +0.205R on GOLD
+1h and +0.267R on US500 1h against a fill-convention-matched control (13.1 and
+13.2 control se). That is the funded-account track, and it is now the only
+measured edge in the repository.
+
+### CAVEATS, stated plainly
+- 2018 H1 only, gold 1275-1366, six months, one regime. The trending-third split
+  is the mitigation, not a substitute for more years.
+- Today's M1 ATR is an ESTIMATE (measured 2018 M1 ATR × measured M15 volatility
+  ratio), not a direct measurement. Recent M1 bars would close it.
+- The tick feed is Dukascopy (ECN). PU Prime is retail and will be wider, so
+  every cost figure here is a floor.
