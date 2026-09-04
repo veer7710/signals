@@ -4548,3 +4548,71 @@ outstanding. Until it returns clean this is a demo setting.
   inside the round trip, never inside the broker's stop level, one-way only.
 - Per-ticket tracking with pruning, because the give-back needs the position's
   ORIGINAL risk and its best excursion, neither of which a position carries.
+
+## E-108 / E-109 — TEN REAL STRATEGIES, AND WHERE THE MONEY ACTUALLY IS
+
+Veer: *"ur not being good enough use actual strategy's ur just doing random
+tests... we aim for small profits consistently and liquidity helps catch insane
+bangers"*.
+
+He is right about the shape of the problem. `strategies.py` has **four** entries
+in its registry and the other eighty files in `JARVIS/research/` are all analysis
+OF those. Ninety experiments deep, this project had never run a broad hunt.
+
+### E-108 — the tournament. His own two-engine model, ten named strategies.
+Every one is a real, mechanically specific setup, not a parameter sweep. Same
+engine, same costs both ends, ties lose, next-bar-open fills — only the LOGIC
+differs. Judged on his terms: engine A on hit rate and points per day, engine B
+on the size of its top decile.
+
+```
+GOLD 1h   ENGINE A (1.0 ATR stop, 1R target)      n    win%   mean R      t    points
+          NR7 breakout                          418   48.6%   -0.055  -1.12    -442.7
+          inside bar break                      553   49.4%   -0.039  -0.91    -322.9
+          opening range break                   531   46.1%   -0.104  -2.40    -896.6
+          EMA20 pullback                        643   45.1%   -0.125  -3.18   -1387.8
+          round-number bounce                  1605   45.4%   -0.118  -4.73   -4021.4
+          ENGINE B (1.5 ATR stop, uncapped, 2 ATR trail)
+          prior-day sweep                       535   32.3%   -0.182  -4.24   -2348.5
+          failed breakout                       844   30.3%   -0.233  -6.79   -3580.8
+          HTF align + pause                     174   33.3%   -0.115  -1.48    -420.8
+          Asian range fade                      332   23.2%   -0.388  -8.49   -2389.0
+          squeeze expansion                     280   35.0%   -0.118  -1.87    -621.7
+```
+GOLD 15m is the same picture. **Twenty cells. Every one negative.**
+
+They are not merely weak — they sit at or below the cost drag, which is what a
+coin flip looks like once the spread is paid. The classic playbook does not work
+on this instrument.
+
+### E-109 — and level selection is not the lever either
+E-104 diagnosed 51.2% of missed moves as an FVG/OB limit resting a median 6.96
+ATR (~85 points) from the actual turn, which sounds like an obvious fix.
+```
+GOLD 1h   selection rule                  n    win%   mean R      t    points
+          all candidates (ships)        600   51.2%   +0.487   7.95    2742.9
+          nearest level only            604   50.3%   +0.462   7.56    2701.7
+          within 1.0 ATR of price       341   38.4%   +0.105   1.32     407.3
+          within 0.5 ATR of price       139   41.0%   +0.184   1.47     311.2
+```
+**Every restriction makes it worse.** The distance IS the edge — a limit resting
+far from price fills when price comes TO it, which is E-076/E-077's finding
+exactly: the edge is the limit inside the zone, filled by the sweep. Requiring
+price to be near the level first is chasing.
+
+### THE CONCLUSION THAT MATTERS, and it redirects the whole project
+Concepts now tested and failed: **ten classic strategies** (E-108), **four SMC
+concepts** — BSL/SSL, rejection zones, S/R flips, ping-pong (E-105), **six
+sideways detectors** (E-094), **level-selection rules** (E-109). Twenty-four in
+all.
+
+**Exactly one thing in this repository has an edge: the toptick + FVG + order-block
+stack, at +0.487R with t = 7.95.**
+
+That is not a failure to find something better. It is evidence that what Veer
+already has is genuinely unusual, and it settles where the remaining work goes:
+
+**STOP HUNTING FOR STRATEGIES. THE ENTIRE REMAINING UPSIDE IS IN THE EXIT.**
+E-106/E-107 measured that upside at **+0.487R → +0.991R**, a doubling, from
+removing the fixed target alone — and that is now the one open question in the
+project, pending the look-ahead audit of the entry generator.
