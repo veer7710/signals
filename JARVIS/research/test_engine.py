@@ -145,6 +145,68 @@ _mc = prop_sim.monte_carlo_prop(_winning, prop_sim.PRESETS["generic_2step_phase1
 check("monte carlo pass rate is high for an always-winning strategy",
       _mc["pass_rate"] > 0.9, f"pass_rate={_mc['pass_rate']}")
 
+
+# ---------------------------------------------------------------- E-110
+def test_entry_bar_not_post_fill():
+    """No trade may realise favourable excursion on its own entry bar unless
+    that bar OPENED beyond the entry level.
+
+    THE BUG THIS EXISTS TO CATCH cost this project its headline result. A limit
+    filled because bar j's LOW reached it was then credited with bar j's HIGH as
+    profit - two unknown intrabar orderings both resolved in our favour. On GOLD
+    1h, 497 of 534 trades (93.1%) opened AND closed on their entry bar and
+    produced 99.0% of all reported profit. It read +0.991R and 104:1; corrected
+    it is +0.205R and 4.86:1.
+
+    Nothing in this file could see it, because every test here drives
+    engine.backtest, which fills at the next bar's OPEN and is therefore immune.
+    The liquidity research uses limit fills and bypasses it entirely.
+    """
+    import liq_exit, study
+    from engine import Series
+    c = study.COSTS["GOLD"]
+    # one bar that dips to the limit and then rallies hard, then a flat bar.
+    # A long filled at 100 must NOT be able to book the 130 high of its own bar.
+    # bar 1 OPENS at 105 (above the limit), dips to 100 to fill the long, then
+    # rallies to 130. The 130 is not ours: the fill is evidenced only by the dip.
+    s = Series(ts=[0, 3600, 7200], o=[110.0, 105.0, 100.0],
+               h=[110.0, 130.0, 100.0], l=[110.0, 100.0, 100.0],
+               c=[110.0, 100.0, 100.0])
+    t = liq_exit.resolve(s, c, 1, 1, 100.0, 95.0, "fixed2R", 5.0, tgt_r=2.0)
+    ok_target = (t["why"] != "target")
+    t2 = liq_exit.resolve(s, c, 1, 1, 100.0, 95.0, "trail_gb", 5.0)
+    ok_gb = (t2["why"] != "giveback")
+    check("entry bar cannot hit its own target", ok_target)
+    check("entry bar cannot arm its own give-back", ok_gb)
+
+    # ...but a bar that OPENED beyond the limit IS legitimately post-fill
+    s2 = Series(ts=[0, 3600, 7200], o=[110.0, 99.0, 100.0],
+                h=[110.0, 130.0, 100.0], l=[110.0, 99.0, 100.0],
+                c=[110.0, 100.0, 100.0])
+    t3 = liq_exit.resolve(s2, c, 1, 1, 100.0, 95.0, "fixed2R", 5.0, tgt_r=2.0)
+    check("a gapped-through entry bar IS post-fill", t3["why"] == "target")
+
+
+def test_no_future_in_fvg_snapshot():
+    """smc.fvgs stored `list(live)`, a SHALLOW copy, so every bar's snapshot
+    shared the same dicts and a gap flagged inverted at bar 353 was inverted in
+    the snapshot stored at bar 300. 47,794 stored entries carried inv_bar > i.
+    """
+    import engine as _e, smc
+    s = _e.load("GOLD", "1h")
+    A = _e.atr(s, 14)
+    per_bar, _ = smc.fvgs(s, A)
+    items = (per_bar.items() if isinstance(per_bar, dict)
+             else enumerate(per_bar))
+    bad = sum(1 for i, gs in items if gs
+              for g in gs if g.get("inv_bar", -1) > i)
+    check("fvg snapshot carries no future", bad == 0,
+          f"{bad} entries flagged by a future bar")
+
+
+test_entry_bar_not_post_fill()
+test_no_future_in_fvg_snapshot()
+
 print("\n" + "=" * 66)
 print(f"  {'ALL TESTS PASSED' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")
 print("=" * 66)

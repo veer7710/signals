@@ -70,10 +70,10 @@
 //     end that is to run ExportHistory.mq5 and re-measure.
 //
 #property copyright "JARVIS"
-#property version   "3.30"
+#property version   "3.40"
 #property strict
 
-#define LQS_BUILD "3.30"
+#define LQS_BUILD "3.40"
 
 #include <Trade/Trade.mqh>
 CTrade trade;
@@ -134,7 +134,35 @@ input double InpTargetR       = 2.0;    // fallback target if no level is found
 // same as it being right. A look-ahead audit of the entry generator is
 // outstanding, and every test above would inherit such a bug. Turn this on for
 // DEMO first, and only after that audit comes back clean.
-input bool   InpUncappedExit  = false;  // E-106: let winners run, give-back stop
+//
+// ===================== CORRECTED, E-110 =====================
+// Everything above this line was measured with a broken fill convention and the
+// numbers in it are WRONG. A resting limit filled because a bar's ADVERSE
+// extreme reached it was then credited with that SAME bar's FAVOURABLE extreme
+// as profit. On GOLD 1h, 497 of 534 trades (93.1%) opened AND closed on their
+// entry bar and produced 99.0% of the reported profit, while only 7 (1.3%)
+// actually gapped through the limit. A random limit entry with no logic in it
+// scored +0.236R under that convention - the bug alone beat the real strategy.
+//
+// Corrected, and re-checked against a control matched on the FILL CONVENTION
+// (every previous control entered at the OPEN, which is why six attacks passed):
+//
+//   GOLD 1h, 2R target, arm_life 60 - AS THIS EA SHIPPED   -0.093R   -331 pts
+//   + uncapped exit and give-back                          +0.123R   +619 pts
+//   + arm_life 600                                         +0.205R  +1172 pts
+//   + US500 as a second book (1224 trades, R/DD 10.2)      +0.237R  +1316 pts
+//
+//   random limit, same convention, 12 seeds:               +0.047R
+//   edge of the real entries:  GOLD +0.158R (13.1 se) | US500 +0.221R (13.2 se)
+//
+// SO THE DEFAULT IS NOW TRUE. The capped 2R configuration this EA shipped with
+// is MEASURED NEGATIVE - it is not a conservative choice, it is a losing one.
+// The uncapped exit is what makes the strategy positive at all. E-090 said this
+// about the SuperTrend EA a month ago and it was never carried across.
+//
+// Still demo-gated by InpDemoOnly, and everything here is GOLD/US500 1h. There
+// is no M1 data in this repository and none of it speaks to M1.
+input bool   InpUncappedExit  = true;   // E-110: capped is measured NEGATIVE
 input double InpGiveBackArmR  = 1.0;    // arm the give-back at this peak R
 input double InpGiveBackFrac  = 0.20;   // hand back at most this share of peak
 // ── TARGET THE NEXT LEVEL (E-087) ────────────────────────────────────────────

@@ -149,7 +149,14 @@ def fvgs(s: Series, A, min_atr=0.10, life=200):
             if s.l[i - 2] > s.h[i] and (s.l[i - 2] - s.h[i]) >= min_atr * a:
                 live.append({"dir": -1, "bot": s.h[i], "top": s.l[i - 2],
                              "born": i, "inverted": False, "inv_bar": -1})
-        per_bar[i] = list(live)
+        # E-110 / D-2. `list(live)` is SHALLOW, so every bar's snapshot shares
+        # the same dicts. Setting g["inverted"] = True at bar 353 made it true
+        # for the copy stored at bar 300, and consumers that test g["inverted"]
+        # were reading the future: 47,794 stored entries carried inv_bar > i.
+        # smc_combine skipped every gap that would EVER invert (survivorship),
+        # and the iFVG rule's `i - g["inv_bar"] > 20` went negative and passed.
+        # A per-bar copy costs a little memory and removes the leak entirely.
+        per_bar[i] = [dict(g) for g in live]
     return per_bar, inv
 
 
@@ -184,9 +191,17 @@ def resolve(s, costs, j, side, entry, stop, tgtpx, max_bars=200):
     half = costs.spread / 2.0
     comm_px = costs.commission_per_lot / costs.value_per_point_per_lot
     risk = (entry - stop) * side
+    # E-110: the entry bar is not post-fill. `j` is the bar the limit was
+    # TOUCHED on, proved by its adverse extreme; crediting the same bar's
+    # favourable extreme against the target assumes an intrabar ordering nobody
+    # can see. Only a bar that OPENED beyond the entry is provably post-fill.
+    # This is the same defect found in liq_exit.resolve, and it sits underneath
+    # E-076/E-077/E-079/E-080 - every liquidity number in this repository.
+    entry_bar_is_post_fill = ((s.o[j] <= entry) if side == 1 else (s.o[j] >= entry))
     for k in range(j, min(j + max_bars, len(s))):
+        fav_ok = (k > j) or entry_bar_is_post_fill
         hs = (s.l[k] <= stop) if side == 1 else (s.h[k] >= stop)
-        ht = (s.h[k] >= tgtpx) if side == 1 else (s.l[k] <= tgtpx)
+        ht = fav_ok and ((s.h[k] >= tgtpx) if side == 1 else (s.l[k] <= tgtpx))
         if hs: px, why = stop, "stop"; break          # ties lose
         if ht: px, why = tgtpx, "target"; break
     else:

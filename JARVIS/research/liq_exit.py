@@ -49,12 +49,35 @@ def resolve(s, costs, j, side, entry, stop, mode, a, tgt_r=2.0, trail=3.0,
     risk = (entry - stop) * side
     tgt = entry + side * tgt_r * risk
     peak, mfe = entry, 0.0
+
+    # ---- E-110. THE ENTRY BAR IS NOT POST-FILL, AND THIS WAS FATAL.
+    # `j` is the bar on which the resting limit was TOUCHED. For a long that is
+    # proved by `s.l[j] <= lvl` - the bar's ADVERSE extreme. The loop then used
+    # to credit that same bar's FAVOURABLE extreme `s.h[j]` as excursion, arm the
+    # give-back at 1R and exit at 80% of it, all inside bar j. That assumes the
+    # bar went low -> high -> retrace, resolving two unknown intrabar orderings
+    # in our favour. Measured on GOLD 1h: 497 of 534 trades (93.1%) opened AND
+    # closed on their entry bar, contributing 99.0% of all profit, while only 7
+    # (1.3%) gapped through the limit and were legitimately post-fill.
+    # It reported +0.991R and 104:1. Corrected it is +0.116R and 2.33:1.
+    #
+    # A random limit entry with no SMC content scores +0.236R under the broken
+    # convention - the bug alone beat the corrected strategy. E-107's controls
+    # all entered at the OPEN, so their entry bar really was post-fill and none
+    # of them could see this. That is why six attacks passed.
+    #
+    # The rule: the entry bar contributes favourable excursion ONLY when the bar
+    # opened beyond the limit, which is the one case where the fill provably
+    # happened at the open and the rest of the bar is genuinely after it.
+    entry_bar_is_post_fill = ((s.o[j] <= entry) if side > 0 else (s.o[j] >= entry))
+
     for k in range(j, min(j + max_bars, len(s))):
+        fav_ok = (k > j) or entry_bar_is_post_fill
         hs = (s.l[k] <= stop) if side == 1 else (s.h[k] >= stop)
         if hs:
             px, why = stop, "stop"; break
         if mode == "fixed2R":
-            ht = (s.h[k] >= tgt) if side == 1 else (s.l[k] <= tgt)
+            ht = fav_ok and ((s.h[k] >= tgt) if side == 1 else (s.l[k] <= tgt))
             if ht:
                 px, why = tgt, "target"; break
         else:
@@ -74,6 +97,8 @@ def resolve(s, costs, j, side, entry, stop, mode, a, tgt_r=2.0, trail=3.0,
             # Intrabar ORDER is unknowable, so the project's own rule applies -
             # ties lose. If this bar's extreme would have armed the stop AND
             # this bar's opposite extreme would have breached it, the stop wins.
+            if not fav_ok:
+                continue          # the entry bar's high is not ours to book
             newpeak = max(peak, s.h[k]) if side > 0 else min(peak, s.l[k])
             newmfe = max(mfe, side * (newpeak - entry) / risk)
             cand = stop

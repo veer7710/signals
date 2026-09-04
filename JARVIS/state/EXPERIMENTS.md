@@ -4616,3 +4616,87 @@ already has is genuinely unusual, and it settles where the remaining work goes:
 E-106/E-107 measured that upside at **+0.487R → +0.991R**, a doubling, from
 removing the fixed target alone — and that is now the one open question in the
 project, pending the look-ahead audit of the entry generator.
+
+## E-110 — THE FILL CONVENTION. Every liquidity number in this repository was wrong.
+
+**Verdict: E-107 RETRACTED. E-080's magnitude RETRACTED. The corrected strategy
+is real but five times smaller, and the configuration this EA shipped with is
+MEASURED NEGATIVE.**
+
+### The defect
+A resting limit is filled when a bar's **adverse** extreme reaches it — for a
+long, `s.l[j] <= lvl`. Both `liq_exit.resolve` and `smc.resolve` then began their
+management loop at `k = j` and immediately credited that **same bar's favourable
+extreme** as post-fill excursion: arming the give-back at 1R and exiting at 80%
+of a peak, or hitting a 2R target, all inside the bar that filled the order.
+Intrabar order is unknowable, and this resolved two orderings in our favour.
+
+Verified independently before acting on it:
+```
+trades                                              534
+opened AND closed on the SAME bar     497   (93.1%)
+R contributed by those             +524.0 of +529.0   (99.0%)
+entry bars that GAPPED through the limit    7   (1.3%)
+```
+**99% of the reported profit came from bars that both opened and closed the
+trade, and 98.7% of fills were evidenced only by the adverse extreme.**
+
+### Why six attacks failed to find it
+Every control this project has ever run — `smc.control`, my random-hold control,
+my random-entry control — enters at `s.o[i+1]`, **a market order at the open**.
+Its entry bar is therefore legitimately post-fill and it gets none of the bonus.
+The strategy enters on a **limit touched by the adverse extreme**. The controls
+were matched on geometry and cost but never on **fill convention**, which is the
+one dimension that mattered. Under the broken convention a random limit with no
+logic in it scored **+0.236R and 20.9:1** — the bug alone beat the real strategy.
+
+Walk-forward, OOS halves, the long/short split and the US500 confirmation all
+share the convention, so all of them inherited it. That is exactly why they
+agreed with each other.
+
+### A second, smaller leak
+`smc.fvgs` stored `per_bar[i] = list(live)` — a **shallow** copy, so every bar's
+snapshot shared the same dicts. Setting `g["inverted"] = True` at bar 353 made it
+true in the snapshot stored at bar 300; **47,794 stored entries carried
+`inv_bar > i`**. `smc_combine` skipped every gap that would *ever* invert (pure
+survivorship) and the iFVG rule's `i - inv_bar > 20` went negative and passed.
+
+### THE CORRECTED NUMBERS
+```
+GOLD 1h                                          n   mean R    points  maxDD   R/DD
+as this EA SHIPS (2R target, arm_life 60)      515   -0.093    -330.6  70.11  -0.68
++ uncapped exit + give-back                    530   +0.123     619.4  31.10   2.10
++ arm_life 60 -> 600                           604   +0.205    1171.5  25.51   4.86
++ US500 as a second book                      1224   +0.237    1316.0  14.20  10.20
+```
+against the retracted +0.991 / +1.069 / +1.046 and R/DD 104 / 156 / 167.
+
+### And the control that was never run, now run
+A limit resting 0.25 ATR from the close at a random bar and side — **matched on
+fill convention** — with the same stop, wait and exit:
+```
+GOLD 1h    SMC entries +0.205R  |  random limit +0.047R  |  edge +0.158R = 13.1 se
+US500 1h   SMC entries +0.267R  |  random limit +0.047R  |  edge +0.221R = 13.2 se
+```
+**The edge is real and it replicates on two independent markets — it is just
+five times smaller than reported.** +0.158R to +0.221R over a properly matched
+control, R/DD 4.9 to 10.2, and 325% over 569 trading days at 0.5% risk.
+
+### What this changes in the shipped code
+- **`InpUncappedExit` now defaults TRUE.** The capped 2R configuration this EA
+  shipped with is measured **negative** (−0.093R, −331 points). It is not a
+  conservative default, it is a losing one. The uncapped exit is what makes the
+  strategy positive at all — which is E-090's finding, made a month ago about the
+  other EA and never carried across.
+- Both `resolve` functions now refuse the entry bar's favourable extreme unless
+  the bar **opened** beyond the entry, the one case where the fill is provably at
+  the open.
+- `smc.fvgs` takes a per-bar deep copy.
+- **`test_engine.py` gained two invariants**, because nothing in that file could
+  ever have caught this: every test there drives `engine.backtest`, which fills
+  at the next bar's open and is immune. The liquidity research bypasses it.
+
+### The rule this earns
+**A control must be matched on FILL CONVENTION, not only on geometry and cost.**
+An open-entry control cannot falsify a limit-entry strategy, and six independent
+attacks proved it by all agreeing with each other for the same wrong reason.
