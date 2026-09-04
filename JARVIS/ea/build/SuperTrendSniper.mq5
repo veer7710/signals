@@ -57,7 +57,7 @@
 //  DEMO GUARD IS ON BY DEFAULT. InpDemoOnly must be set false deliberately.
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "2.22"
+#property version   "2.30"
 // THE BUILD STAMP. Printed on start and shown in the panel. Three separate
 // reports of "the profit box does not work" and no way to tell whether the
 // build carrying the fix was ever compiled. If the number below is not the one
@@ -833,6 +833,10 @@ int      g_atrHandle   = INVALID_HANDLE;
 int      g_adxHandle   = INVALID_HANDLE;
 
 // SuperTrend state, carried bar to bar exactly as the Pine does
+double   g_lotClampX   = 1.0;    // how many times the asked-for risk we send
+bool     g_lotClampWarned = false;
+bool     g_configFatal = false;  // set by CheckConfigSanity(); blocks all entries
+string   g_configWhy   = "";
 double   g_finalUpper  = 0.0;
 double   g_finalLower  = 0.0;
 int      g_stDir       = 0;      // -1 bullish, +1 bearish (Pine convention)
@@ -1222,6 +1226,85 @@ double DEMA(int len, int shift)
 // price history, so live, tester and chart agree and a restart changes
 // nothing. Cost is one CopyBuffer, one CopyRates and a few hundred
 // multiplications, once per closed bar.
+//==================== CONFIG SANITY (E-102) ========================
+// THE DEFECT THIS EXISTS TO CATCH, and it is the worst one found in this file.
+//
+// The guards are percentages of equity. The stop is a multiple of ATR. Nothing
+// ever compared the two, so on a small account they cross over and the EA
+// destroys itself while every individual rule looks reasonable:
+//
+//   GBP 60, InpDailyLossPct = 3.0   ->  GBP 1.80  =  2.29 points at 0.01 lots
+//   M1 gold, ATR ~2.2, 2.0 ATR stop ->  4.40 points = GBP 3.46
+//
+// The DAILY LOSS LIMIT IS SMALLER THAN ONE STOP. The trade cannot reach its own
+// stop without breaching the day first, so the EA flattens at 52% of the way to
+// a stop it placed itself - which is precisely the tight brake E-091 measured
+// at -682 to -779 points, shipped by accident through the back door.
+// InpMaxDDPct = 6.0 is GBP 3.60, so ONE stop is 96% of the entire lifetime
+// budget: two losers and the account is permanently locked.
+//
+// The rule below is the arithmetic, not a preference: a daily allowance must
+// hold at least TWO full stops or the EA is not running the strategy that was
+// measured. At a 4.40-point stop that needs 3% of GBP 231.
+//
+// It REFUSES TO TRADE rather than warning, because Veer's requirement is
+// "i dont wanna have to monitor it i want to be able to trust it". An EA that
+// cannot work must say so on the chart, not discover it with his money.
+void CheckConfigSanity()
+{
+   g_configFatal = false;
+   g_configWhy   = "";
+
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double a  = ATR(1);
+   if(eq <= 0.0 || a <= 0.0) return;          // too early; re-checked each bar
+
+   double stopPts   = InpStopAtrMult * a;
+   double tickVal   = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize  = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   double minL      = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   if(tickVal <= 0.0 || tickSize <= 0.0 || minL <= 0.0) return;
+
+   double stopMoney = (stopPts / tickSize) * tickVal * minL;   // one stop, minimum lot
+   double dayMoney  = eq * InpDailyLossPct / 100.0;
+   double ddMoney   = eq * InpMaxDDPct     / 100.0;
+
+   string msg = "";
+   if(dayMoney < 2.0 * stopMoney)
+      msg = StringFormat("DAILY LOSS LIMIT (%.1f%% = %.2f) IS LESS THAN TWO "
+                         "STOPS (%.2f). One losing trade breaches the day, so "
+                         "the EA would flatten at %.0f%% of its own stop - the "
+                         "brake E-091 measured at -779 points. Needs %.2f "
+                         "equity, or InpDailyLossPct >= %.2f.",
+                         InpDailyLossPct, dayMoney, 2.0 * stopMoney,
+                         100.0 * dayMoney / stopMoney,
+                         2.0 * stopMoney * 100.0 / InpDailyLossPct,
+                         200.0 * stopMoney / eq);
+   else if(ddMoney < 4.0 * stopMoney)
+      msg = StringFormat("MAX DRAWDOWN (%.1f%% = %.2f) IS LESS THAN FOUR STOPS "
+                         "(%.2f). Four ordinary losses lock the account "
+                         "permanently. Needs %.2f equity.",
+                         InpMaxDDPct, ddMoney, 4.0 * stopMoney,
+                         4.0 * stopMoney * 100.0 / InpMaxDDPct);
+
+   if(msg != "")
+   {
+      g_configFatal = true;
+      g_configWhy   = msg;
+      static string lastMsg = "";
+      if(msg != lastMsg)
+      {
+         lastMsg = msg;
+         Print("=== EA HALTED, CONFIGURATION CANNOT WORK ===");
+         Print(msg);
+         PrintFormat("stop %.2f points = %.2f at %.2f lots | equity %.2f",
+                     stopPts, stopMoney, minL, eq);
+         Print("No entries will be taken until this is fixed. Nothing is being "
+               "risked; this is not a failure to find signals.");
+      }
+   }
+}
+
 #define ST_WARMUP_BARS 400
 
 void UpdateSuperTrend()
@@ -1396,6 +1479,24 @@ bool RiskAllowsEntry(string &why)
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
 
+   // E-102. The guards and the stop are measured in different units and on a
+   // small account they cross over; CheckConfigSanity() does that arithmetic
+   // once per bar. If it fails, nothing is tradeable and saying so is the only
+   // honest behaviour.
+   if(g_configFatal) { why = g_configWhy; return false; }
+
+   // And refuse when the lot floor has turned the configured risk into
+   // something else entirely. 3x is the line: below it the account is merely
+   // small, above it the EA is not running the strategy that was measured.
+   if(g_lotClampX > 3.0)
+   {
+      why = StringFormat("the broker's minimum lot makes every trade %.1fx the "
+                         "configured %.2f%% risk. E-081: 0.01 lots cannot be "
+                         "smaller, so the account must be larger.",
+                         g_lotClampX, InpRiskPct);
+      return false;
+   }
+
    if(g_lockedPerm) { why = "max drawdown lock"; return false; }
    if(g_lockedDay)  { why = "daily loss lock";   return false; }
 
@@ -1470,6 +1571,37 @@ double LotFor(double stopDistPrice)
    double maxL = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(step > 0) lots = MathFloor(lots / step) * step;
+
+   // THE LOT FLOOR IS A SILENT RISK MULTIPLIER, AND IT WAS SILENT. E-102.
+   // `MathMax(minL, ...)` rounds the size UP to the broker minimum whenever the
+   // account is too small for the configured risk, and said nothing. On GBP 60
+   // at InpRiskPct = 0.50 with a 4.40-point M1 stop, the honest size is 0.00087
+   // lots; the broker minimum is 0.01; so the trade carried 11.5x the risk that
+   // was asked for, on every trade, for ever.
+   //
+   // E-081 is the reason it cannot be fixed by shrinking: 0.01 lots is
+   // GBP 0.787 per point and there is nothing below it. So this reports the
+   // real number instead of hiding it, and RiskAllowsEntry() refuses to trade
+   // when the multiple is absurd.
+   double want = lots;
+   if(minL > 0.0 && want < minL)
+   {
+      g_lotClampX = (want > 0.0) ? (minL / want) : 0.0;
+      if(!g_lotClampWarned)
+      {
+         g_lotClampWarned = true;
+         PrintFormat("RISK WARNING: %.2f%% of %.2f is %.2f, which is %.5f lots, "
+                     "but the broker minimum is %.2f. Every trade will risk "
+                     "%.2f (%.1f%% of equity), which is %.1fx what you asked "
+                     "for. E-081: 0.01 lots cannot be made smaller - the "
+                     "ACCOUNT has to be bigger.",
+                     InpRiskPct, eq, riskCash, want, minL,
+                     minL * lossPerLot, 100.0 * minL * lossPerLot / eq,
+                     g_lotClampX);
+      }
+   }
+   else g_lotClampX = 1.0;
+
    lots = MathMax(minL, MathMin(maxL, lots));
    return NormalizeDouble(lots, 2);
 }
@@ -3885,6 +4017,7 @@ void OnTick()
    if(Bars(_Symbol, _Period) < DemaEffLen() * 4 + 10) return;
 
    UpdateSuperTrend();
+   CheckConfigSanity();   // E-102: does this account fit these guards at all?
    BuildLevels();          // before anything asks where the levels are
    ExpireStalePendings();  // a limit is only good while its setup is
    ManagePosition();

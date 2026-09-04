@@ -4012,3 +4012,382 @@ More uncorrelated legs. US500 works and FX does not, which points at **indices
 as a class** — NAS100, US30, GER40. Each one that passes standalone adds
 frequency at near-zero correlation. **That is a concrete export request, and it
 is the cheapest remaining upside in the project.**
+
+## E-099 — RED TEAM: SuperTrendSniper 2.22 on a live £60 account. BLOCKED.
+
+**Verdict: the live-£60 deployment is REJECTED. Not on the edge — on three of
+the EA's own defaults being arithmetically incompatible with the 0.01-lot
+floor at that balance. Full detail in `JARVIS/state/RED_TEAM_LIVE.md`.**
+
+Constants: £0.787/point at 0.01 lots (E-081); gold $4491.80; M1 ATR(7) ≈ 2.2pts,
+so `InpStopAtrMult=2.0` gives a 4.40pt stop = **£3.46 = 5.77% of £60**.
+
+### The three blockers, each a money threshold meeting a lot floor
+1. **`ProtectBasket` arms at £0.25 on a £60 account** (`SuperTrendSniper.mq5:3275`,
+   `MathMin(MathMax(eq*0.004, 0.25), 1.00)`), and closes on a 20% give-back —
+   a **£0.05 = 0.064-point** trigger checked every tick. It is a pure money
+   rule with no R term. **This is E-083 in the one place E-083's fix never
+   reached.** Measured, GOLD 15m, shipped stack, 0.01 lots:
+
+   | config | n | win% | mean R | avg win | avg loss | exits |
+   |---|---|---|---|---|---|---|
+   | no basket, no daily guard (what was measured) | 107 | 48.6% | +0.158 | +£17.94 | −£11.39 | stop 100 |
+   | **+ basket as shipped** | 156 | **94.2%** | +0.199 | **+£3.72** | −£13.03 | **basket 147** |
+   | + daily guard as shipped | 159 | 34.0% | **+0.033** | +£4.47 | −£1.80 | guard 105, basket 54 |
+
+2. **`InpDailyLossPct=3.0` = £1.80 = 2.29 points — smaller than one stop.**
+   The guard fires at 52% of the stop, on floating equity, every tick, and then
+   locks the day. **64.3% of measured trades reach that MAE.** This is E-091's
+   "never green, 0.55 of stop against" brake (−682 to −779 points) shipped by
+   accident.
+
+3. **`InpMaxDDPct=6.0` = £3.60 — one stop is 96% of the lifetime budget**, and
+   the peak is taken from *floating* equity (`:3835`), so a trade that floats
+   +£2 and scratches leaves £1.72 of budget, less than one guard hit.
+
+### The account simulation, 20,000 runs, guards modelled
+```
+GUARDS ON, as shipped     median end   P(>=260)  P(perm lock)  avg trades before lock
+  stop 4.40, 6 trades/day     58.20      0.00%       99.8%            9.0
+  stop 5.45, 6 trades/day     58.20      0.00%      100.0%            7.9
+GUARDS OFF (both set to 100)
+  stop 4.40, 6 trades/day     72.70      0.00%        0.0%           31.3
+At E-089's M1 +0.041R        58.20      0.00%      100.0%
+```
+**P(£260) = 0.00% in every configuration tested.** Median as shipped is £58.20
+after ~9 trades, then a permanent lock that only a hand-deleted terminal global
+variable clears — while the account is meant to be unattended.
+
+### And the target is unreachable before any risk argument
+£200 profit = 254.1 net points. `InpMaxTradesDay=20` caps 9 days at 180 trades.
+Expected profit at that ceiling, guards ignored: **+£98 (→£158) at the 15m
++0.158R, +£26 (→£86) at E-089's M1 +0.041R.** Sept 4→11 is also **5** trading
+days, not 9, which is 34.1%/day compounded.
+
+### Other findings that cost money unattended
+- `LotFor():1473` wants **0.00087 lots**, sends 0.01, prints nothing —
+  **11.5× the configured `InpRiskPct`**. E-098's `BookLots()` warning was never
+  carried across. The comment at `:1705` ("risk in money is unchanged") is
+  **false** at the lot floor: every stop-widening rule is a risk increase.
+- `CheckGuardsTick:3368` returns before the flatten loop on every tick after
+  the first, so **a failed guard close is never retried and never logged**.
+- **Rollover spread blowout breaches the daily guard with zero price movement**:
+  0.30 → 3.00 is −£2.12 floating against a £1.80 budget.
+- `InpMaxSpreadAtr=0.15` → a 0.33pt ceiling on M1 vs E-089's measured **0.46**
+  spread. **The EA takes no trades at all.** Same disease as the `0.10` cost-gate
+  bug documented at `:419`.
+- `InpTpAtLevel` is **dead code** at `InpTargetR=0.0` (`:1851` requires `tp>0`).
+  E-087's level target is not running, and there is no broker-side TP at all.
+- Guards read `ACCOUNT_EQUITY`, so SuperTrendSniper and LiquiditySniper on the
+  same £60 account will lock each other out within minutes.
+
+### The evidence base, restated
+`data/` has **no M1 file**. 15m is 10 weeks (2026-06-22 → 08-31). Shorts do not
+work: **15m +0.007R t=+0.04, 1h +0.041R t=+0.37**, against longs +0.290/+0.128R
+over a sample where gold went 2362 → 4492. Whole-sample **t=+1.80, n=112, 95%
+CI [−0.016, +0.379]R**; a skill-free control with matched geometry beats the
+mean **4.06%** of the time, against a multiple-comparison bar of t≈3.65 (E-098).
+**UNPROVEN, and long-biased beta until a bear sample says otherwise.**
+
+### What was checked and is clean
+Broker-side stops attached at OrderSend (`:1885`, `:1937`) — the worst
+unattended failure mode is absent. No look-ahead: SuperTrend recomputes from a
+fixed warm-up and never reads shift 0 (`:1227`); pivots confirm on closed bars
+only (`:1329`). Guard state survives restart (`:1093`). Magics do not collide.
+All `PositionModify` calls are stop-level guarded.
+
+Files: `JARVIS/state/RED_TEAM_LIVE.md`, `JARVIS/research/rt_live_mae.py`,
+`rt_live_account.py`, `rt_live_basket.py`.
+
+---
+
+## E-099 / E-100 — THE MISSED MOVES. His complaint is real, and it is the EXIT.
+
+Veer: *"the liquidity ea and pine are not good enough the signals don't use
+levels wisely they miss clear clear moves that could've made us 40-200 pounds
+easily... we need bsl ssl liquidity sweeps rejection zones support resistance
+play ping pong"*.
+
+Every experiment in this repository scores the trades that were TAKEN. This one
+scores the ones that were NOT. **GOLD 15m and 1h only — there is still no M1/M5
+data and it cannot be fetched, so nothing here measures the timeframes he
+trades.**
+
+### E-099 — the catch rate. He is right.
+A **big move** is a zigzag leg of >= X points from its turning point (the zigzag
+uses hindsight on purpose: it is the SCOREBOARD, nothing trading reads it).
+**CAUGHT** = the shipped E-080 stack entered the same way within 3 bars of the
+turn.
+
+```
+GOLD 1h   1080 moves >= 40 pt    CAUGHT 176 (16.3%)   MISSED 904 (83.7%)
+GOLD 1h    182 moves >= 100 pt   CAUGHT  50 (27.5%)   MISSED 132 (72.5%)
+GOLD 15m   102 moves >= 40 pt    CAUGHT  35 (34.3%)   MISSED  67 (65.7%)
+GOLD 15m    18 moves >= 100 pt   CAUGHT   9 (50.0%)   MISSED   9 (50.0%)
+```
+90 875 points of 40-point-plus legs existed on 1h; 76 981 of them (84.7%) sat in
+legs never traded. Window sensitivity is reported in full (N=1 -> 11.7%,
+N=20 -> 50.6% on 1h) rather than hidden behind the one number.
+
+### And then the number that reframes the whole complaint
+```
+                          move offered   trade banked   capture (median)
+GOLD 1h  caught >=100pt     209.7 pts      14.3 pts          7.6%
+GOLD 1h  caught >=40pt       78.9 pts      10.1 pts         12.9%
+GOLD 15m caught >=100pt     202.1 pts       4.0 pts          3.8%
+```
+**When the stack DOES catch a 100-point move it banks GBP11.22 of the GBP165 that
+was there.** Median winning trade 12.2 pts (GBP9.57) on 1h, 9.6 pts (GBP7.56) on
+15m; best single trade in 13725 1h bars, 97 pts (GBP76). A 0.60 ATR stop with a
+2R target is a ~15-point trade on 1h. **GBP40-200 per trade is arithmetically
+impossible at this geometry even at a 100% catch rate.** The entry is the
+smaller half of his complaint. The TARGET is the larger half.
+
+### The ranked causes, GOLD 1h, 904 missed 40-point moves
+| # | cause | n | % |
+|---|---|---|---|
+| 1 | signal existed, limit never filled in its wait window | 463 | 51.2% |
+| 2 | zone LIVE but older than `arm_life` = 60 bars | 223 | 24.7% |
+| 3 | zone LIVE, resting limit never reached (0.25 ATR past the far edge) | 107 | 11.8% |
+| 4 | no level of any kind at the turn | 55 | 6.1% |
+| 5 | signal existed and was fillable, account was BUSY | 26 | 2.9% |
+| 6 | zone blacklisted as already used | 18 | 2.0% |
+| 7 | signal existed and was taken, but filled too late | 10 | 1.1% |
+| 8 | no zone, but the level had been touched before | 2 | 0.2% |
+
+**Cause 1 is mislabelled by its own name.** All 463 came from FVG (304) or OB
+(159), never the toptick zone, because `all_signals` emits an FVG/OB candidate on
+EVERY bar a gap is live. **Median distance from the turn to that limit: 6.96 ATR,
+about 85 points.** They are not near-misses; they are directionally correct
+levels somewhere else. Cause 1 is a level-SELECTION failure.
+
+**Cause 5 kills the obvious hypothesis.** Only 2.9% of misses were the
+one-position rule. The account is flat 93% of bars. E-097's rejection of
+same-symbol concurrency is untouched by this.
+
+### Were the levels even there? The random-bar column decides it
+GOLD 1h, share with a level of that kind within 1.0 ATR of the turn:
+```
+level kind                 missed   caught   RANDOM BARS
+ANY stack resting order      67%      83%       48%
+toptick resting limit        27%      56%       16%
+order block mid              47%      47%       33%
+any prior swing pivot        65%      81%       67%   <- ZERO information
+equal-high/low pool (>=2)    30%      31%       28%   <- ZERO information
+```
+**At 67% of missed turns the stack already had a resting order within 1 ATR.**
+His phrasing "don't use levels WISELY" is the accurate one. And "the level had
+been touched before" is worthless as a filter: a prior swing pivot sits within
+1 ATR of 67% of RANDOM bars.
+
+### The one lever that pays: `arm_life`
+15 cells per timeframe (FRAC x arm_life), 30 declared. `arm_life = 600` is not a
+tuned interior value — it equals the zone's own `life`, i.e. removing the
+constraint. Points improve monotonically with `arm_life` in **14 of 15** cells.
+```
+GOLD 1h  base  arm_life 60   n 517  48.7%  +0.414R  t +6.28  +2079 pts  catch 16.3%
+         new   arm_life 600  n 600  51.2%  +0.487R  t +7.95  +2743 pts  catch 19.7%
+         THE TRADES IT ADDS  n 101  56.4%  +0.645R  t +4.35   +555 pts
+           added vs base +0.231R, +1.4 sd — NOT distinguishable, and NOT worse
+         OOS +0.526 / +0.448   walk-forward 6/6   control 20 seeds +2.5 sd
+         Monte Carlo drawdown median 10.2R / 95th 15.0R
+GOLD 15m base n 170 +0.441R +398 pts -> new n 199 +0.510R +565 pts
+         adds n 36 +0.697R t +2.82   walk-forward 6/6   control +3.4 sd
+```
+**SUPPORTED.** It clears E-074's rule — what it ADDS is not worse than what is
+already there. +32% points on 1h, +42% on 15m. **But it recovers only 3.4
+percentage points of catch rate.** And FRAC -0.50 / arm_life 600 banks MORE
+points (+2833) with a LOWER catch rate (16.5%) — catching more turns and making
+more money are different objectives. E-074, again, in a new place.
+
+**Not shipped.** This is evidence, not a deployment.
+
+### E-100 — the four concepts he named. None of them is a trade.
+Standalone triggers, entry next open, stop 0.60 ATR, one position, ties lose,
+costs both ends, control 20 random-entry seeds against the standard error of the
+control MEAN. **26 cells declared, one parameter set per concept fixed in advance
+from his own words — no parameter search was run.**
+
+GOLD 1h, best cell of each concept:
+| concept | exit | n | win% | expectancy | t | points | wf | z | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| a. BSL/SSL pool sweep | no tgt | 200 | 5.5% | +0.158R | +0.34 | -113 | 2/6 | +0.1 | UNPROVEN |
+| b. rejection zone | 2R | 898 | 25.6% | -0.272R | -6.23 | -3395 | 0/6 | -4.0 | REJECTED |
+| c. S/R flip | 2R | 2286 | 30.0% | -0.145R | -5.03 | -3634 | 0/6 | -1.5 | REJECTED |
+| d. ping pong | 2R | 457 | 33.0% | -0.051R | -0.77 | +355 | 1/6 | +0.6 | REJECTED |
+
+**Not one of the 26 cells reaches t = 2.0.** The best in the whole table is ping
+pong / 2R on 15m at +0.139R, t = +1.18, 2/6 folds — which is what the best of 26
+looks like when there is nothing there. Every concept is also one-directional and
+the sign flips between timeframes, which is gold's 2024-26 uptrend, not a
+concept.
+
+The brief's "no fixed target" rule is degenerate at 200 bars: 94.5-95.4% of
+trades hit the 0.60 ATR stop (189/200, 393/412, 576/605, 245/258 on 1h) and the
+expectancy rests on the 11-29 time exits. A 20-bar horizon was added so the rule
+could be measured at all. It rescued nothing.
+
+### The one thing that IS real, and does not convert
+Do the concepts at least FIRE at the missed turns? Controlled two ways: uniform
+scatter (biased against clustered signals, said openly) and a **circular
+time-shift of the whole signal train**, which preserves clustering exactly and
+destroys only the alignment with price. 16 seeds.
+```
+GOLD 1h, of 904 missed 40-pt moves     catches   time-shift ctrl      z
+  a. BSL/SSL pool sweep                106 (11.7%)   75.4 (8.3%)   +11.5
+  b. rejection zone                    210 (23.2%)  193.4 (21.4%)   +5.0
+  c. S/R flip                          443 (49.0%)  437.8 (48.4%)   +1.2
+  d. ping pong                         102 (11.3%)   97.4 (10.8%)   +2.1
+GOLD 15m, of 67 missed
+  a. BSL/SSL pool sweep                  9 (13.4%)    4.8 (7.1%)    +7.7
+  d. ping pong                          14 (20.9%)    7.6 (11.3%)  +12.7
+  c. S/R flip                           28 (41.8%)   33.2 (49.5%)   -5.9
+```
+**Equal highs and equal lows DO mark turning points 1.4x to 1.9x more often than
+chance, on both timeframes — and still do not pay.** Locational information is
+not an edge. **S/R flip fires on 43% of all bars and catches turns at exactly the
+rate a time-shifted copy of itself does.** It is not a signal.
+
+### Multiple comparisons, declared
+26 concept cells + 30 lever cells + 5 window widths = **61 configurations**. The
+honest t bar at that count is ~3.3, not 2.0. Only the `arm_life` result clears
+it (t = +7.95), and it clears it on a parameter set to its natural boundary
+rather than searched.
+
+Files: `JARVIS/research/missed_moves.py`, `JARVIS/research/level_concepts.py`,
+`JARVIS/research/findings/10_missed_moves.md`.
+
+## E-099 / E-100 / E-101 — VEER'S ENTRY IDEAS, TESTED AS HE DESCRIBED THEM
+
+Him: *"we catch trends from REAL birth ASAP from reversals and price reacted
+zones so we can get top tick entry on every trend... within a trend there's also
+multiple opportunities eg pullbacks... that one to three pound profit every trade
+from top tick entry adds up quickly... lower our risk of floating in drawdown"*.
+
+Three separate claims, each testable, tested separately.
+
+### E-099 — MULTIPLE ENTRIES INSIDE ONE TREND. Works on 1h. Does not exist on 15m.
+Both EAs take ONE trade per trend: `busy_until` blocks anything while a position
+is open. A 60-point run pays once and every pullback inside it is discarded.
+```
+GOLD 1h    configuration              n   points  total R  maxDD   R/DD
+           BIRTH only (ships)       374   1096.3   +47.38  13.01   3.64
+           + pullback              1014   2519.0   +72.99  12.34   5.92
+  by kind: birth  n=435  +0.132R   1383.3 points
+           pullback n=911 +0.144R  5027.4 points   <- BETTER than birth
+
+GOLD 15m   BIRTH only (ships)       112    432.1   +20.30   5.05   4.02
+           + pullback               273    148.9    +2.24   7.33   0.31
+  by kind: birth  n=142  +0.067R
+           pullback n=222 -0.066R  -82.7 points    <- loses money
+```
+**+130% points and +63% R/DD on 1h. Negative on 15m.** Chased properly:
+- **It is not cost.** cost/stop on 15m is 0.058, well inside E-089's ≤0.11, and
+  the 15m pullback is still negative at a 0.20 spread.
+- **It is not the confirmation window.** Scaling the turn confirmation 1→4 bars
+  leaves 15m between −0.023R and +0.007R at every setting, while 1h stays
+  +0.089R to +0.170R at every setting.
+- Two timeframes, monotone in the wrong direction. **M1 is further down that
+  axis.** 15m n=146 gives se≈0.083, so −0.023 is indistinguishable from zero AND
+  from +0.14 — 15m is UNPROVEN, not disproved. It is simply not support.
+
+**Verdict: SUPPORTED on 1h. UNPROVEN at 15m and below. Does not go to M1 on
+this evidence.**
+
+### E-100 — TOP-TICK ENTRY AT A PRICE-REACTED LEVEL
+E-070 concluded "market beats every limit variant", but it tested a FIXED ATR
+PULLBACK. Veer is describing something else: a limit anchored to a prior swing.
+```
+GOLD 15m  entry                          n  missed  mean R  points   MAE
+          market at next open (ships)  112       0  +0.181   431.3  0.808
+          limit at level, 10-bar wait   52      76  +0.195   150.7  0.702
+GOLD 1h   market at next open (ships)  374       0  +0.126  1074.4  0.813
+          limit at level, near only    123     299  +0.160   859.8  0.784
+```
+**The limit misses 60-80% of trends** — most never return to a level. That is
+why E-070's conclusion is right on POINTS. But two things in Veer's favour:
+the limit's per-trade expectancy BEATS market on both timeframes, and **mean
+adverse excursion falls from 0.808R to 0.702R** — his "floating in drawdown"
+complaint is real and a level entry does reduce it by 13%.
+It banks less than half the money. **E-074 exactly: better per trade, less money.**
+
+### E-101 — THE HYBRID. Market to catch every trend, PLUS a level limit.
+The obvious synthesis, since the two legs fail in opposite directions.
+```
+GOLD 15m  market only (ships)      112  +0.181R  431.3 pts  R/DD 4.01  MAE 0.808
+          + level limit, 20-bar    160  +0.200R  306.4 pts  R/DD 3.55  MAE 0.762
+GOLD 1h   market only (ships)      374  +0.126R 1074.4 pts  R/DD 3.62  MAE 0.813
+          + level limit, 20-bar    527  +0.124R 1017.7 pts  R/DD 4.26  MAE 0.816
+  15m by leg: market n=110 +0.184R MAE 0.811 | limit n=50 +0.215R MAE 0.678
+```
+**It does not add money.** Fewer points on both timeframes; R/DD better on 1h
+(4.26 vs 3.62), worse on 15m. The limit leg is genuinely the better trade
+(+0.215R, MAE 0.678) and there are simply not enough of them.
+
+**Verdict: UNPROVEN. Not shipped.** The MAE reduction is real and worth
+revisiting on M1, where more bars means more chances for price to revisit a level.
+
+---
+
+## E-102 — THE EA WOULD HAVE DESTROYED A £60 ACCOUNT, AND NOT VIA THE STRATEGY
+
+A red-team pass on deploying `SuperTrendSniper.mq5` live on £60 today. Three
+defects found; all three verified independently before being acted on. **None of
+them is about whether the edge is real. They are unit collisions.**
+
+### 1. THE DAILY LOSS GUARD IS SMALLER THAN ONE STOP
+```
+£60, InpDailyLossPct = 3.0   ->  £1.80  =  2.29 points at 0.01 lots
+M1 gold, ATR≈2.2, 2.0 ATR stop ->  4.40 points = £3.46
+```
+**The trade cannot reach its own stop without breaching the day first.** The EA
+flattens at 52% of the way to a stop it placed itself — which is exactly the
+tight brake **E-091 measured at −682 to −779 points**, arriving through the back
+door as an interaction between two rules that were each sane alone.
+`InpMaxDDPct = 6.0` is £3.60, so **one stop is 96% of the lifetime budget.**
+£100 does not fix it either (£3.00 = 3.81 points, still under one stop).
+
+### 2. `LotFor()` SILENTLY MULTIPLIED THE RISK BY 11.5x
+`lots = MathMax(minL, MathMin(maxL, lots));` rounds **up** to the broker minimum
+and says nothing. On £60 at 0.50% with a 4.40-point stop the honest size is
+0.00087 lots; 0.01 is sent. **Every trade carried 11.5× the configured risk, for
+ever, silently.** I had fixed this exact defect in `LiquiditySniper`'s
+`BookLots()` in E-098 and never carried it across — my own inconsistency.
+
+### 3. The long/short split, and a correction to the red team
+The reviewer reported "shorts do not work". **Half right, and I checked it:**
+```
+GOLD 15m   LONG  n=57  +0.287R t=1.99  |  SHORT n=55  +0.072R t=0.51
+GOLD 1h    LONG n=230  +0.123R t=1.66  |  SHORT n=144 +0.133R t=1.48
+```
+On 1h **shorts BEAT longs** and banked more points (778.7 vs 317.6) across a
+sample where gold rose 90%. So the edge is **not** just long bias. But the
+headline stands: **ALL trades are t=1.79 (15m) and t=2.22 (1h), against this
+project's own multiple-comparison bar of t≈3.65.** The SuperTrend edge is not
+established, which agrees with E-092 on the DEMA gate.
+
+### THE TARGET, WITH THE REAL CALENDAR
+2026-09-04 is a Friday. "Next week Friday" is 2026-09-11 — **5 trading days, not
+9.** £60→£260 is 4.33× = **+34.1% per day compounded**. And
+`InpMaxTradesDay = 20` caps 5 days at **100 trades**:
+```
+at +0.181R/trade (the 15m measurement)  ->  £113
+at +0.041R/trade (E-089's M1 estimate)  ->  £69
+```
+**The target is unreachable before any argument about risk** — the trade cap
+alone forbids it.
+
+### Shipped — build 2.30
+- **`CheckConfigSanity()`**, run every closed bar. It does the arithmetic the EA
+  never did: a daily allowance must hold **two full stops** and the drawdown
+  budget **four**, or the EA **refuses to trade and prints why**. Veer's
+  requirement is *"i dont wanna have to monitor it"*, so an EA that cannot work
+  must say so on the chart rather than discover it with his money.
+- **`LotFor()` reports the clamp** with the real multiple and the real risk, and
+  `RiskAllowsEntry()` refuses above 3×.
+
+### Clean, and worth saying so
+The reviewer confirmed: stops are **real broker stops** attached at OrderSend —
+the worst unattended failure mode is absent. **No look-ahead** anywhere.
+Guard state survives restart, recompile and parameter change. Magics do not
+collide.
