@@ -5090,3 +5090,82 @@ the headroom**, which is the difference between "inside the friction" and
 H1 only and still never forward tested.** The decisive next measurement is not
 another backtest — it is a week on demo recording actual stop-fill slippage
 against the 0.10-point breakeven.
+
+## E-130 / H-1 — THE ONE RULE THE WHOLE FIELD AGREES ON. It costs 97 points.
+
+The ICT/SMC research (`JARVIS/lab/ICT_SMC_RESEARCH.md`) found that across every
+practitioner source and every open-source implementation reviewed, the field
+agrees on almost nothing — but it does agree on this: **a break of a level is a
+sweep only if price CLOSES BACK INSIDE it.** Otherwise it is a breakout and it is
+not the same trade.
+
+System A does not test it. Its limit fills on the touch, identically whether
+price rejects or slices through — and E-122 measured MFE/|MAE| = 0.96 on those
+fills, exactly the signature of two populations averaged together. So this looked
+like the highest-value fix available.
+
+Implemented honestly: **not** as a filter applied after the fill (that uses
+information from after the entry), but as a different ENTRY — wait for the bar
+that closes back inside the level, enter at its close, abandon the setup if it
+never comes.
+```
+entry rule                          n   /day   win%   points   pts/trade
+at the touch (System A ships)     981    9.0  57.1%     97.1     0.0990
+close back within 0 bars          511    4.7  37.8%      3.7     0.0073
+close back within 1 bar           729    6.7  35.4%      2.8     0.0039
+close back within 2 bars          799    7.3  34.8%     -0.3    -0.0004
+close back within 3 bars          829    7.6  35.0%    -11.9    -0.0143
+close back within 5 bars          848    7.8  34.3%     -5.8    -0.0068
+```
+**REJECTED. It removes 97 of the 97.1 points.**
+
+And it does not even do the job it was chosen for:
+```
+                          n    mean MFE   mean MAE   ratio
+at the touch            981       2.528     -2.741    0.92
+close back within 2     799       2.509     -2.792    0.90
+```
+**The population is not split.** Waiting does not select better trades; it only
+buys a worse price.
+
+### THIS IS CONSISTENT WITH THIS PROJECT'S OWN EARLIER FINDING
+E-076/E-077: *"the edge is a limit resting INSIDE the zone, filled by the sweep —
+not the sweep's close (−0.003R at ZERO cost)"*. **The close-back entry IS the
+sweep's-close entry**, which was rejected on 1h data a month ago and is now
+rejected again on real M1 ticks. Two independent samples, same answer.
+
+### AND IT REFRAMES WHAT SYSTEM A ACTUALLY IS
+The research also surfaced Osler (2003, 2005), which documents real stop
+clustering from an actual bank order book — and finds that price **ACCELERATES
+THROUGH** a stop cluster rather than reversing at it. The ICT reversal reading is
+the opposite of the only peer-reviewed evidence about the mechanism.
+
+Taken with E-130, the honest description of System A is **not** "a liquidity
+sweep reversal system". It is:
+
+> **a better-fill system.** The pivot supplies a price extreme to transact at,
+> the SuperTrend supplies the direction, and the trail supplies the exit. The
+> limit's edge is the FILL PRICE, not a prediction that price will reverse.
+
+That is a smaller and more defensible claim than the ICT framing, and it is what
+the data supports. It also explains why the direction filter mattered so much
+(E-127: it doubled the result) — the system needs to be told which way, because
+the level itself does not say.
+
+### OTHER FINDINGS FROM THE RESEARCH, recorded because they affect what we may use
+- **`joshyattridge/smart-money-concepts` (1,976 stars, MIT) contains look-ahead.**
+  `bos_choch` stamps signals two swings before the pattern confirming them and
+  then deletes signals based on what happens after them; `liquidity` uses a
+  tolerance computed from the whole dataset including the future. Corroborated by
+  its own open issue #101. **Nothing here has ever used it** — this repo's SMC
+  code was written from scratch — but no future experiment may.
+- **LuxAlgo's SMC scripts are CC BY-NC-SA 4.0**: non-commercial and share-alike,
+  so their code cannot be copied into anything shipped. Reimplement from spec.
+  Their FVG also uses `lookahead_on`, a genuine future leak on any HTF selection,
+  and their "premium/discount" is a 5% band at the extremes, not the 50% split
+  the written literature means.
+- **The only systematic public test found (StatOasis, 648 backtests on
+  SPY/QQQ/DIA/IWM) is NEGATIVE** — best t = +1.22, none beat buy-and-hold.
+- **Do not test on this data**: killzones (the feed's missing 00:00 UTC hour
+  contaminates every session boundary), anything volume-based (both volume
+  columns are zero), MMXM (not falsifiable in real time).
