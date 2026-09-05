@@ -552,3 +552,139 @@ def cost_and_control():
 
 if __name__ == "__main__":
     cost_and_control()
+
+
+# ===========================================================================
+#  E-136 — WHERE DOES THE 90% WIN RATE ACTUALLY LIVE, AND WHAT DOES IT BANK?
+#
+#  Veer: "50% is not near good enough, people have 90% win rates trading
+#  liquidity, losses are small".
+#
+#  He is right that 90% is reachable. A win rate is not a property of a
+#  strategy - it is a property of the TARGET you choose. Shrink the target
+#  relative to the stop and the win rate goes wherever you like. The only
+#  question that matters is what each rung of that ladder BANKS.
+#
+#  So this walks the whole ladder on the FILTERED book from E-135d - the wick
+#  sweep plus the return FVG, the filter that survived the pre-registered test
+#  - from targets small enough to hit 90% up to 3R, and prints win rate next
+#  to money at every rung.
+#
+#  Reported in POINTS and in GBP at 0.01 lots, never in R. E-074: the best
+#  per-trade gate set in this project banked the LEAST money, and this is
+#  exactly the shape of question where R lies to you.
+#
+#  Also tested: a FIXED POINT target rather than an R multiple, because that is
+#  how the trade is actually taken by hand - "I'm up two dollars, I'm out" is a
+#  fixed target, not a multiple of a stop that moves with every setup.
+# ===========================================================================
+def frontier():
+    import statistics as stt
+    from engine import atr as watr
+    from liq_m1 import load
+
+    s, SP = load("M1")
+    A = watr(s, 14)
+    va = sorted(x for x in A[100:] if x)
+    med_a = va[len(va) // 2]
+    piv = pivots(s, 5)
+    days = len(s) / 1440
+
+    def book(tgt_r, tgt_pts, cost_frac):
+        cs = cost_frac / (stt.median(SP) / med_a)
+        out, busy = [], -1
+        for (kb, px, side) in piv:
+            if kb <= busy:
+                continue
+            a = A[kb]
+            if not a or a <= 0:
+                continue
+            tside = -side
+            need = px + side * 0.10 * a
+            sw, ext = None, None
+            for k in range(kb + 1, min(kb + 120, len(s))):
+                if (s.h[k] >= need) if side > 0 else (s.l[k] <= need):
+                    sw = k
+                    ext = s.h[k] if side > 0 else s.l[k]
+                    break
+            if sw is None:
+                continue
+            j = None
+            for k in range(sw + 1, min(sw + 120, len(s))):
+                if (s.h[k] >= px) if tside > 0 else (s.l[k] <= px):
+                    j = k
+                    break
+                ext = max(ext, s.h[k]) if side > 0 else min(ext, s.l[k])
+            if j is None:
+                continue
+
+            # THE FILTER from E-135d, both legs
+            rng = s.h[sw] - s.l[sw]
+            disp = (abs(s.c[sw] - s.o[sw]) / rng) if rng > 0 else 0.0
+            gap = 0.0
+            if j >= 2:
+                gap = (s.l[j] - s.h[j - 2]) if tside > 0 else (s.l[j - 2] - s.h[j])
+            if disp > 0.6460 or (gap / a) < -1.4909:
+                continue
+
+            sp = SP[j] * cs
+            entry = px + tside * sp / 2.0
+            sl = ext - tside * 0.30 * a
+            risk = abs(entry - sl)
+            if risk <= 0:
+                continue
+            tp = entry + tside * (tgt_r * risk if tgt_pts is None else tgt_pts)
+
+            px_out, kk = None, None
+            for k in range(j, min(j + 240, len(s))):
+                if (s.l[k] <= sl) if tside > 0 else (s.h[k] >= sl):
+                    px_out, kk = sl, k
+                    break
+                if k == j:
+                    continue
+                if (s.h[k] >= tp) if tside > 0 else (s.l[k] <= tp):
+                    px_out, kk = tp, k
+                    break
+            if px_out is None:
+                kk = min(j + 240, len(s) - 1)
+                px_out = s.c[kk]
+            out.append((tside * ((px_out - tside * SP[kk] * cs / 2.0) - entry), risk))
+            busy = kk + 5
+        return out
+
+    for cost_frac, clabel in ((0.110, "0.20 pt spread"), (0.220, "0.40 pt spread")):
+        print("\n" + "=" * 96)
+        print(f"  E-136 — the win rate / money frontier, filtered book, {clabel}")
+        print("=" * 96)
+        # NEEDED is arithmetic, not a measurement: with the loss fixed at 1R, a
+        # target of R units breaks even at p = 1/(1+R) BEFORE costs. Printing it
+        # next to what the market actually gives is the whole point - a win rate
+        # means nothing until you know what win rate that target REQUIRES.
+        print(f"  {'target':>14}{'n':>7}{'/day':>7}{'WIN%':>8}{'NEEDED':>8}"
+              f"{'edge':>8}{'points':>10}{'per trade':>12}{'GBP 0.01':>11}")
+        print("  " + "-" * 86)
+        for tgt in (0.10, 0.15, 0.20, 0.25, 0.35, 0.50, 0.75, 1.0, 1.5, 2.0, 3.0):
+            r = book(tgt, None, cost_frac)
+            if len(r) < 40:
+                continue
+            p = sum(x[0] for x in r)
+            w = 100.0 * sum(1 for x in r if x[0] > 0) / len(r)
+            need = 100.0 / (1.0 + tgt)
+            print(f"  {tgt:>12.2f}R{len(r):>7}{len(r)/days:>7.1f}{w:>7.1f}%"
+                  f"{need:>7.1f}%{w-need:>+8.1f}{p:>10.1f}{p/len(r):>+12.4f}"
+                  f"{p*TODAY*GBP:>11.2f}")
+        print("  " + "-" * 79)
+        print("  fixed POINT targets (2018 points; multiply by 7.38 for today's scale)")
+        for tp_pts in (0.05, 0.10, 0.20, 0.30, 0.50):
+            r = book(None, tp_pts, cost_frac)
+            if len(r) < 40:
+                continue
+            p = sum(x[0] for x in r)
+            w = 100.0 * sum(1 for x in r if x[0] > 0) / len(r)
+            ar = sum(x[1] for x in r) / len(r)
+            print(f"  {tp_pts:>11.2f}pt{len(r):>7}{len(r)/days:>7.1f}{w:>7.1f}%"
+                  f"{p:>10.1f}{p/len(r):>+12.4f}{p*TODAY*GBP:>11.2f}{ar:>10.3f}")
+
+
+if __name__ == "__main__":
+    frontier()

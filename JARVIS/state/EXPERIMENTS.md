@@ -5524,3 +5524,66 @@ it can trade based of whatever it wants... i wanted to trade m1 to m30 possibly
 h1 possibly if good setup"*. That was me turning a default into a rule. The
 ceiling is now `InpMaxTF`, still M30 by default because that is where every
 measurement lives, but raising it is his call and the log says what it costs.
+
+---
+
+## E-136 — WHERE THE 90% WIN RATE LIVES, AND WHAT IT BANKS
+`JARVIS/research/sweep_discriminators.py` → `frontier()`
+
+> *"50% is not near good enough, people have 90% win rates trading liquidity,
+> losses are small"*
+
+He is right that a high win rate is reachable. **A win rate is not a property of
+a strategy — it is a property of the TARGET.** Shrink the target against the stop
+and the win rate goes wherever you like. The only question is what each rung
+banks. So the whole ladder was walked on the **filtered** book from E-135d.
+
+The decisive column is **NEEDED**, and it is arithmetic rather than a
+measurement: with the loss fixed at 1R, a target of R units breaks even at
+`p = 1/(1+R)` *before costs*.
+
+### At a 0.20-point spread — the best case
+| target | n | /day | WIN% | NEEDED | edge | points | GBP @0.01 |
+|---|---|---|---|---|---|---|---|
+| 0.10R | 2007 | 18.4 | 66.3% | **90.9%** | **−24.6** | −59.7 | −346.51 |
+| 0.15R | 1988 | 18.2 | 78.1% | 87.0% | −8.9 | −51.1 | −296.70 |
+| 0.20R | 1972 | 18.1 | 80.7% | 83.3% | −2.7 | −34.0 | −197.61 |
+| 0.25R | 1958 | 18.0 | **80.8%** | 80.0% | +0.8 | −21.2 | −123.11 |
+| 0.35R | 1941 | 17.8 | 79.8% | 74.1% | +5.7 | −4.1 | −24.03 |
+| 0.50R | 1917 | 17.6 | 76.9% | 66.7% | +10.2 | 45.5 | 264.28 |
+| 1.00R | 1835 | 16.8 | 67.6% | 50.0% | +17.6 | 112.4 | 653.08 |
+| **1.50R** | 1765 | 16.2 | 59.3% | 40.0% | **+19.3** | 173.5 | 1007.55 |
+| 2.00R | 1713 | 15.7 | 52.3% | 33.3% | +19.0 | 182.5 | 1059.90 |
+| 3.00R | 1610 | 14.8 | 41.7% | 25.0% | +16.7 | **190.0** | **1103.70** |
+
+### Three findings, and the first one is physical
+**1. 90% is not reachable on this instrument at any target.** To win 90% you need
+a target of `1/9 = 0.111R`. At 0.10R the market gives **66.3%** against the
+**90.9%** required — a 24.6-point deficit. And notice the win rate *falls* below
+0.15R (80.7% → 78.1% → 66.3%): once the target is smaller than the round-trip
+cost, a "win" stops clearing. **The spread caps the achievable win rate at about
+81%**, and no strategy choice moves that ceiling. At a 0.40 spread the ceiling
+drops to 76.8%.
+
+**2. Every high-win-rate rung loses money.** The peak win rate, 80.8% at 0.25R,
+needs 80.0% just to break even — an edge of **+0.8 points** — and the spread is
+larger than that. It banks **−£123**.
+
+**3. The edge over breakeven PEAKS at a 59.3% win rate.** +19.3 points at 1.5R,
+and the money keeps climbing to 3R. **The win rate that makes the most money is
+41.7%.**
+
+### What this does NOT say
+It does not say his 80–90% is imagined. Three things could make it real and none
+of them contradict the table: a discretionary exit cuts losers before the full
+stop, which changes the loss size and therefore the required win rate; a
+different instrument with a wider ATR against its spread lifts the ceiling; and
+scratches counted as wins move the number without moving the money.
+
+**The constructive result is that +19.3 points over breakeven is the largest
+edge measured anywhere in this project.** It is just wearing a 59.3% win rate
+instead of a 90% one.
+
+Verdict: "a 90% win rate on M1 XAUUSD liquidity sweeps" is **DISPROVEN** — the
+cost floor caps it near 81%, and every rung above 76% is negative. The filtered
+sweep at 1.5–3R is **SUPPORTED** and remains the strongest candidate here.
