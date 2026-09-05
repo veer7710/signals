@@ -707,21 +707,30 @@ void PB_Init(string prefix, string title, long magic, bool show,
 #ifndef TIMEFRAME_GUARD_MQH
 #define TIMEFRAME_GUARD_MQH
 
-bool TfAllowed(ENUM_TIMEFRAMES tf)
+// The ceiling is a SETTING, not a constant. Veer: "i'm putting all ea on m1
+// it can trade based of whatever it wants... i wanted to trade m1 to m30
+// possibly h1 possibly if good setup". The first version of this file hard
+// refused above M30, which was me turning a default into a rule. The default
+// is still M30 because that is where every measurement lives, but raising it
+// is his call to make, and the log says what he is giving up when he does.
+bool TfAllowed(ENUM_TIMEFRAMES tf, ENUM_TIMEFRAMES ceiling)
 {
-   return tf == PERIOD_M1  || tf == PERIOD_M2  || tf == PERIOD_M3
-       || tf == PERIOD_M4  || tf == PERIOD_M5  || tf == PERIOD_M6
-       || tf == PERIOD_M10 || tf == PERIOD_M12 || tf == PERIOD_M15
-       || tf == PERIOD_M20 || tf == PERIOD_M30;
+   if(tf == PERIOD_MN1) return false;
+   int mins = PeriodSeconds(tf) / 60;
+   int cap  = PeriodSeconds(ceiling) / 60;
+   return mins > 0 && cap > 0 && mins <= cap;
 }
 
 // Returns false and prints why. Call it first in OnInit and return
 // INIT_FAILED on false.
-bool TfGuard(string ea)
+bool TfGuard(string ea, ENUM_TIMEFRAMES ceiling = PERIOD_M30)
 {
-   if(TfAllowed((ENUM_TIMEFRAMES)_Period)) return true;
-   PrintFormat("[%s] REFUSING TO START on %s.", ea,
-               EnumToString((ENUM_TIMEFRAMES)_Period));
+   if(TfAllowed((ENUM_TIMEFRAMES)_Period, ceiling)) return true;
+   PrintFormat("[%s] REFUSING TO START on %s - above the configured ceiling %s.",
+               ea, EnumToString((ENUM_TIMEFRAMES)_Period),
+               EnumToString(ceiling));
+   Print("Raise InpMaxTF if you mean to do this. It is your call, but read "
+         "the next two lines first.");
    Print("This is an M1-M30 system. Every number it is quoted at was measured "
          "on M1 and none of it transfers upward: the spread is a far smaller "
          "fraction of the move up there, the stop and trail are sized in an "
@@ -729,7 +738,7 @@ bool TfGuard(string ea)
    Print("Higher timeframes are for CONTEXT. Reading H4 is not trading H4. "
          "E-133 measured H1 and H4 as direction sources against M1 across nine "
          "variants and not one of them beat M1.");
-   Print("Attach this to M1, M3, M5, M15 or M30.");
+   Print("Attach this to M1, M3, M5, M15 or M30, or raise InpMaxTF deliberately.");
    return false;
 }
 
@@ -1485,6 +1494,9 @@ input bool   InpShowProfitBox = true;   // the shared points/money ledger box
 input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
+// The highest chart this EA will start on. M30 by default because that is
+// where every number it is quoted at was measured - raise it deliberately.
+input ENUM_TIMEFRAMES InpMaxTF = PERIOD_M30;
 input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770069;  // LiquiditySniper
@@ -4589,7 +4601,7 @@ void OnTimer()
 
 int OnInit()
 {
-   if(!TfGuard("STS")) return INIT_FAILED;
+   if(!TfGuard("STS", InpMaxTF)) return INIT_FAILED;
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
    {
       Print("REFUSING TO START: InpDemoOnly is true and this is not a demo "

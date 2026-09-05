@@ -5424,3 +5424,103 @@ spread is 0.220 of ATR on M1 and 0.047 on M15).
 `JARVIS/ea/include/TimeframeGuard.mqh` now **refuses to start above M30** in all
 three EAs. A refusal, not a warning — a warning in the Experts log is something
 you find out about after the trades.
+
+---
+
+## E-134 / E-135 — VEER'S OWN TRADE, BUILT AND THEN FILTERED
+`JARVIS/research/sweep_winrate.py`, `JARVIS/research/sweep_discriminators.py`
+
+> *"i literally run liquidity sweep strat myself and i have 80% winrate. i
+> wanted u using ict smc perfect and automate so i dont have to do analysis"*
+
+The most useful sentence in this project, and nothing here was built to match
+it. Everything shipped is a **low win rate, let-it-run** design — System A wins
+57.1% off a trail with no target. His is the opposite shape: take the sweep,
+take a small target, be right most of the time.
+
+The repo's answer to that shape is **E-089**, which said the edge *"dies of
+costs before it ever gets to M1's trade count"*. **That is not admissible**, for
+the same reason E-100's ping-pong rejection was not: E-089 **had no M1 data** —
+it took 1h and 15m bars and *raised the simulated spread* until cost/stop
+matched what M1's was assumed to be. It also used spread 0.46 when the tick data
+later measured 0.229, and it predates the E-110 fix.
+
+### E-134 — the mechanical version, and a bug that the numbers exposed
+Level → sweep through it → limit back **at** the level → stop beyond the sweep
+extreme → fixed target.
+
+The first run came back uniformly negative with **45% win at a 0.25R target**.
+That is arithmetically impossible against a 1R stop, and the impossibility is
+what found the bug: **the fill condition was inverted**, so every trade filled
+on the sweep bar itself at a price the market had already left. After the fix
+the ladder has the right shape — 68.1% win at 0.25R falling to 26.7% at 3R.
+
+**And it still does not pay.** Across M1 (pivot 5 and 10), M5 and M15, 96 cells:
+the best win rate is **69.4%** and every high-win-rate cell loses money. The few
+positive cells sit at 1.5–2.0R with 36–44% win rates.
+
+**The gap to his 80% is not the rules — it is SELECTION.** The mechanical version
+takes **20–33 trades a day**. He takes a handful.
+
+### E-135 — so what separates a good sweep from a bad one?
+Twelve ICT/SMC features, all knowable at entry, quartiled against a fixed entry,
+stop, target and cost. Two came out monotone: **sweep displacement** and **FVG on
+the return**.
+
+**E-135c killed that.** Re-running the entire scan on the **first half only**,
+*neither* is monotone there — the monotonicity was the scan finding the best of
+twelve across pooled data. A random 4-bucket ladder is monotone 8.3% of the
+time, so twelve features produce ~1 by luck. This is recorded because it is the
+mistake that was nearly shipped.
+
+### E-135d — the pre-registered test, which is the one that counts
+Monotonicity across four buckets was always a stricter criterion than the theory
+claims. ICT makes a **directional** prediction and made it long before this
+dataset existed:
+
+> a sweep that is a **wick** (long wick, small body) is a **rejection** and the
+> trade back through the level is good; a sweep that **closes with a big body**
+> is a real breakout and fading it is the fakeout. Displacement back through the
+> level — the gap it leaves being the FVG — confirms the reversal.
+
+So: **direction fixed by theory**, cut = the first half's median, second half
+touched once.
+
+| second half (never seen) | n | win% | points | per trade |
+|---|---|---|---|---|
+| **both filters** | 358 | **50.3%** | +50.3 | **+0.1404** |
+| ...refused | 992 | 34.9% | −12.8 | −0.0129 |
+| unfiltered baseline | 1350 | 37.8% | +37.5 | +0.0278 |
+| wick alone | 665 | 43.6% | +55.8 | +0.0839 |
+| FVG alone | 719 | 44.4% | +40.0 | +0.0556 |
+
+**5× the per-trade, win rate 37.8% → 50.3%, and the refused book is negative.**
+It passes both criteria. In-sample +0.0565 against out-of-sample +0.1404 — OOS
+is *better*, which is not the signature of overfitting.
+
+### E-135e — and it survives the cost that killed ping-pong
+| spread/ATR | ≈ M1 spread | n | win% | points | per trade |
+|---|---|---|---|---|---|
+| 0.110 | 0.20 pts | 720 | 49.4% | 70.7 | +0.0982 |
+| 0.165 | 0.30 pts | 718 | 48.3% | 60.0 | +0.0835 |
+| **0.220** | **0.40 pts** | 706 | **47.5%** | **52.4** | **+0.0742** |
+| 0.300 | 0.55 pts | 695 | 46.2% | 33.8 | +0.0486 |
+
+Ping-pong died before 0.25. This is still making +0.0742/trade at Veer's stated
+0.40-point spread.
+
+Verdict: **the two ICT discriminators are SUPPORTED.** ~6.6 trades/day, ~50% win
+at a 2R target, robust to cost, refused book negative, OOS exceeds IS.
+
+**What is still owed before this can be believed:** a time-shifted control (the
+only fair control for a level strategy, E-076), a walk-forward, a long/short
+split, and the honest caveat that the *features* were surfaced by a scan that
+had seen all the data — only their **direction** was pre-registered from theory.
+One instrument, 2018 H1.
+
+### AND A CORRECTION TO E-133's SHIPPED GUARD
+E-133 made the EAs refuse to start above M30. Veer: *"i'm putting all ea on m1
+it can trade based of whatever it wants... i wanted to trade m1 to m30 possibly
+h1 possibly if good setup"*. That was me turning a default into a rule. The
+ceiling is now `InpMaxTF`, still M30 by default because that is where every
+measurement lives, but raising it is his call and the log says what it costs.

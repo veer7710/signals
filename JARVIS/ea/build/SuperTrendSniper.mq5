@@ -824,6 +824,9 @@ input bool   InpShowProfitBox = true;   // the shared points/money ledger box
 input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
+// The highest chart this EA will start on. M30 by default because that is
+// where every number it is quoted at was measured - raise it deliberately.
+input ENUM_TIMEFRAMES InpMaxTF = PERIOD_M30;
 input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770069;  // LiquiditySniper
@@ -3928,7 +3931,7 @@ void OnTimer()
 
 int OnInit()
 {
-   if(!TfGuard("STS")) return INIT_FAILED;
+   if(!TfGuard("STS", InpMaxTF)) return INIT_FAILED;
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
    {
       Print("REFUSING TO START: InpDemoOnly is true and this is not a demo "

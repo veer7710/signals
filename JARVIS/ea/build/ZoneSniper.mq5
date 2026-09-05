@@ -123,6 +123,9 @@ input bool   InpShowProfitBox = true;   // the on-chart panel
 input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
+// The highest chart this EA will start on. M30 by default because that is
+// where every number it is quoted at was measured - raise it deliberately.
+input ENUM_TIMEFRAMES InpMaxTF = PERIOD_M30;
 // Run more than one of these EAs on the same account and the box speaks for
 // all of them - one row per magic, separate books. Set a magic to 0 to drop
 // its row. These defaults are the magics the other two EAs ship with.
@@ -557,7 +560,7 @@ int OnInit()
             "InpDemoOnly=false deliberately, and only after a demo run.");
       return INIT_FAILED;
    }
-   if(!TfGuard("ZS")) return INIT_FAILED;
+   if(!TfGuard("ZS", InpMaxTF)) return INIT_FAILED;
    g_atrM1 = iATR(_Symbol, PERIOD_M1, 14);
    if(g_atrM1 == INVALID_HANDLE) { Print("[ZS] ATR handle failed"); return INIT_FAILED; }
 
