@@ -5665,3 +5665,76 @@ depends on the ×7.38 volatility scaling to today, and nothing has been forward
 tested. E-125's warning stands as the reason to keep watching this one: a 25%
 give-back on *System A* went from +11.1 in-sample to −0.1 out-of-sample. It holds
 here on a different entry, but that is the failure mode to watch for.
+
+---
+
+## E-138 — TRYING TO BREAK E-137, AND THE ONE THING THAT BROKE
+`JARVIS/research/sweep_audit.py`
+
+> *"just perfect everything, take ur time now, i rather wait and have no
+> mistakes then have now unperfect"*
+
+E-137 is the largest number in this project, which is the reason to attack it
+hardest. Three bugs have already been caught in this session's own work — an
+inverted fill condition, a control that manufactured 10,258 points, and a
+contaminated discriminator scan — and every one looked like a result first.
+
+### THE EDGE SURVIVED EVERY ATTACK
+- **Win size.** The 82.9% is not the give-back flattering itself: average **win
+  +0.2702** points against average **loss −0.2341**, a 1.154 size ratio. Only
+  3.9% of wins are worth under 10p and they carry £3.93 of £2,455. It wins more
+  often *and* wins bigger.
+- **Slippage.** 422.8 → 399.8 (0.01) → 376.8 (0.02) → 307.9 (0.05) → **193.0 at
+  0.10 points**, charged on *every* trade. E-129 broke System A at 0.10; this
+  still banks £1,120 there despite trading six times as often.
+- **Concentration.** Drop the best 1% → 376.0; best 5% → 290.7; **best 10% →
+  218.8** (+0.1058/trade). Not a lottery ticket.
+- **The filter is load-bearing.** Filter OFF: 3723 trades, 72.7% win,
+  +0.1013/trade. Filter ON: 2298 trades, 82.9% win, **+0.1840/trade**.
+- **Cache hygiene.** The baseline reproduces exactly after the control swaps.
+
+### THE LOOK-AHEAD TEST WAS INVALID, TWICE, THE SAME WAY
+The first version delayed the **fill bar** while keeping the entry pinned to the
+**level price**, so a "delayed" trade entered at the level on a bar where the
+market was elsewhere. It reported 519 / 533 / 619 points for 1 / 2 / 5 bars of
+delay — *better* than the real 422.8 — which reads as an alarm and is nothing of
+the kind. **It is the identical defect that broke the E-137 control**, made a
+second time in the same session. Replaced with a structural check: every entry
+input is indexed at or before the fill bar `j`, every exit input strictly after
+it, and the initial stop is deliberately allowed on bar `j` because a sweep
+running straight through us is a real loss.
+
+### WHAT ACTUALLY BROKE: RISK PER TRADE
+```
+worst single trade   -5.900 points = -£34.27 at 0.01 lots
+max drawdown          6.4 points   = -£36.99 = 61.6% of a £60 account
+```
+
+**One trade can take 57% of his account.** That is not an edge problem, and it is
+fatal in a way a negative expectancy is not — the account dies before the edge
+pays. The cause is structural: the stop sits beyond the **sweep extreme**, a
+sweep can run a long way before price returns to the level, and nothing bounds
+it. 0.01 lots is the floor (E-081), so a stop too wide to afford cannot be sized
+down. **It can only be refused.**
+
+### THE FIX, AND IT IS ALMOST FREE
+The cap must be in **ATR, not points** — M1 ATR is 0.246 in 2018 and ~1.82 today
+(E-132), so a points cap fitted on 2018 would refuse almost everything now.
+
+| max risk | n | /day | win% | points | GBP | max DD | worst trade |
+|---|---|---|---|---|---|---|---|
+| none | 2298 | 21.1 | 82.9% | 422.8 | 2455.52 | **£36.99** | **−£34.27** |
+| 4.0 ATR | 2226 | 20.4 | 82.2% | 421.7 | 2449.46 | £15.48 | −£11.16 |
+| 3.0 ATR | 2177 | 20.0 | 82.0% | 416.1 | 2416.60 | £9.26 | −£7.34 |
+| **2.0 ATR** | 2084 | 19.1 | **82.1%** | **412.3** | **2394.55** | **£6.10** | **−£4.37** |
+| 1.2 ATR | 1937 | 17.8 | 81.8% | 389.8 | 2263.85 | £6.10 | −£3.96 |
+
+**2.0 ATR costs 10.5 points — 2.5% of the edge — and removes 83% of the
+drawdown and 87% of the worst trade.** On £60 that is a 10.2% maximum drawdown
+and a 7.3% worst trade, against 62% and 57% uncapped. Below 2.0 ATR the
+drawdown stops improving and only the profit falls, so it is a floor, not a
+slope.
+
+**This is the shipping configuration.** The risk cap is not an optimisation — it
+is the difference between an edge that compounds and an account that does not
+survive to see it.
