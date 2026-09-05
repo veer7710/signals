@@ -1,0 +1,467 @@
+//@version=6
+// ===========================================================================
+//  SUPERTREND CLEAN 4.1  —  the chart for SuperTrendSniper.mq5
+//
+//  Same visual language as ZONE SNIPER 3.2, so the two charts read identically:
+//  signal label, live position box with the stop and the R ladder priced in
+//  money, a shaded box on every finished trade, one profit box in the corner.
+//  Nothing else touches the candles.
+//
+//  THE CORE, and it is the EA's core, not a lookalike:
+//     SIGNAL   a SuperTrend(7, 1.2) flip
+//     GATE     the DEMA must slope the right way (dema >= dema[2] to buy)
+//     STOP     2.0 x ATR(14) from the fill
+//     TRAIL    3.0 x ATR(14), armed immediately, ratcheted one way
+//     STALL    close a trade that has gone nowhere for 25 bars
+//     CEILING  50 bars
+//     There is no take profit. InpTargetR ships at 0.
+//
+//  READ THIS BEFORE YOU TRUST THE GREEN NUMBER
+//  -------------------------------------------
+//  On 157,051 real M1 bars built from 18,816,940 bid/ask ticks, against a
+//  matched control:
+//     the SuperTrend FLIP as an entry   +0.0021R over control AT ZERO COST,
+//                                       1.2 control se. That is nothing.
+//     the DEMA gate                     -3.1 control se. WORSE THAN RANDOM.
+//     the SuperTrend as a TRAIL          39.6 points vs 11.0 for a fixed
+//                                       give-back. This is where it works.
+//  E-125/E-126. The band widens in a trend and tightens in chop by
+//  construction, which is what an exit rule has to do and what a fixed
+//  percentage cannot. SuperTrend was never an entry. It is an exit.
+//
+//  That is why this chart runs TWO books, and the second is the point:
+//     SYSTEM        flip in, stop / trail / stall out    <- what the EA does
+//     FLIP & HOLD   flip in, opposite flip out           <- no exit machinery
+//  The difference is what the stop, the trail and the stall are worth on YOUR
+//  data and YOUR broker, in points. If FLIP & HOLD is beating SYSTEM, the exit
+//  machinery is costing you and this chart will say so.
+//
+//  It also draws a small hollow circle at every flip the DEMA gate REFUSED, so
+//  what that filter costs is visible rather than argued about.
+//
+//  COST. Every number quoted here is at spread/ATR 0.11, which on M1 at today's
+//  volatility is a 0.20-point spread (E-132). At a 0.30 spread that is 0.165
+//  and at 0.40 it is 0.220 - so if your broker runs wide, the honest reading of
+//  any M1 result is two columns to the right of where you want to read it.
+//
+//  Nothing here is proof. The flip entry is REJECTED as a source of edge and
+//  the trail is SUPPORTED. This chart is not even a backtest - it is a running
+//  tally on whatever bars you point it at.
+//
+//  ONE THING ABOUT THE HISTORY BOXES: TradingView caps drawing objects, so on
+//  a long M1 history only the most recent few hundred trades keep their box.
+//  The profit box counts EVERY trade regardless - the counters are variables,
+//  not drawings. If the boxes stop and the numbers keep climbing, that is the
+//  cap, not a bug.
+//
+//  RUN IT ON XAUUSD. M1, M5 or M15.
+// ===========================================================================
+indicator("SUPERTREND CLEAN 4.1", overlay = true, max_labels_count = 500,
+     max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
+
+gS = "1 · SIGNAL"
+stLen   = input.int(7,     "SuperTrend ATR length", group = gS)
+stMult  = input.float(1.2, "SuperTrend multiplier", group = gS, step = 0.1)
+useDema = input.bool(true, "DEMA slope gate",       group = gS,
+     tooltip = "The EA ships with this ON. It measured at -3.1 control se, worse than random. Turn it off and watch the profit box.")
+demaLen = input.int(0,     "DEMA length (0 = per-clock: 60 on M1, 100 on M3, else 200)",
+     group = gS, minval = 0)
+
+gE = "2 · RISK / EXIT"
+stopAtr  = input.float(2.0, "Initial stop (ATR)",   group = gE, step = 0.5)
+useTrail = input.bool(true, "ATR trail",            group = gE)
+trailAtr = input.float(3.0, "Trail distance (ATR)", group = gE, step = 0.5,
+     tooltip = "Wide on purpose. Tight trails lost on every market tested.")
+useSt    = input.bool(false,"Trail on the SuperTrend band instead", group = gE,
+     tooltip = "E-125: the band beat a fixed give-back 39.6 points to 11.0. Worth testing against the ATR trail with the profit box.")
+maxStall = input.int(25,    "Close a stalled trade after N bars", group = gE)
+maxHold  = input.int(50,    "Absolute ceiling (bars)",           group = gE)
+tpR      = input.float(0.0, "Hard take profit (R). 0 = none",    group = gE, step = 0.5)
+
+gM = "3 · MONEY"
+lots     = input.float(0.01,  "Lots", group = gM, step = 0.01, minval = 0.01)
+gbpPoint = input.float(0.787, "Account currency per point at 0.01 lots", group = gM,
+     step = 0.001,
+     tooltip = "E-081. 0.01 lots on XAUUSD is about GBP 0.787 per point and cannot go lower. This is why the TIMEFRAME sets the risk, not the account size.")
+ccy      = input.string("£",  "Currency symbol", group = gM)
+
+gD = "4 · CHART"
+cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
+cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
+showBand  = input.bool(true, "SuperTrend band", group = gD, inline = "s1")
+showDema  = input.bool(true, "DEMA",            group = gD, inline = "s1")
+showLive  = input.bool(true, "Position box",    group = gD, inline = "s1")
+showR     = input.bool(true, "R ladder",        group = gD, inline = "s2")
+showHist  = input.bool(true, "Finished trades", group = gD, inline = "s2")
+showPanel = input.bool(true, "Profit box",      group = gD, inline = "s2")
+panelPos  = input.string("Bottom right", "Profit box position", group = gD,
+     options = ["Bottom right", "Top right", "Bottom left"])
+
+f_num(x, d) =>
+    (x >= 0 ? "+" : "") + str.tostring(x, d)
+f_ccy(v) =>
+    (v >= 0 ? "+" : "-") + ccy + str.tostring(math.abs(v) * gbpPoint * lots / 0.01, "0.00")
+
+// ------------------------------------------------------------------ maths --
+atr = ta.atr(14)
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+bull = stDir == -1
+
+// The EA's per-clock DEMA rule. Pine has no ta.dema, so it is built from two
+// EMAs exactly as the EA builds it. Pine's ta.ema is SMA-seeded, which is what
+// the EA was changed to in 2.30 - that seeding difference was a real source of
+// signal drift before P92.
+dLen = demaLen > 0 ? demaLen :
+       timeframe.period == "1" ? 60 :
+       timeframe.period == "3" ? 100 : 200
+e1   = ta.ema(close, dLen)
+dema = 2 * e1 - ta.ema(e1, dLen)
+
+flipUp   = bull and not bull[1]
+flipDown = not bull and bull[1]
+gateBuy  = not useDema or dema >= dema[2]
+gateSell = not useDema or dema <= dema[2]
+
+// --------------------------------------------------------- position state ---
+var int   posDir   = 0
+var float posEntry = na
+var float posStop  = na
+var float posInit  = na
+var float posTp    = na
+var int   posBar   = na
+var float posPeak  = na
+var int   stallBar = na
+
+// the shadow book: same entries, no exit machinery at all
+var int   shDir   = 0
+var float shEntry = na
+
+// ------------------------------------------------------------ book-keeping --
+var int   nTrades = 0
+var int   nWins   = 0
+var float sumPts  = 0.0
+var float shPts   = 0.0
+var float bestPts = 0.0
+var float worstPts= 0.0
+var float peakEq  = 0.0
+var float maxDD   = 0.0
+var int   nLong   = 0
+var int   nShort  = 0
+var float ptsLong = 0.0
+var float ptsShort= 0.0
+var int   nStop   = 0
+var int   nTrail  = 0
+var int   nStall  = 0
+var int   nAged   = 0
+var int   nFlip   = 0
+var int   firstT  = 0
+
+buySig  = flipUp   and gateBuy  and barstate.isconfirmed
+sellSig = flipDown and gateSell and barstate.isconfirmed
+
+// ============================ THE LIVE POSITION BOX ========================
+// One set of drawing objects, created on the fill and moved every bar, deleted
+// on the exit. Creating a fresh set per bar is what fills a chart's 500-object
+// budget in an afternoon and makes it stutter.
+var box   pBox   = na
+var line  pEntry = na
+var line  pStop  = na
+var line  pR1    = na
+var line  pR2    = na
+var line  pR3    = na
+var label lStop  = na
+var label lR1    = na
+var label lR2    = na
+var label lR3    = na
+var label lLive  = na
+
+// Pine takes a function's last expression as its return value, and a body made
+// only of if-statements returns na. Returning an explicit bool keeps the type
+// unambiguous wherever it is called.
+f_killLive() =>
+    if not na(pBox)
+        box.delete(pBox)
+    if not na(pEntry)
+        line.delete(pEntry)
+    if not na(pStop)
+        line.delete(pStop)
+    if not na(pR1)
+        line.delete(pR1)
+    if not na(pR2)
+        line.delete(pR2)
+    if not na(pR3)
+        line.delete(pR3)
+    if not na(lStop)
+        label.delete(lStop)
+    if not na(lR1)
+        label.delete(lR1)
+    if not na(lR2)
+        label.delete(lR2)
+    if not na(lR3)
+        label.delete(lR3)
+    if not na(lLive)
+        label.delete(lLive)
+    true
+
+// ---- the shadow book closes only on the opposite flip ----------------------
+if shDir != 0 and barstate.isconfirmed and ((shDir > 0 and flipDown) or (shDir < 0 and flipUp))
+    shPts += shDir * (close - shEntry)
+    shDir := 0
+if (buySig or sellSig) and shDir == 0
+    shDir   := buySig ? 1 : -1
+    shEntry := close
+
+// ---- the real book ---------------------------------------------------------
+// E-110: nothing is checked on the entry bar. A bar that gave us the fill must
+// not also be allowed to give us the exit.
+var float exitPx = na
+var string exitWhy = ""
+closedNow = false
+
+if posDir != 0 and barstate.isconfirmed and bar_index > posBar
+    newBest = posDir > 0 ? high > posPeak : low < posPeak
+    if newBest
+        posPeak  := posDir > 0 ? high : low
+        stallBar := bar_index
+
+    if useTrail
+        cand = useSt ? stLine :
+               posDir > 0 ? posPeak - trailAtr * atr : posPeak + trailAtr * atr
+        posStop := posDir > 0 ? math.max(posStop, cand) : math.min(posStop, cand)
+
+    hitStop = posDir > 0 ? low <= posStop : high >= posStop
+    hitTp   = not na(posTp) and (posDir > 0 ? high >= posTp : low <= posTp)
+    stalled = bar_index - stallBar >= maxStall
+    aged    = bar_index - posBar   >= maxHold
+    flipOut = (posDir > 0 and flipDown) or (posDir < 0 and flipUp)
+
+    // a bar that touches both the stop and the target is scored as the LOSS
+    if hitStop or hitTp or stalled or aged or flipOut
+        exitPx  := hitStop ? posStop : hitTp ? posTp : close
+        exitWhy := hitStop ? (posStop == posInit ? "stop" : "trail") :
+                   hitTp ? "tp" : flipOut ? "flip" : stalled ? "stall" : "time"
+        pts = posDir * (exitPx - posEntry)
+        if nTrades == 0
+            firstT := time
+        nTrades  += 1
+        nWins    += pts > 0 ? 1 : 0
+        sumPts   += pts
+        bestPts  := math.max(bestPts,  pts)
+        worstPts := math.min(worstPts, pts)
+        peakEq   := math.max(peakEq, sumPts)
+        maxDD    := math.max(maxDD, peakEq - sumPts)
+        if posDir > 0
+            nLong   += 1
+            ptsLong += pts
+        else
+            nShort   += 1
+            ptsShort += pts
+        if exitWhy == "stop"
+            nStop += 1
+        else if exitWhy == "trail"
+            nTrail += 1
+        else if exitWhy == "stall"
+            nStall += 1
+        else if exitWhy == "flip"
+            nFlip += 1
+        else
+            nAged += 1
+
+        if showHist
+            won = pts > 0
+            box.new(posBar, math.max(posEntry, exitPx), bar_index, math.min(posEntry, exitPx),
+                 border_color = color.new(won ? cBuy : cSell, 45), border_width = 1,
+                 bgcolor = color.new(won ? cBuy : cSell, 90))
+            label.new(bar_index, posDir > 0 ? math.max(posEntry, exitPx) : math.min(posEntry, exitPx),
+                 f_num(pts, "0.0") + "pt  " + f_ccy(pts) + "  " + exitWhy,
+                 style = posDir > 0 ? label.style_label_lower_left : label.style_label_upper_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(won ? cBuy : cSell, 0), size = size.tiny)
+
+        f_killLive()
+        posDir   := 0
+        posEntry := na
+        posStop  := na
+        posBar   := na
+        closedNow := true
+
+// ---- entries, after the exit block so a flip can close and reopen ----------
+takeBuy  = posDir == 0 and buySig
+takeSell = posDir == 0 and sellSig
+if takeBuy or takeSell
+    posDir   := takeBuy ? 1 : -1
+    posEntry := close
+    posStop  := takeBuy ? close - stopAtr * atr : close + stopAtr * atr
+    posInit  := posStop
+    posTp    := tpR > 0 ? posEntry + posDir * tpR * math.abs(posEntry - posInit) : na
+    posBar   := bar_index
+    posPeak  := close
+    stallBar := bar_index
+
+    if showLive
+        f_killLive()
+        col = posDir > 0 ? cBuy : cSell
+        pBox   := box.new(posBar, posEntry, bar_index, close,
+             border_color = color.new(col, 55), border_width = 1,
+             bgcolor = color.new(col, 92))
+        pEntry := line.new(posBar, posEntry, bar_index, posEntry,
+             color = color.new(#B0BEC5, 15), width = 1, style = line.style_solid)
+        pStop  := line.new(posBar, posStop, bar_index, posStop,
+             color = color.new(cSell, 10), width = 1, style = line.style_dashed)
+        lStop  := label.new(bar_index, posStop, "", style = label.style_label_left,
+             color = color.new(chart.bg_color, 100), textcolor = color.new(cSell, 0),
+             size = size.tiny)
+        lLive  := label.new(bar_index, close, "", style = label.style_label_left,
+             color = color.new(chart.bg_color, 100), textcolor = color.new(col, 0),
+             size = size.small)
+        if showR
+            pR1 := line.new(posBar, posEntry, bar_index, posEntry,
+                 color = color.new(cBuy, 70), width = 1, style = line.style_dotted)
+            pR2 := line.new(posBar, posEntry, bar_index, posEntry,
+                 color = color.new(cBuy, 70), width = 1, style = line.style_dotted)
+            pR3 := line.new(posBar, posEntry, bar_index, posEntry,
+                 color = color.new(cBuy, 70), width = 1, style = line.style_dotted)
+            lR1 := label.new(bar_index, posEntry, "", style = label.style_label_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(cBuy, 35), size = size.tiny)
+            lR2 := label.new(bar_index, posEntry, "", style = label.style_label_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(cBuy, 35), size = size.tiny)
+            lR3 := label.new(bar_index, posEntry, "", style = label.style_label_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(cBuy, 35), size = size.tiny)
+
+// ---- move the live objects. Once per bar, never recreated. -----------------
+if posDir != 0 and showLive and not na(pBox)
+    live = posDir * (close - posEntry)
+    col  = live >= 0 ? cBuy : cSell
+    box.set_right(pBox, bar_index)
+    box.set_top(pBox, math.max(posEntry, close))
+    box.set_bottom(pBox, math.min(posEntry, close))
+    box.set_bgcolor(pBox, color.new(col, 92))
+    box.set_border_color(pBox, color.new(col, 55))
+    line.set_x2(pEntry, bar_index)
+    line.set_x2(pStop, bar_index)
+    line.set_y1(pStop, posStop)
+    line.set_y2(pStop, posStop)
+    risk = posDir * (posEntry - posStop)
+    label.set_xy(lStop, bar_index, posStop)
+    label.set_text(lStop, (risk > 0 ? "SL  " : "LOCKED  ") + f_num(-risk, "0.0") + "pt  "
+         + f_ccy(-risk))
+    label.set_textcolor(lStop, color.new(risk > 0 ? cSell : cBuy, 0))
+    label.set_xy(lLive, bar_index, close)
+    label.set_text(lLive, f_num(live, "0.0") + "pt   " + f_ccy(live))
+    label.set_textcolor(lLive, color.new(col, 0))
+    if showR and not na(pR1)
+        // The R ladder is a REFERENCE, not a target. This EA ships with no take
+        // profit. The rungs show where price is in units of your own risk and
+        // what each one is worth in money.
+        r = math.abs(posEntry - posInit)
+        for i = 1 to 3
+            ln = i == 1 ? pR1 : i == 2 ? pR2 : pR3
+            lb = i == 1 ? lR1 : i == 2 ? lR2 : lR3
+            y  = posEntry + posDir * i * r
+            line.set_xy1(ln, posBar, y)
+            line.set_xy2(ln, bar_index, y)
+            label.set_xy(lb, bar_index, y)
+            reached = posDir > 0 ? high >= y : low <= y
+            label.set_text(lb, (not na(posTp) and math.abs(y - posTp) < syminfo.mintick
+                 ? "TP " : "") + str.tostring(i) + "R  " + f_ccy(i * r))
+            label.set_textcolor(lb, color.new(posDir > 0 ? cBuy : cSell, reached ? 10 : 55))
+
+// ---------------------------------------------------------------- drawing --
+plot(showBand ? stLine : na, "SuperTrend", color = color.new(bull ? cBuy : cSell, 35),
+     linewidth = 2, style = plot.style_linebr)
+plot(showDema ? dema : na, "DEMA", color = color.new(#8FA3B8, 55), linewidth = 1)
+
+plotshape(takeBuy,  "BUY",  shape.labelup,   location.belowbar, color = cBuy,
+     text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(takeSell, "SELL", shape.labeldown, location.abovebar, color = cSell,
+     text = "SELL", textcolor = color.white, size = size.tiny)
+// a flip the DEMA gate refused. Small and hollow, so it never competes with a
+// real signal - but visible, because "what did the gate cost me" is the live
+// version of the -3.1 control se in the header.
+plotshape(flipUp   and not gateBuy,  "gate refused (buy)",  shape.circle,
+     location.belowbar, color = color.new(cBuy, 65),  size = size.tiny)
+plotshape(flipDown and not gateSell, "gate refused (sell)", shape.circle,
+     location.abovebar, color = color.new(cSell, 65), size = size.tiny)
+
+// ============================== THE PROFIT BOX =============================
+var table tp = na
+
+f_row(r, a, b, c, col) =>
+    table.cell(tp, 0, r, a, text_color = color.new(#8FA3B8, 0), text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, b, text_color = col, text_size = size.small,
+         text_halign = text.align_right)
+    table.cell(tp, 2, r, c, text_color = color.new(#8FA3B8, 25), text_size = size.tiny,
+         text_halign = text.align_right)
+
+f_sep(r, cap) =>
+    table.cell(tp, 0, r, cap, text_color = color.new(#5C7089, 0), text_size = size.tiny,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, "", text_color = color.new(#5C7089, 0))
+    table.cell(tp, 2, r, "", text_color = color.new(#5C7089, 0))
+
+if barstate.islast and showPanel
+    if not na(tp)
+        table.delete(tp)
+    pos = panelPos == "Top right" ? position.top_right :
+          panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
+    tp := table.new(pos, 3, 15, border_width = 1,
+         bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
+         frame_color = color.new(#2A3A4D, 20), frame_width = 1)
+
+    cVal  = color.new(#E6EDF5, 0)
+    cPos  = color.new(cBuy, 0)
+    cNeg  = color.new(cSell, 0)
+    winPc = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    avg   = nTrades > 0 ? sumPts / nTrades : 0.0
+    days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
+
+    table.cell(tp, 0, 0, "SUPERTREND 4.1", text_color = cVal, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, 0, "", text_color = cVal)
+    table.cell(tp, 2, 0, posDir == 0 ? (bull ? "bull · flat" : "bear · flat") :
+         posDir > 0 ? "LONG" : "SHORT",
+         text_color = posDir == 0 ? color.new(#8FA3B8, 0) : posDir > 0 ? cPos : cNeg,
+         text_size = size.tiny, text_halign = text.align_right)
+
+    // POINTS FIRST. E-074.
+    f_row(1, "points",    f_num(sumPts, "0.0"), f_ccy(sumPts), sumPts >= 0 ? cPos : cNeg)
+    f_row(2, "trades",    str.tostring(nTrades),
+             str.tostring(nTrades / days, "0.0") + "/day", cVal)
+    f_row(3, "win rate",  str.tostring(winPc, "0.0") + "%",
+             str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
+    f_row(4, "avg trade", f_num(avg, "0.000"), "points", avg >= 0 ? cPos : cNeg)
+
+    f_sep(5, "── is the exit paying? ──")
+    f_row(6, "SYSTEM",      f_num(sumPts, "0.0"), "stop/trail/stall",
+             sumPts >= 0 ? cPos : cNeg)
+    f_row(7, "FLIP & HOLD", f_num(shPts, "0.0"),  "flip to flip",
+             shPts  >= 0 ? cPos : cNeg)
+    f_row(8, "exit adds",   f_num(sumPts - shPts, "0.0"), "points",
+             sumPts - shPts >= 0 ? cPos : cNeg)
+
+    f_sep(9, "── how trades ended ──")
+    f_row(10, "stop / trail", str.tostring(nStop) + " / " + str.tostring(nTrail), "", cVal)
+    f_row(11, "stall / flip", str.tostring(nStall) + " / " + str.tostring(nFlip), "", cVal)
+    f_row(12, "max drawdown", f_num(-maxDD, "0.0"), f_ccy(-maxDD), cNeg)
+    f_row(13, "long / short", f_num(ptsLong, "0.0") + " / " + f_num(ptsShort, "0.0"),
+              str.tostring(nLong) + " / " + str.tostring(nShort), cVal)
+    f_row(14, "open", posDir == 0 ? "-" : f_num(posDir * (close - posEntry), "0.0"),
+              posDir == 0 ? str.tostring(lots, "0.00") + " lots"
+                          : f_ccy(posDir * (close - posEntry)),
+              posDir == 0 ? cVal : (posDir * (close - posEntry) >= 0 ? cPos : cNeg))
+
+plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
+plot(posDir != 0 ? posEntry : na, "Entry",  display = display.status_line)
+plot(posDir != 0 ? posDir * (close - posEntry) : na, "Open points",
+     display = display.status_line)
+plot(bull ? 1 : -1, "SuperTrend (1 bull)",  display = display.status_line)
+plot(dema, "DEMA",                          display = display.status_line)
+plot(atr,  "ATR(14)",                       display = display.status_line)
+
+alertcondition(takeBuy,   "ST BUY",   "SuperTrend 4.1 BUY")
+alertcondition(takeSell,  "ST SELL",  "SuperTrend 4.1 SELL")
+alertcondition(closedNow, "ST CLOSE", "SuperTrend 4.1 trade closed")

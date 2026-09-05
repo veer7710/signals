@@ -5240,3 +5240,86 @@ un-forward-tested, on a single ablation without a control band.
 - **The Pine panel runs the ablation live** — a shadow book taking the same
   signals at market — so the chart shows what the level is worth on whatever
   bars it is pointed at, and the number is free to come out negative.
+
+---
+
+## E-132 — PING PONG, AND WHY E-100's REJECTION DID NOT ANSWER THE QUESTION
+`JARVIS/research/pingpong_m1.py`
+
+Veer: *"sometimes m1 or m5 plays ping ping w price lets catch that if u can"*.
+
+E-100 rejected ping-pong. **That rejection was not admissible here**, for three
+reasons in E-100's own header:
+1. *"GOLD 15m and 1h only. There is no M1/M5 data in this repository."* He asked
+   about M1 and M5. E-100 never saw either.
+2. It charged spread **0.46**, eyeballed off his terminal. The tick data later
+   measured the real spread at **0.229** — E-100 charged **double the real cost**
+   on a strategy whose whole thesis is small moves.
+3. It predates the E-110 fill-convention fix.
+
+Retested on 157,051 real M1 bars and 31,419 M5 bars with each bar's own spread.
+
+### THE CONCEPT AS HE DESCRIBED IT IS DEAD
+"Buy one edge, target the other" — its own rule, its own exit:
+
+| | n | win rate | points |
+|---|---|---|---|
+| M1 target the opposite edge | 11,128 | **16.6%** | 260.4 |
+| M5 target the opposite edge | 1,862 | **17.3%** | 126.4 |
+
+**A 17% win rate on "price reaches the other side" means the ranges break.**
+If price actually ping-ponged, that number would be high. It is the lowest win
+rate anywhere in this project.
+
+### WHAT IS ACTUALLY THERE, AND IT IS MOSTLY NOT THE RANGE
+Swap the exit for the SuperTrend trail and it makes money — but the decisive
+test is whether the *range* is doing any of the work. Same trail, same stop,
+same cost, fired every 11th bar with **no range condition at all**:
+
+```
+M1  ping-pong entries        +0.0274/trade   13,569 trades
+    every 11th bar, no range +0.0156/trade   (sd 0.0033 over 5 offsets)
+    THE RANGE ADDS           +0.0117/trade   ~43% of the result
+
+M5  ping-pong entries        +0.0742/trade    2,376 trades
+    every 11th bar, no range +0.0504/trade   (sd 0.0191)
+    THE RANGE ADDS           +0.0238/trade   ~32% of the result
+```
+
+Both halves hold up (M1 +0.0263 / +0.0285; M5 +0.0807 / +0.0680), so it is not
+a fluke — but what is holding up is **the trail**, which E-125 already
+established. This is E-125 again, not a new edge.
+
+### AND IT IS COST-FRAGILE IN A WAY SYSTEM A IS NOT
+```
+spread/ATR      0.11      0.17      0.25      0.40
+M1 ping-pong   371.7     202.3     -32.8    -514.3     dies before 0.25
+M5 ping-pong   176.3     113.3      10.0    -199.3
+System A (E-128) 97.1     82.6      63.1      26.7     survives all four
+```
+At 124 trades/day the cost load is over ten times System A's, and it breaks
+around a 0.32-point M1 spread.
+
+Verdict: ping-pong as mean reversion is **DISPROVEN** on M1 and M5. Range edges
+as *entry timing for a trailed trade* are **UNPROVEN** — real but small, mostly
+the trail, and too cost-fragile to ship.
+
+### THE CALIBRATION THIS PRODUCED, which matters more than the strategy
+Veer's broker: no commission, spread *"0.4 points or less"*. Converting that into
+the scale-free unit every experiment here is measured in:
+
+| chart | 2018 median ATR | at today's vol (×7.38) | spread/ATR at 0.20 / 0.30 / 0.40 |
+|---|---|---|---|
+| **M1** | 0.246 | **1.82 pts** | **0.110 / 0.165 / 0.220** |
+| M5 | 0.613 | 4.52 pts | 0.044 / 0.066 / 0.088 |
+| M15 | 1.145 | 8.45 pts | 0.024 / 0.036 / 0.047 |
+
+Two things follow, and both are load-bearing:
+- **The 0.11 cost assumption every result in this project is quoted at is a
+  0.20-point M1 spread.** If his spread is really 0.4, M1 runs at **0.220** and
+  every M1 number should be read off the 0.17–0.25 columns, not the 0.11 one.
+- **The same 0.4-point spread is 0.220 of ATR on M1 and 0.088 on M5** — M1 costs
+  **2.5× more per unit of move**. This is E-081's timeframe argument in cost
+  terms, and it points the opposite way: E-081 says a small account must trade
+  M1 for position sizing, cost says M1 is the most expensive place to do it.
+  That tension is real and is not resolved.

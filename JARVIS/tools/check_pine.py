@@ -369,6 +369,33 @@ def check_namespace_members(src):
     return out
 
 
+
+# Pine allows these ONLY at global scope. Indenting one into an if-block or a
+# function is a compile error, and it is an easy mistake to make while moving
+# drawing code around - which is exactly when it happens.
+GLOBAL_ONLY = ("plot", "plotshape", "plotchar", "plotarrow", "plotcandle",
+               "plotbar", "fill", "bgcolor", "barcolor", "hline",
+               "alertcondition", "indicator", "strategy", "library")
+
+
+def check_global_only(src):
+    out = []
+    lines = src if isinstance(src, list) else src.split("\n")
+    for i, l in enumerate(lines, 1):
+        if not l[:1].isspace():
+            continue
+        stripped = l.strip()
+        if stripped.startswith("//"):
+            continue
+        for fname in GLOBAL_ONLY:
+            if stripped.startswith(fname + "(") or stripped.startswith(fname + " ("):
+                out.append((i, "%s() IS GLOBAL-SCOPE ONLY in Pine - it cannot sit "
+                               "inside an if, a for or a function" % fname,
+                            stripped[:70]))
+                break
+    return out
+
+
 def check(path):
     src = open(path, encoding="utf-8").read().split("\n")
     declared, problems = set(BUILTIN), []
@@ -488,6 +515,7 @@ def check(path):
     problems += check_arity(src)
     problems += check_tables(src)
     problems += check_draw_in_ternary(src)
+    problems += check_global_only(src)
 
     print("=" * 74)
     print(f"  PINE STATIC CHECK — {path.split('/')[-1]}")
