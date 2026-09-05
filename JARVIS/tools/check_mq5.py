@@ -228,6 +228,18 @@ def check(path: str):
                 nm = nm.strip().split('[')[0].strip()
                 if re.fullmatch(r'\w+', nm or ''):
                     declared.add(nm)
+        # MQL5 allows a comma list WITH initialisers - "double a = 0.0, b = 0.0;"
+        # The pattern above only handles a bare list, so every name after the
+        # first comma read as undeclared. That fired five false positives the
+        # moment an EA used the idiom, and a checker that cries wolf gets
+        # ignored, which is worse than not having one.
+        for m in re.finditer(r'^\s*(?:static\s+)?\w+\s+([^;{}()]*=[^;{}()]*);',
+                             body, re.M):
+            for part in m.group(1).split(','):
+                nm = part.split('=')[0].strip().split('[')[0].strip()
+                nm = nm.lstrip('*&').strip()
+                if re.fullmatch(r'[A-Za-z_]\w*', nm or ''):
+                    declared.add(nm)
     for m in re.finditer(r'\b(g_\w+)\b', code):
         declared.add(m.group(1)) if False else None
     used_g = {}

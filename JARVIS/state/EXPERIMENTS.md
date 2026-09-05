@@ -5738,3 +5738,71 @@ slope.
 **This is the shipping configuration.** The risk cap is not an optimisation — it
 is the difference between an edge that compounds and an account that does not
 survive to see it.
+
+---
+
+## E-139 — CAN THE EA ACTUALLY EXECUTE WHAT THE BACKTEST MEASURED?
+`JARVIS/research/sweep_parity.py`
+
+The tested rule evaluates the return-leg displacement **at the fill bar** — the
+gap between bar `j` and `j-2`, where `j` is the bar price came back to the level.
+A resting limit fills *during* that bar, so an EA holding a limit cannot know at
+arm time whether the bar that eventually fills it will pass. It would apply the
+filter at the **arm** bar instead: a different signal.
+
+That is precisely the defect P92 found — a 52% signal gap between a Pine and an
+EA built from one spec, unnoticed for 180 commits. So it was settled before
+either shipped.
+
+| variant | n | /day | win% | points | per trade | executable? |
+|---|---|---|---|---|---|---|
+| A wick + displacement, limit at the level | 1863 | 17.1 | 81.3% | 349.7 | +0.1877 | **NO** |
+| **B wick only, limit at the level** | 2777 | 25.5 | 66.7% | **310.7** | +0.1119 | **yes → SHIPPED** |
+| C wick + disp, market on the next bar | 1633 | 15.0 | 65.6% | 81.4 | +0.0499 | yes |
+| D limit, then bail out if displacement failed | 2783 | 25.5 | 62.8% | 228.4 | +0.0821 | yes |
+
+**C is dead** — at 0.05 points of slippage it makes −0.2. Losing the fill at the
+level destroys it, which independently confirms E-131: the entry price *is* the
+edge. **D costs more than the filter saves.** So B ships: *a rule an EA can
+execute beats a better rule it cannot.*
+
+### E-139b — B GETS ITS OWN HARNESS
+E-137/E-138 validated **A**. Carrying that over to B would be quoting numbers for
+a system that is not the one running.
+
+- **Control** (geometry kept, timing destroyed): real +0.1119/trade vs control
+  −0.0142, se 0.0012 → **EDGE +0.1261 = 107.3 control se**
+- **Walk-forward:** +0.1056 / +0.1477 / +0.1155 / +0.0927 / +0.0968 — **5 of 5**
+- **In/out of sample:** +0.1241 → **+0.0991**
+- **Cost:** 310.7 at a 0.20 spread → **241.8 at 0.40**
+- **Slippage:** 309.5 → 257.9 (0.02) → 180.5 (0.05) → 51.6 (0.10), on every trade
+
+### THE RISK CAP TIGHTENS
+| risk cap | n | win% | points | max DD | worst trade |
+|---|---|---|---|---|---|
+| none | 2852 | 69.2% | 316.6 | **£37.99** | **−£34.27** |
+| 2.0 ATR | 2777 | 66.7% | 310.7 | £14.93 | −£5.90 |
+| **1.2 ATR** | 2579 | 65.1% | **309.5** | **£12.68** | **−£4.63** |
+
+1.2 ATR costs **1.2 points** and removes two thirds of the drawdown. Shipped.
+
+### THE GIVE-BACK IS A BOUNDARY OPTIMUM, AND IT IS NOT THE DEFAULT
+Tighter measured better all the way down and it survives cost and slippage:
+
+```
+give back   5%  374.1 pts  +0.1446/trade   |  at 0.10 slip: 115.3
+           15%  341.2      +0.1318         |               82.4
+           25%  309.5      +0.1200         |               51.6
+           40%  306.0      +0.1205         |               52.0
+```
+
+**5% ships as an input, not as the default.** An optimum sitting at the *edge* of
+the tested range is the classic shape of a fitted result, and 25% is the value
+the full harness was run on. It moves if a demo run supports it — not because the
+backtest liked it.
+
+### SHIPPED CONFIGURATION
+Wick filter only, limit at the level, stop 0.30 ATR beyond the sweep extreme,
+**risk cap 1.2 ATR**, give-back 25%, 240-bar ceiling.
+`SweepSniper.mq5` (magic 990077) and `SWEEP_SNIPER_1_0.pine`, both with the
+displacement filter **off by default so the chart and the EA cannot disagree.**
