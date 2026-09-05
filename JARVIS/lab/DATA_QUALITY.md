@@ -65,6 +65,15 @@ spread and an unmeasured ATR. Both inputs were wrong, in opposite directions.
 The corrected answer is that M1 gold is viable TODAY and it turns entirely on
 the account's spread.**
 
+## DEFECT IN THIS FEED — the missing hour
+**There are ZERO bars at 00:00 UTC on every day**, and 199 gaps of exactly 61
+minutes. The source drops the 00h file. Consequences:
+- any session / time-of-day study on this feed is contaminated at the daily
+  boundary; exclude 23:00-01:00 or the "re-open" effect is an artifact
+- ATR and any recursive indicator computed across the gap treats the jump as one
+  bar's move, inflating the range at the boundary
+Found while probing hourly bar counts. Not yet corrected in the built files.
+
 ## HONEST LIMITS ON ALL OF THE ABOVE
 1. **The M1 ATR figure for today is an ESTIMATE**, built from a measured 2018 M1
    ATR times a measured M15 volatility ratio. It is a measurement chain, not a

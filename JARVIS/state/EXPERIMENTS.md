@@ -4810,3 +4810,83 @@ measured edge in the repository.
   ratio), not a direct measurement. Recent M1 bars would close it.
 - The tick feed is Dukascopy (ECN). PU Prime is retail and will be wider, so
   every cost figure here is a floor.
+
+## E-116 / E-117 / E-118 — PEAK CAPTURE ON M1. Veer's correction was right, and the answer is 4 ticks.
+
+**Veer, correctly:** *"ur telling me every single supertrend signal 89% only go
+up 43p... JUST PERFECT HOW we capture a peak"*. E-115 capped the target at 0.3
+ATR and then reported that winners made 0.3 ATR. That is circular and it told us
+nothing about how far the signals run.
+
+### E-116 — how far M1 SuperTrend signals ACTUALLY run
+15,650 signals, held to the next flip, no target, no stop. In ATR, and in £ at
+today's estimated M1 ATR of 1.82 points, 0.01 lots:
+```
+percentile      MFE(ATR)   MFE £     MAE(ATR)   MAE £
+10th               0.11    0.16        -2.26   -3.23
+MEDIAN             1.44    2.06        -1.13   -1.62
+75th               3.05    4.36        -0.55   -0.79
+90th               5.42    7.76        -0.16   -0.22
+mean               2.31    3.30        -1.23   -1.76
+median bars held 8   MEDIAN BARS TO PEAK: 4
+```
+**The median signal runs £2.06 and the mean £3.30 — not 43p.** Mean MFE is 1.9x
+mean MAE. **That asymmetry is real and it is what Veer has been describing.**
+And the peak arrives in FOUR MINUTES, so every earlier test that held 30-240
+bars was sitting through the reversal.
+
+### E-117 — the exit the distribution implies
+```
+GOLD M1, ECN spread          win%   £/trade   £/day
+fixed 1.5 ATR target        45.9%    -0.039   -3.91
+no target, no trail         41.5%    -0.030   -2.38
+no target + 25% giveback    82.8%    +0.034   +4.14
+```
+**The trail is what flips it.** A fixed target loses; riding and protecting the
+peak wins. E-090 again, on the timeframe that matters.
+
+### E-118 — and the two checks that decide it
+**First, a bug of mine, caught by the control.** The giveback level was armed
+from a bar's HIGH and then tested against that SAME bar's LOW — peak-then-retrace
+inside one minute. The E-110 defect, reintroduced in a new script. It pays out
+regardless of entry, which is exactly why random entries matched the signal.
+Fixed: a peak recorded on bar k may only arm an exit from bar k+1.
+
+**Second, the control, after the fix:**
+```
+                          £/trade    random entry, same exit    edge
+25% giveback, ECN         +0.0340            +0.0348          -1.2 se
+25% giveback, 0.30 spread +0.0197            +0.0206          -1.3 se
+```
+**The exit is profitable from RANDOM entries. The SuperTrend signal contributes
+nothing** — a third independent confirmation of E-112/E-113/E-114.
+
+**Third, slippage.** The edge is £0.0340 = **0.0432 points**. A giveback exit is
+a STOP order: a long sells when price FALLS to the level, so it fills at or
+below it, never better.
+```
+slippage/exit    £/trade after    £/day
+      0.00p           +0.0340     +4.14
+      0.03p           +0.0104     +1.26
+      0.05p           -0.0054     -0.65
+```
+**The entire edge is four ticks of gold and it is gone at five.** That is a
+routine fill on a stop order in a fast M1 market.
+
+### VERDICT
+**REJECTED for deployment.** The peak-capture mechanism is real and measurable
+(t=16 vs zero, 13,270 trades) but it is (a) not a SuperTrend edge — random
+entries score the same, and (b) smaller than the slippage it must pay to be
+harvested. It is a structural property of M1 oscillation that a retail stop
+order cannot collect.
+
+**What this closes:** "perfect the entry and exit" has now been done properly on
+real M1 data. The exit was perfected — it is the best of 18 geometries tested and
+it beats every fixed target. The entry was tested three ways and adds nothing.
+The result is still inside the transaction cost.
+
+### DATA DEFECT FOUND IN OUR OWN FEED
+`data/GOLD_*_2018.json` is **missing the 00:00 UTC hour on every day** — 0 bars
+at 00h, and 199 gaps of exactly 61 minutes. Any session or time-of-day analysis
+on this feed is contaminated at the daily boundary and must exclude 23:00-01:00.
+Recorded in `JARVIS/lab/DATA_QUALITY.md`.
