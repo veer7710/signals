@@ -5587,3 +5587,81 @@ instead of a 90% one.
 Verdict: "a 90% win rate on M1 XAUUSD liquidity sweeps" is **DISPROVEN** — the
 cost floor caps it near 81%, and every rung above 76% is negative. The filtered
 sweep at 1.5–3R is **SUPPORTED** and remains the strongest candidate here.
+
+---
+
+## E-137 — THE FILTERED SWEEP WITH THE EXIT THAT BANKS THE MOST
+`JARVIS/research/sweep_system.py`
+
+> *"we don't want certain rr we just wanna be profitable"* — so every exit was
+> measured and the one that banks the most POINTS wins. R is only ever used here
+> to describe a stop distance, never as a target to aim at.
+
+Entry fixed to the one that survived E-135d: swing pivot → sweep through it →
+**the sweep bar must be a wick** (body/range ≤ 0.646) → **displacement back
+through the level** (the return FVG) → limit rests at the level → stop beyond the
+sweep extreme + 0.30 ATR.
+
+| exit | n | /day | win% | points | per trade | GBP @0.01 |
+|---|---|---|---|---|---|---|
+| **give back 25%** | 2298 | 21.1 | **82.9%** | **422.8** | +0.1840 | **2455.52** |
+| give back 40% | 2271 | 20.8 | 82.3% | 380.9 | +0.1677 | 2212.09 |
+| SuperTrend band trail | 2202 | 20.2 | 50.0% | 309.5 | +0.1405 | 1797.42 |
+| fixed target 3.0R | 1706 | 15.6 | 43.4% | 294.0 | +0.1723 | 1707.49 |
+| ATR trail 2.0 | 2080 | 19.1 | 41.8% | 290.8 | +0.1398 | 1689.14 |
+| **TP at the next level, 0.25 ATR short** | 1334 | 12.2 | 23.3% | 136.7 | +0.1025 | 794.03 |
+| fixed target 1.0R | 2008 | 18.4 | 68.5% | 134.1 | +0.0668 | 779.06 |
+
+**The high win rate and the most money turn out to be the same rule.** A 25%
+give-back ratchets the stop to entry + 75% of the best excursion, so it banks
+whatever the move gives instead of demanding a distance — 82.9% win *and* the
+largest total.
+
+**The level-based target was tested** (Veer: *"we want tp based of levels and
+analysis, we can't just set based of rr"*) — nearest confirmed opposing pivot,
+parked short of it, only using levels that confirmed **before** the fill. It
+works and it is positive, but it banks **136.7 points against 422.8**, at a
+**23.3%** win rate: price usually does not reach the next level, so the target
+turns most trades into time exits. The idea is sound; the market does not pay
+for it here.
+
+### THE CONTROL WAS BROKEN, AND IT REPORTED −16.6 se
+The first control shifted the **fill bar** while keeping the **level price** from
+the original setup, so every control trade had an entry at a price the market was
+hundreds of points away from. The stop never triggered, the give-back tracked a
+runaway excursion, and the control "made" **10,258 points** against the real
+422.8 — reading as a −16.6 se catastrophic failure. **That was a bug in the
+control, not a finding about the strategy**, and reporting it either way would
+have been worse than running no control at all.
+
+A level strategy's control must keep the **geometry** and destroy only the
+**timing**: same stop distance, same exit rule, same direction, entered at the
+market on an unrelated bar.
+
+| rule | real/trade | control/trade | se | EDGE | in se |
+|---|---|---|---|---|---|
+| give back 25% | +0.1840 | −0.0116 | 0.0015 | **+0.1956** | **131.8** |
+| give back 40% | +0.1677 | −0.0176 | 0.0015 | +0.1853 | 120.5 |
+| band trail | +0.1405 | −0.0405 | 0.0018 | +0.1810 | 98.1 |
+| TP at next level | +0.1025 | −0.0465 | 0.0075 | +0.1490 | 19.8 |
+
+The control lands slightly **negative**, which is what an honest control should
+do — enter at market at random times and you pay the spread for nothing.
+
+### THE REST OF THE HARNESS
+- **In/out of sample:** +0.1999 → **+0.1672**. Holds.
+- **Walk-forward:** +0.1984 / +0.2236 / +0.1714 / +0.1653 / +0.1600 — **5 of 5**.
+- **Long/short:** +227.7 long, +195.0 short. Both.
+- **Cost:** 422.8 at 0.110 → 394.3 at 0.165 → **366.5 at 0.220 (his 0.40 spread)**
+  → 324.9 at 0.300.
+- **Plateau, not a spike:** give-back 15/20/25/30/35/50% → 456.7 / 438.7 / 422.8 /
+  407.4 / 398.0 / 363.8. Smooth and monotone, no cliff at the chosen value.
+
+Verdict: **SUPPORTED**, and it is the strongest result in this project — 21
+trades/day, 82.9% win, +£2,455 at 0.01 lots over 109 days, 131.8 control se.
+
+**What is still owed:** it is one instrument and 2018 H1, the money figure
+depends on the ×7.38 volatility scaling to today, and nothing has been forward
+tested. E-125's warning stands as the reason to keep watching this one: a 25%
+give-back on *System A* went from +11.1 in-sample to −0.1 out-of-sample. It holds
+here on a different entry, but that is the failure mode to watch for.
