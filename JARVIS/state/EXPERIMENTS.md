@@ -5169,3 +5169,74 @@ the level itself does not say.
 - **Do not test on this data**: killzones (the feed's missing 00:00 UTC hour
   contaminates every session boundary), anything volume-based (both volume
   columns are zero), MMXM (not falsifiable in real time).
+
+---
+
+## E-131 — AN EXACT DECOMPOSITION IS NOT AN HONEST ATTRIBUTION
+`JARVIS/research/split_attribution.py`
+
+Veer asked for a profit box on the EAs and the Pine scripts that "should show
+profit from supertrend strat and liquidity, so it should know how to measure and
+treat each different". The first design split every trade along the price axis at
+the arm price — the market price at the moment the EA decided to trade:
+
+```
+total = dir*(exit - entry)
+LEVEL = dir*(armPx - entry)     the fill the resting limit bought
+TREND = dir*(exit  - armPx)     what the direction and the trail then made
+```
+
+The identity is exact. It was checked to `max |total - (LEVEL + TREND)| = 0.00e+00`
+over all 981 trades. **And it is useless.** On the shipped System A cell:
+
+| | points | GBP @0.01 | per trade | share |
+|---|---|---|---|---|
+| TOTAL | 97.1 | 564.17 | +0.0990 | 100% |
+| LEVEL "the better fill" | **691.9** | 4018.71 | +0.7053 | **712%** |
+| TREND "direction + trail" | **−594.8** | −3454.53 | −0.6063 | **−612%** |
+
+`LEVEL` is positive on **100.0%** of trades and `TREND` on 6.2%. That is not a
+finding, it is the design: the limit rests 0.50 ATR past the level, so the fill
+beats the arm price by that offset **by construction**. The row measured the
+offset, not the level. Two rows reading +692 and −595 against a +97 result would
+have looked broken to Veer and would have meant nothing.
+
+**The rule this establishes:** what a component is WORTH is an ablation — run the
+system with and without it — not a decomposition of a single trade's price path.
+A decomposition can be exact and still describe nothing.
+
+### THE ABLATION, which is the number that belongs on the chart
+Same signals, same 4.0 ATR stop, same band trail, same 240-bar ceiling. The only
+change is buying at the market the moment the level is confirmed instead of
+resting a limit 0.50 ATR inside the zone:
+
+```
+limit rests 0.50 ATR inside the zone        97.1 pts    981 trades   +0.0990/trade
+market entry at the moment of confirmation   9.5 pts   1159 trades   +0.0082/trade
+THE LEVEL IS WORTH                          87.7 pts   (509.27 GBP at 0.01 lots)
+```
+
+**+87.7 of the 97.1 points are the resting limit.** Take it away and the same
+SuperTrend-direction signals, at the same moments, make essentially nothing. This
+is E-130's better-fill reframing measured rather than argued, and it is a
+stronger confirmation than E-130 itself: E-130 showed the ICT reversal rule
+*costs* money; this shows where the money actually is.
+
+Alongside E-127 (direction filter OFF 48.4, ON 97.1, worth **+48.7**), both
+halves of the system are now ablation-measured and neither is redundant.
+
+Verdict: the LEVEL/TREND decomposition is **REJECTED** as an attribution. The
+level's contribution is **SUPPORTED** at +87.7 points on one 2018 H1 sample,
+un-forward-tested, on a single ablation without a control band.
+
+### WHAT SHIPPED INSTEAD
+- **The EA profit box** (`JARVIS/ea/include/ProfitBox.mqh`) reports **one row per
+  strategy, keyed by magic number**. Register every magic and one box speaks for
+  all three EAs with separate books. That is the honest reading of the request.
+- `fill vs signal` survives as an **entry-quality diagnostic in points per
+  trade**, correctly labelled and never as a share of profit. Backtest value
+  +0.705/trade against a 0.50 ATR design offset; a live number far below that
+  means limits are filling late and the edge is going with them.
+- **The Pine panel runs the ablation live** — a shadow book taking the same
+  signals at market — so the chart shows what the level is worth on whatever
+  bars it is pointed at, and the number is free to come out negative.

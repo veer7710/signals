@@ -1,0 +1,444 @@
+//@version=6
+// ===========================================================================
+//  ZONE SNIPER 3.0  —  SYSTEM A  —  liquidity level + SuperTrend, one chart
+//
+//  Same rules as ZoneSniper.mq5. If this chart and the EA disagree, one of them
+//  is wrong: P92 found a 52% signal gap between the last matched pair and it sat
+//  there unnoticed for 180 commits. The rules are duplicated here deliberately.
+//
+//  WHAT THE SYSTEM ACTUALLY IS  (E-130 forced this rewording, and it matters)
+//  --------------------------------------------------------------------------
+//  This is NOT a "liquidity sweep reversal" system. The one rule the whole
+//  ICT/SMC field agrees on - wait for the candle to CLOSE back inside the level
+//  - was tested on this exact data and took the result from +97.1 points to
+//  +3.7, and did not separate winners from losers (MFE/MAE 0.92 -> 0.90).
+//  Osler (2003, 2005), working from a real bank order book, finds price
+//  ACCELERATES through stop clusters rather than reversing at them.
+//
+//  MEASURED, not asserted (E-131, the same 981 trades):
+//     limit resting 0.50 ATR inside the zone      +97.1 points,  981 trades
+//     market entry at the same confirmations       +9.5 points, 1159 trades
+//     THE LEVEL IS WORTH                          +87.7 points
+//  Same signals, same stop, same trail, same ceiling. Take away the resting
+//  limit and almost the whole result goes with it. That is the better-fill
+//  thesis measured rather than argued, and the panel on this chart runs that
+//  same shadow book live on whatever bars you point it at.
+//
+//  E-127 measures the other half the same way: with the SuperTrend direction
+//  filter OFF the system makes 48.4 points, with it ON 97.1. Worth +48.7.
+//  Toggle the input and the panel will show you.
+//
+//  DO NOT read a "LEVEL vs TREND" split off a single trade's price path. It is
+//  exact and it is meaningless: it reads +691.9 / -594.8 against a +97.1 total
+//  because the 0.50 ATR offset makes the LEVEL half positive on 100.0% of
+//  trades by construction. E-131 killed that panel before it shipped.
+//
+//  So the honest description, and the one this chart is drawn to show:
+//     the LEVEL      gives a price extreme to transact at  ->  a better fill
+//     the SUPERTREND gives the direction, and then the exit
+//     the TRAIL      decides what the trade is worth
+//  The level never says which way. That is why the direction filter DOUBLED
+//  the M1 result (48.4 -> 97.1 points) and did nothing at M5/M15.
+//
+//  MEASURED (E-119..E-130, 157,051 real M1 bars from 18,816,940 bid/ask ticks,
+//  each bar charged its OWN measured spread):
+//     real zones                     +97.1 points, 981 trades, 9.0/day
+//     the SAME zones, time-shifted  -1099.3 points
+//     EDGE                          +1196.5 points  =  79.2 control se
+//     out-of-sample 50.3  vs  in-sample 46.7        OOS EXCEEDS IS
+//     walk-forward  15.8 / 18.7 / 21.1 / 20.3 / 21.2   five of five positive
+//     long +56.3, short +40.8                        both directions
+//     survives a standard retail spread (63.1 pts at spread/ATR 0.25)
+//     parameters sit on a PLATEAU, not a peak: nine of nine neighbours positive
+//
+//  THE KNOWN FAILURE MODE, stated because it is what will break this:
+//     exit slippage 0.00 -> 97.1 pts | 0.02 -> 77.5 | 0.05 -> 48.1 | 0.10 -> -1.0
+//     BREAKEVEN AT 0.10 POINTS. Measure your broker's real stop fills on demo.
+//
+//  This is UNPROVEN, in the vocabulary of EXPERIMENTS.md. 2018 H1 only. Never
+//  forward tested. A backtest is evidence, never proof.
+//
+//  WHAT IS NOT ON THIS CHART, because it was tested on this data and REMOVED:
+//     the SuperTrend FLIP as a signal    no edge at zero cost (+0.0021R, 1.2 se)
+//     the DEMA gate                      worse than random (-3.1 se)
+//     a fixed take profit                -29.3 pts at 2R, -43.6 at 3R
+//     close-back-inside confirmation     97.1 -> 3.7 pts (E-130)
+//     a chop / trend / sideways filter   filtering only removed trades
+//     killzone and session filters       our feed is missing 00:00 UTC daily
+//     anything volume-based              both volume columns are zero
+//  If you want one back, the number that removed it is in EXPERIMENTS.md.
+//
+//  RUN IT ON XAUUSD M1.
+// ===========================================================================
+indicator("ZONE SNIPER 3.0", overlay = true, max_labels_count = 500,
+     max_lines_count  = 500, max_boxes_count = 500, max_bars_back = 1000)
+
+// ---------------------------------------------------------------- inputs ---
+gZ = "1 · THE LEVEL"
+pvLen    = input.int(5,    "Swing needs this many bars either side", group = gZ, minval = 1)
+zoneLife = input.int(200,  "A level expires after N bars",           group = gZ, minval = 10)
+useStDir = input.bool(true,"Only take levels the SuperTrend agrees with", group = gZ,
+     tooltip = "E-127. This is the filter that doubled the M1 result. Off = 48.4 pts, on = 97.1.")
+
+gE = "2 · ENTRY / RISK"
+pastAtr = input.float(0.50, "Limit sits this far PAST the level (ATR)", group = gE, step = 0.05)
+stopAtr = input.float(4.0,  "Initial stop (ATR)",                      group = gE, step = 0.5)
+waitBar = input.int(60,     "Cancel an unfilled limit after N bars",   group = gE)
+maxHold = input.int(240,    "Time exit (bars)",                        group = gE)
+
+gT = "3 · THE TRAIL   (the SuperTrend's only job)"
+stLen  = input.int(7,     "SuperTrend ATR length", group = gT)
+stMult = input.float(1.2, "SuperTrend multiplier", group = gT, step = 0.1)
+
+gM = "4 · MONEY"
+lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01,
+     tooltip = "E-081: 0.01 lots on XAUUSD is about GBP 0.787 per point and cannot go lower.")
+gbpPoint = input.float(0.787, "GBP per point at 0.01 lots", group = gM, step = 0.001)
+
+gD = "5 · CHART"
+cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c")
+cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c")
+cTrail = input.color(#C9A227, "Trail",group = gD, inline = "c")
+showLevels = input.bool(true, "Draw live levels",   group = gD, inline = "s")
+showBoxes  = input.bool(true, "Draw trade boxes",   group = gD, inline = "s")
+showPanel  = input.bool(true, "Show the profit box",group = gD, inline = "s")
+panelPos   = input.string("Bottom right", "Profit box position", group = gD,
+     options = ["Bottom right", "Top right", "Bottom left"])
+
+// Pine's str.tostring format has no "+x;-x" subpattern, so the sign is explicit.
+f_num(x, d) =>
+    (x >= 0 ? "+" : "") + str.tostring(x, d)
+
+// ------------------------------------------------------------------ maths --
+atr = ta.atr(14)
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+// Pine convention: stDir is -1 while bullish, +1 while bearish.
+bull = stDir == -1
+
+// A pivot is only KNOWN pvLen bars after it happens. ta.pivothigh returns at the
+// confirmation bar and refers to the bar pvLen back, so the level is real at the
+// bar we act on. Drawing the line back to its own bar is history, not lookahead.
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low,  pvLen, pvLen)
+
+// ------------------------------------------------------------- level state --
+// One armed limit per side. A level that is armed and unfilled is the ONLY
+// level drawn - drawing every historical pivot is what made the old charts
+// unreadable on M1.
+var float armBuy   = na
+var float armSell  = na
+var int   armBuyB  = na
+var int   armSellB = na
+var float armBuyPx = na      // mid price when the buy limit was armed
+var float armSellPx= na
+var line  lnBuy    = na
+var line  lnSell   = na
+
+// --------------------------------------------------------- position state ---
+var int   posDir   = 0
+var float posEntry = na
+var float posStop  = na
+var int   posBar   = na
+var float posArmPx = na      // the arm-time price this fill was measured against
+var line  lnStop   = na
+
+// ---- THE SHADOW BOOK -------------------------------------------------------
+// Identical signals, identical stop, identical trail, identical ceiling. The
+// ONLY difference is that it buys at the market the moment the level is
+// confirmed instead of resting a limit 0.50 ATR inside the zone. The gap
+// between the two books is what the level is worth, and unlike a price-axis
+// decomposition it cannot come out mechanically positive - E-131 is the whole
+// reason this is here instead of a "LEVEL / TREND" split.
+var int   shDir   = 0
+var float shEntry = na
+var float shStop  = na
+var int   shBar   = na
+
+// ------------------------------------------------------------ book-keeping --
+var int   nTrades = 0
+var int   nWins   = 0
+var float sumPts  = 0.0
+var float sumFill = 0.0      // how much better the limit filled than the signal
+var float shPts   = 0.0      // the MARKET-ENTRY shadow book (see the panel)
+var int   shN     = 0
+var float bestPts = 0.0
+var float worstPts= 0.0
+var float peakEq  = 0.0
+var float maxDD   = 0.0
+var int   firstT  = 0
+var int   nLong   = 0
+var int   nShort  = 0
+var float ptsLong = 0.0
+var float ptsShort= 0.0
+
+dirOkBuy  = not useStDir or bull
+dirOkSell = not useStDir or not bull
+
+// ---- arm on a confirmed swing, only while flat -----------------------------
+newLow  = not na(pl) and posDir == 0 and dirOkBuy
+newHigh = not na(ph) and posDir == 0 and dirOkSell
+
+// The shadow arms off the RAW signal, not off newLow/newHigh - those carry
+// "posDir == 0", so gating the shadow on them would let the real book's own
+// busy periods decide which signals the shadow is allowed to see. The offline
+// ablation (E-131) ran the two books independently and so does this: 981
+// trades against 1159 is part of the answer, not an error.
+rawLow  = not na(pl) and dirOkBuy
+rawHigh = not na(ph) and dirOkSell
+if (rawLow or rawHigh) and shDir == 0
+    shDir   := rawLow ? 1 : -1
+    shEntry := close
+    shStop  := rawLow ? close - stopAtr * atr : close + stopAtr * atr
+    shBar   := bar_index
+
+if newLow
+    armBuy   := pl - pastAtr * atr
+    armBuyB  := bar_index
+    armBuyPx := close
+    if showLevels
+        if not na(lnBuy)
+            line.delete(lnBuy)
+        lnBuy := line.new(bar_index - pvLen, pl, bar_index, pl,
+             color = color.new(cBuy, 25), width = 1, extend = extend.right)
+
+if newHigh
+    armSell   := ph + pastAtr * atr
+    armSellB  := bar_index
+    armSellPx := close
+    if showLevels
+        if not na(lnSell)
+            line.delete(lnSell)
+        lnSell := line.new(bar_index - pvLen, ph, bar_index, ph,
+             color = color.new(cSell, 25), width = 1, extend = extend.right)
+
+// ---- a limit that never filled is not a signal. Take it off the chart. -----
+if not na(armBuyB) and bar_index - armBuyB > waitBar
+    armBuy  := na
+    armBuyB := na
+    if not na(lnBuy)
+        line.delete(lnBuy)
+        lnBuy := na
+if not na(armSellB) and bar_index - armSellB > waitBar
+    armSell  := na
+    armSellB := na
+    if not na(lnSell)
+        line.delete(lnSell)
+        lnSell := na
+
+// ---- the fill ---------------------------------------------------------------
+filledBuy  = posDir == 0 and not na(armBuy)  and low  <= armBuy  and barstate.isconfirmed
+filledSell = posDir == 0 and not na(armSell) and high >= armSell and barstate.isconfirmed
+
+if filledBuy or filledSell
+    posDir   := filledBuy ? 1 : -1
+    posEntry := filledBuy ? armBuy : armSell
+    posStop  := filledBuy ? posEntry - stopAtr * atr : posEntry + stopAtr * atr
+    posBar   := bar_index
+    posArmPx := filledBuy ? armBuyPx : armSellPx
+    armBuy   := na
+    armSell  := na
+    armBuyB  := na
+    armSellB := na
+    if not na(lnBuy)
+        line.delete(lnBuy)
+        lnBuy := na
+    if not na(lnSell)
+        line.delete(lnSell)
+        lnSell := na
+
+// ---- the shadow book's own trail and exit. Nothing is checked on its entry
+// bar either: the same rule has to apply to both books or the comparison is
+// rigged in favour of whichever one gets the extra bar.
+if shDir != 0 and barstate.isconfirmed and bar_index > shBar
+    shStop := shDir > 0 ? math.max(shStop, stLine) : math.min(shStop, stLine)
+    shHit  = shDir > 0 ? low <= shStop : high >= shStop
+    shOld  = bar_index - shBar >= maxHold
+    if shHit or shOld
+        shPts += shDir * ((shHit ? shStop : close) - shEntry)
+        shN   += 1
+        shDir := 0
+
+// ---- the trail, and the exit ------------------------------------------------
+// E-110: a limit filled by a bar's ADVERSE extreme must not then book that same
+// bar's FAVOURABLE extreme. Six separate "validations" in this project were
+// wrong because of exactly that. So nothing is checked on the entry bar.
+var float exitPx  = na
+closedNow = false
+
+if posDir != 0 and barstate.isconfirmed and bar_index > posBar
+    // ta.supertrend returns the ACTIVE band, so one value serves both sides.
+    // Ratcheted one way only: a stop that can move backwards is not a stop.
+    posStop := posDir > 0 ? math.max(posStop, stLine) : math.min(posStop, stLine)
+    hitStop = posDir > 0 ? low <= posStop : high >= posStop
+    aged    = bar_index - posBar >= maxHold
+    if hitStop or aged
+        exitPx    := hitStop ? posStop : close
+        pts       = posDir * (exitPx - posEntry)
+        // FILL VS SIGNAL. An entry-quality diagnostic, NOT a share of the
+        // profit. E-131: splitting a trade at the arm price is exact and
+        // useless - on the shipped system it reads +691.9 / -594.8 against a
+        // +97.1 result, and it is positive on 100.0% of trades because the
+        // 0.50 ATR offset makes it so by construction. It measures the offset,
+        // not the level. What a component is WORTH is the ablation in the
+        // panel below.
+        pFill     = posDir * (posArmPx - posEntry)
+        if nTrades == 0
+            firstT := time
+        nTrades  += 1
+        nWins    += pts > 0 ? 1 : 0
+        sumPts   += pts
+        sumFill  += pFill
+        bestPts  := math.max(bestPts,  pts)
+        worstPts := math.min(worstPts, pts)
+        peakEq   := math.max(peakEq, sumPts)
+        maxDD    := math.max(maxDD, peakEq - sumPts)
+        if posDir > 0
+            nLong   += 1
+            ptsLong += pts
+        else
+            nShort   += 1
+            ptsShort += pts
+
+        if showBoxes
+            won = pts > 0
+            box.new(posBar, math.max(posEntry, exitPx), bar_index, math.min(posEntry, exitPx),
+                 border_color = color.new(won ? cBuy : cSell, 40), border_width = 1,
+                 bgcolor = color.new(won ? cBuy : cSell, 88))
+            label.new(bar_index, posDir > 0 ? math.max(posEntry, exitPx) : math.min(posEntry, exitPx),
+                 f_num(pts, "0.0") + " pt   " +
+                 f_num(pts * gbpPoint * lots / 0.01, "0.00"),
+                 style = posDir > 0 ? label.style_label_lower_left : label.style_label_upper_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(won ? cBuy : cSell, 0), size = size.tiny)
+
+        posDir   := 0
+        posEntry := na
+        posStop  := na
+        posBar   := na
+        closedNow := true
+
+// ---- what is drawn on the candles, and this is the complete list -----------
+//   the SuperTrend band  ·  BUY / SELL at the fill  ·  the live stop  ·
+//   the one live level  ·  the finished trade box.  Nothing else.
+plot(stLine, "SuperTrend trail", color = color.new(cTrail, 45), linewidth = 1)
+
+plotshape(filledBuy,  "BUY",  shape.labelup,   location.belowbar, color = cBuy,
+     text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(filledSell, "SELL", shape.labeldown, location.abovebar, color = cSell,
+     text = "SELL", textcolor = color.white, size = size.tiny)
+
+plot(posDir != 0 ? posStop : na, "Live stop",
+     color = color.new(posDir > 0 ? cSell : cBuy, 20), style = plot.style_linebr, linewidth = 2)
+plot(showLevels and posDir == 0 and not na(armBuy)  ? armBuy  : na, "Buy limit",
+     color = color.new(cBuy, 30),  style = plot.style_linebr, linewidth = 2)
+plot(showLevels and posDir == 0 and not na(armSell) ? armSell : na, "Sell limit",
+     color = color.new(cSell, 30), style = plot.style_linebr, linewidth = 2)
+// the live position, shaded, so an open trade reads the same as a closed one
+bgTop = posDir != 0 ? math.max(posEntry, close) : na
+bgBot = posDir != 0 ? math.min(posEntry, close) : na
+pOpen = plot(bgTop, "", color = color.new(color.gray, 100), display = display.none)
+pEnt  = plot(bgBot, "", color = color.new(color.gray, 100), display = display.none)
+livePts = posDir != 0 ? posDir * (close - posEntry) : na
+fill(pOpen, pEnt, color = color.new(nz(livePts) >= 0 ? cBuy : cSell, 90), title = "Open position")
+
+// ============================== THE PROFIT BOX =============================
+// It reports POINTS first and money second. E-074: the best per-trade gate set
+// in this project banked the LEAST money, so R and expectancy are not the unit
+// that matters - points are.
+//
+// The two strategy rows are the exact decomposition above, not an attribution
+// model. LEVEL is what resting a limit inside the zone bought over chasing at
+// the signal; TREND is what the SuperTrend direction and the band trail then
+// made of it. They sum to the total with no residual.
+// one row of the profit box: label, the number that matters, a quiet note
+var table tp = na
+
+f_row(r, a, b, c, col) =>
+    table.cell(tp, 0, r, a, text_color = color.new(#8FA3B8, 0), text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, b, text_color = col, text_size = size.small,
+         text_halign = text.align_right)
+    table.cell(tp, 2, r, c, text_color = color.new(#8FA3B8, 25), text_size = size.tiny,
+         text_halign = text.align_right)
+
+if barstate.islast and showPanel
+    if not na(tp)
+        table.delete(tp)
+    pos = panelPos == "Top right" ? position.top_right :
+          panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
+    tp := table.new(pos, 3, 14, border_width = 1,
+         bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
+         frame_color = color.new(#2A3A4D, 20), frame_width = 1)
+
+    cHead = color.new(#8FA3B8, 0)
+    cVal  = color.new(#E6EDF5, 0)
+    winPc = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    money = sumPts * gbpPoint * lots / 0.01
+    avg   = nTrades > 0 ? sumPts / nTrades : 0.0
+    days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
+    cPos  = color.new(cBuy, 0)
+    cNeg  = color.new(cSell, 0)
+
+    table.cell(tp, 0, 0, "ZONE SNIPER 3.0", text_color = cVal, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, 0, "", text_color = cVal)
+    table.cell(tp, 2, 0, posDir == 0 ? "flat" : posDir > 0 ? "LONG" : "SHORT",
+         text_color = posDir == 0 ? cHead : posDir > 0 ? cPos : cNeg, text_size = size.tiny,
+         text_halign = text.align_right)
+
+    f_row(1, "points",   f_num(sumPts, "0.0"),
+             f_num(money, "0.00") + " GBP", sumPts >= 0 ? cPos : cNeg)
+    f_row(2, "trades",   str.tostring(nTrades),
+             str.tostring(nTrades / days, "0.0") + "/day", cVal)
+    f_row(3, "win rate", str.tostring(winPc, "0.0") + "%",
+             str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
+    f_row(4, "avg trade",f_num(avg, "0.000"), "points", avg >= 0 ? cPos : cNeg)
+
+    // ---- WHAT EACH PART IS WORTH, measured live on your bars ----------
+    // Not a decomposition - an ABLATION. The shadow book takes the same
+    // signals with the same stop and the same trail and simply buys at the
+    // market instead of resting a limit inside the zone. The gap is the
+    // level's contribution and it can come out negative, which is the point.
+    // On 981 real trades (E-131): limit 97.1, market 9.5, level worth +87.7.
+    // SuperTrend's half is measured the same way - switch the "Only take
+    // levels the SuperTrend agrees with" input off and read this box again.
+    // Measured (E-127): filter OFF 48.4, filter ON 97.1, so it is worth +48.7.
+    table.cell(tp, 0, 5, "── what each part is worth ──",
+         text_color = color.new(#5C7089, 0), text_size = size.tiny,
+         text_halign = text.align_left)
+    table.cell(tp, 1, 5, "", text_color = cVal)
+    table.cell(tp, 2, 5, "", text_color = cVal)
+
+    f_row(6, "limit in zone",   f_num(sumPts, "0.0"), "shipped",
+             sumPts >= 0 ? cPos : cNeg)
+    f_row(7, "market at signal", f_num(shPts, "0.0"),
+             str.tostring(shN) + " trades", shPts >= 0 ? cPos : cNeg)
+    f_row(8, "the level adds",  f_num(sumPts - shPts, "0.0"), "points",
+             sumPts - shPts >= 0 ? cPos : cNeg)
+    f_row(9, "fill vs signal",
+             nTrades > 0 ? f_num(sumFill / nTrades, "0.000") : "-",
+             "pts/trade", cVal)
+
+    table.cell(tp, 0, 8, "── risk ──", text_color = color.new(#5C7089, 0),
+         text_size = size.tiny, text_halign = text.align_left)
+    table.cell(tp, 1, 8, "", text_color = cVal)
+    table.cell(tp, 2, 8, "", text_color = cVal)
+
+    f_row(9,  "best / worst", f_num(bestPts, "0.0") + " / " + str.tostring(worstPts, "0.0"),
+              "points", cVal)
+    f_row(10, "max drawdown", str.tostring(-maxDD, "0.0"),
+              str.tostring(-maxDD * gbpPoint * lots / 0.01, "0.00") + " GBP", cNeg)
+    f_row(11, "long / short",  f_num(ptsLong, "0.0") + " / " + f_num(ptsShort, "0.0"),
+              str.tostring(nLong) + " / " + str.tostring(nShort), cVal)
+
+// the rest goes in the status line, off the candles
+plot(posDir, "Position (1 long, -1 short)",   display = display.status_line)
+plot(posDir != 0 ? posEntry : na, "Entry",    display = display.status_line)
+plot(livePts, "Open points",                  display = display.status_line)
+plot(posDir != 0 ? math.abs(close - posStop) / atr : na, "Stop distance (ATR)",
+     display = display.status_line)
+plot(atr, "ATR(14)", display = display.status_line)
+
+alertcondition(filledBuy,  "ZS BUY",   "Zone Sniper 3.0 BUY filled")
+alertcondition(filledSell, "ZS SELL",  "Zone Sniper 3.0 SELL filled")
+alertcondition(closedNow,  "ZS CLOSE", "Zone Sniper 3.0 trade closed")

@@ -19,6 +19,7 @@ brace that does not close, and an assignment to a read-only input.
 Run:  python3 JARVIS/tools/check_mq5.py JARVIS/ea/build/SuperTrendSniper.mq5
 """
 from __future__ import annotations
+import os
 import re, sys, os
 
 # ---------------------------------------------------------------- lexing
@@ -80,7 +81,8 @@ ObjectCreate ObjectDelete ObjectFind ObjectSetInteger ObjectSetDouble
 ObjectSetString ObjectGetInteger ObjectGetDouble ObjectGetString
 ObjectsDeleteAll ChartRedraw ChartID ChartGetInteger ChartSetInteger
 GlobalVariableSet GlobalVariableGet GlobalVariableCheck GlobalVariableDel
-GlobalVariablesTotal GlobalVariableName
+GlobalVariablesTotal GlobalVariableName GlobalVariableTime GlobalVariableSetOnCondition
+GlobalVariablesDeleteAll GlobalVariablesFlush GlobalVariableTemp
 FileOpen FileClose FileWrite FileWriteString FileRead FileReadString
 FileSeek FileIsExist FileDelete FileSize FileFlush
 TerminalInfoInteger TerminalInfoString MQLInfoInteger MQLInfoString
@@ -116,9 +118,36 @@ and or not
 """.split())
 
 
+def _include_context(path: str, code: str) -> str:
+    """Code from local #include "x.mqh" files, so their functions and globals
+    do not read as undeclared. Without this the checker fired six false
+    positives the moment an EA was split into a file plus an include, which is
+    exactly the kind of noise that gets a checker ignored."""
+    here = os.path.dirname(os.path.abspath(path))
+    roots = [here, os.path.join(here, "..", "include"),
+             os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "..", "ea", "include")]
+    out, seen = [], set()
+    stack = list(re.findall(r'^\s*#include\s+"([^"]+)"', code, re.M))
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        for r in roots:
+            cand = os.path.normpath(os.path.join(r, name))
+            if os.path.isfile(cand):
+                raw = io_read(cand)
+                out.append(strip_code(raw))
+                stack += re.findall(r'^\s*#include\s+"([^"]+)"', raw, re.M)
+                break
+    return "\n".join(out)
+
+
 def check(path: str):
     src = io_read(path)
     code = strip_code(src)
+    inc = _include_context(path, src)
     lines = code.split('\n')
     raw = src.split('\n')
     problems = []
@@ -149,11 +178,12 @@ def check(path: str):
     # ---- 2. every function that is CALLED must be defined --------------
     # definitions and prototypes both count
     defined = set()
-    for m in re.finditer(r'^\s*(?:[A-Za-z_]\w*[\s*&]+)+([A-Za-z_]\w*)\s*\([^;{]*\)\s*[;{]',
-                         code, re.M):
-        defined.add(m.group(1))
-    for m in re.finditer(r'#define\s+([A-Za-z_]\w*)', code):
-        defined.add(m.group(1))
+    for body in (code, inc):
+        for m in re.finditer(r'^\s*(?:[A-Za-z_]\w*[\s*&]+)+([A-Za-z_]\w*)\s*\([^;{]*\)\s*[;{]',
+                             body, re.M):
+            defined.add(m.group(1))
+        for m in re.finditer(r'#define\s+([A-Za-z_]\w*)', body):
+            defined.add(m.group(1))
 
     called = {}
     for i, l in enumerate(lines, 1):
@@ -189,14 +219,15 @@ def check(path: str):
 
     # ---- 5. globals used but never declared ----------------------------
     declared = set(inputs)
-    for m in re.finditer(r'^\s*(?:static\s+)?(?:\w+)\s+(\w+)(?:\s*\[[^\]]*\])?\s*(?:=[^;]*)?;',
-                         code, re.M):
-        declared.add(m.group(1))
-    for m in re.finditer(r'^\s*(?:\w+)\s+([\w,\s]+);', code, re.M):
-        for nm in m.group(1).split(','):
-            nm = nm.strip().split('[')[0].strip()
-            if re.fullmatch(r'\w+', nm or ''):
-                declared.add(nm)
+    for body in (code, inc):
+        for m in re.finditer(r'^\s*(?:static\s+)?(?:\w+)\s+(\w+)(?:\s*\[[^\]]*\])?\s*(?:=[^;]*)?;',
+                             body, re.M):
+            declared.add(m.group(1))
+        for m in re.finditer(r'^\s*(?:\w+)\s+([\w,\s]+);', body, re.M):
+            for nm in m.group(1).split(','):
+                nm = nm.strip().split('[')[0].strip()
+                if re.fullmatch(r'\w+', nm or ''):
+                    declared.add(nm)
     for m in re.finditer(r'\b(g_\w+)\b', code):
         declared.add(m.group(1)) if False else None
     used_g = {}
