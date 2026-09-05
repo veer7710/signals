@@ -4966,3 +4966,69 @@ detectors and E-109's four level-selection rules all failed the same test.
 2018 H1 only. 499 filled sweeps is a small sample for filter research. The feed
 is missing the 00:00 UTC hour daily, so the hour-of-day column in E-123 is
 contaminated and was not acted on (its n per hour is 12-30 anyway, which is noise).
+
+## E-125 / E-126 — THE SUPERTREND RESCUE. It was never an entry signal; it is a trail.
+
+Veer, and the mandate's §26: do not discard SuperTrend until it has been tested
+as something other than a trigger. That was the right instruction. **Every
+earlier test in this repo (E-112 to E-117) used SuperTrend exactly one way — the
+flip as an ENTRY — and killing the whole indicator on that basis was wrong.**
+
+Tested as a component on top of the one edge this project has proven: M15
+liquidity zones swept and executed on M1 (E-121, 21.5 control se).
+
+```
+1. AS AN EXIT / TRAIL                     n     win%   points   £ today
+   25% giveback (baseline)              356    80.1%     11.0     63.99
+   M1 SuperTrend band as trail          356    58.1%     39.6    230.07
+   exit on opposite SuperTrend flip     356    45.2%     -7.5    -43.57
+
+2. AS A DIRECTIONAL FILTER
+   all sweeps (baseline)                356    80.1%     11.0
+   only WITH the M15 SuperTrend         124    80.6%      9.0
+   only AGAINST it                      232    79.7%      2.0
+
+3. AS A CHOP DETECTOR (M1 flips/hour)
+   all sweeps (baseline)                356    80.1%     11.0
+   QUIET <= 5 flips/hr                  119    82.4%      6.1
+   CHOPPY >= 7 flips/hr                 176    77.3%      2.0
+```
+
+**As a trail it produces 3.6x the baseline.** As a filter or a chop detector it
+only removes trades — every filtered subset banks LESS than taking everything,
+which is E-074 exactly. As an exit-on-flip it loses.
+
+### E-126 — and the trail survives the honest tests
+```
+                             TRAIN pts   TEST pts (out of sample)
+25% giveback                      11.1        -0.1     <- dies
+SuperTrend band trail             15.5       +24.1     <- OOS EXCEEDS IS
+wick filter + ST trail             5.3        +9.6     (n=44; adds nothing)
+
+FAIR CONTROL - the same zones, time-shifted, 14 shifts, with the ST trail:
+   real  +39.6 pts    time-shifted  -584.2 pts    se 29.8
+   EDGE  +623.8 points = 21.0 control standard errors
+```
+
+**Out-of-sample performance EXCEEDS in-sample.** That is the signature of a
+mechanism rather than a fit, and it is the opposite of everything else tested
+here. The E-124 wick filter is DROPPED — it adds nothing once the trail is in.
+
+### WHY IT WORKS, mechanically
+A fixed give-back percentage hands back the same share of the peak whether the
+market is trending or chopping. The SuperTrend band is ATR-scaled, so it widens
+in a trend (letting a winner run) and tightens in chop (banking it) **by
+construction**. That is exactly the behaviour E-090, E-095 and E-117 kept
+groping for with fixed percentages, and it is why a percentage could not do it.
+
+### SHIPPED — SYSTEM A
+- `JARVIS/ea/build/ZoneSniper.mq5` (1.00)
+- `JARVIS/pine/ZONE_SNIPER_1_0.pine` (1.0), from the same spec
+- `JARVIS/lab/FINAL_ARCHITECTURE.md` — the shared rules, the evidence, and the
+  full list of what was tested and REMOVED
+- `check_mq5.py` fixed: `%I64u` / `%I32d` were not counted as format specifiers,
+  so every `StringFormat` carrying an order ticket was falsely flagged.
+
+**Status: PROMISING.** 2018 H1 only, 109 trading days, never forward tested,
+and the modelled edge (0.111 points/trade) survives about 0.10 points of
+slippage and no more. `InpDemoOnly` defaults TRUE.

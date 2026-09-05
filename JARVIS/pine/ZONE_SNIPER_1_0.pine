@@ -1,0 +1,158 @@
+//@version=6
+// ===========================================================================
+//  ZONE SNIPER 1.0  —  the chart for SYSTEM A
+//
+//  Same rules as ZoneSniper.mq5, from the same spec
+//  (JARVIS/lab/FINAL_ARCHITECTURE.md). If this chart and the EA disagree, one
+//  of them is wrong - P92 found a 52% signal gap between the last pair and it
+//  went unnoticed for 180 commits.
+//
+//  THE SYSTEM, and nothing else is in it:
+//    ZONE    a confirmed M15 swing pivot, 3 bars either side. Only KNOWN 3
+//            bars after it forms, which is why the plot is offset - drawing it
+//            at the pivot bar would be showing you information that did not
+//            exist yet.
+//    ENTRY   a limit 0.50 x ATR(14) PAST the level, inside the zone, where the
+//            sweep fills it.
+//    STOP    4.0 x ATR(14) from the fill.
+//    TRAIL   the SuperTrend(7, 1.2) band. This is the SuperTrend's ONLY job
+//            here and the only one it measured well at.
+//    EXIT    the trailed stop, or 240 bars. THERE IS NO TAKE PROFIT.
+//
+//  MEASURED (E-119..E-126, 157,051 real M1 bars from 18.8M bid/ask ticks):
+//    real zones                       +39.6 points
+//    the SAME zones, time-shifted    -584.2 points
+//    EDGE                            +623.8 points = 21.0 control se
+//    out-of-sample 24.1 vs in-sample 15.5 - OOS EXCEEDS IS
+//    356 trades over 109 days = 3.3/day
+//
+//  WHAT IS NOT HERE, because it was tested on the same data and REMOVED:
+//    the SuperTrend FLIP as a signal   no edge at zero cost (+0.0021R, 1.2 se)
+//    the DEMA gate                     worse than random (-3.1 se)
+//    a fixed take profit               -29.3 pts at 2R, -43.6 at 3R
+//    a chop or trend filter            filtering only removed trades
+//    the rejection-wick filter         added nothing on top of the trail
+//  If you want them back the evidence is in EXPERIMENTS.md. They lost money.
+//
+//  2018 H1 only. NEVER FORWARD TESTED.
+// ===========================================================================
+indicator("ZONE SNIPER 1.0", overlay = true, max_labels_count = 300,
+     max_lines_count = 300, max_bars_back = 1000)
+
+gZ = "ZONE (M15)"
+pvLen   = input.int(3,   "Swing bars either side", group = gZ, minval = 1)
+zoneTf  = input.timeframe("15", "Zone timeframe", group = gZ)
+zoneLife= input.int(200, "Zone life (zone-TF bars)", group = gZ)
+
+gE = "ENTRY / RISK"
+pastAtr = input.float(0.50, "Limit this far PAST the level (ATR)", group = gE, step = 0.05)
+stopAtr = input.float(4.0,  "Stop (ATR)", group = gE, step = 0.5)
+waitBar = input.int(60,   "Cancel an unfilled limit after N bars", group = gE)
+maxHold = input.int(240,  "Time exit (bars)", group = gE)
+
+gT = "TRAIL"
+stLen   = input.int(7,    "SuperTrend ATR length", group = gT)
+stMult  = input.float(1.2,"SuperTrend multiplier", group = gT, step = 0.1)
+
+gD = "DISPLAY"
+cBuy    = input.color(#00A6E8, "BUY",  group = gD)
+cSell   = input.color(#F0435A, "SELL", group = gD)
+showZone= input.bool(true, "Draw live zones", group = gD)
+
+atr = ta.atr(14)
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+
+// ---- the M15 pivot, requested with lookahead OFF and offset by its own
+// confirmation window. Both are required: lookahead_on would hand us the pivot
+// before the market had formed it, and not offsetting would draw it 3 bars
+// early on the chart.
+f_piv() =>
+    ph = ta.pivothigh(high, pvLen, pvLen)
+    pl = ta.pivotlow(low,  pvLen, pvLen)
+    [ph, pl]
+[zH, zL] = request.security(syminfo.tickerid, zoneTf, f_piv(),
+     lookahead = barmerge.lookahead_off)
+
+var float armBuy   = na       // the live BUY limit price
+var float armSell  = na
+var int   armBuyB  = na
+var int   armSellB = na
+var int   posDir   = 0
+var float posEntry = na
+var float posStop  = na
+var int   posBar   = na
+
+// a new confirmed swing LOW gives a BUY zone; a swing HIGH gives a SELL zone
+newLow  = not na(zL) and (na(zL[1]) or zL != zL[1])
+newHigh = not na(zH) and (na(zH[1]) or zH != zH[1])
+if newLow and posDir == 0
+    armBuy  := zL - pastAtr * atr
+    armBuyB := bar_index
+if newHigh and posDir == 0
+    armSell  := zH + pastAtr * atr
+    armSellB := bar_index
+
+// cancel a stale limit
+if not na(armBuyB) and bar_index - armBuyB > waitBar
+    armBuy := na
+    armBuyB := na
+if not na(armSellB) and bar_index - armSellB > waitBar
+    armSell := na
+    armSellB := na
+
+// ---- fills, on CONFIRMED bars only
+filledBuy  = posDir == 0 and not na(armBuy)  and low  <= armBuy  and barstate.isconfirmed
+filledSell = posDir == 0 and not na(armSell) and high >= armSell and barstate.isconfirmed
+if filledBuy
+    posDir := 1
+    posEntry := armBuy
+    posStop := armBuy - stopAtr * atr
+    posBar := bar_index
+    armBuy := na
+    armSell := na
+if filledSell
+    posDir := -1
+    posEntry := armSell
+    posStop := armSell + stopAtr * atr
+    posBar := bar_index
+    armBuy := na
+    armSell := na
+
+// ---- THE TRAIL. The SuperTrend band, ratcheted one way only. A stop that can
+// move backwards is not a stop.
+if posDir != 0 and barstate.isconfirmed
+    // ta.supertrend returns the ACTIVE band - the lower one while bullish, the
+    // upper one while bearish - so there is one value to use in both cases and
+    // no branch is needed. The MQL5 side keeps the two bands separately and
+    // picks by direction; the resulting price is identical.
+    posStop := posDir > 0 ? math.max(posStop, stLine) : math.min(posStop, stLine)
+    hitStop = posDir > 0 ? low <= posStop : high >= posStop
+    aged    = bar_index - posBar >= maxHold
+    if hitStop or aged
+        posDir := 0
+        posEntry := na
+        posStop := na
+        posBar := na
+
+plot(stLine, "SuperTrend trail", color = color.new(#c9a227, 40), linewidth = 1)
+plotshape(filledBuy,  "BUY",  shape.labelup,   location.belowbar, color = cBuy,
+     text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(filledSell, "SELL", shape.labeldown, location.abovebar, color = cSell,
+     text = "SELL", textcolor = color.white, size = size.tiny)
+plot(posDir != 0 ? posStop : na, "Live stop", color = cSell, style = plot.style_linebr,
+     linewidth = 2)
+plot(showZone and posDir == 0 and not na(armBuy)  ? armBuy  : na, "BUY limit",
+     color = color.new(cBuy, 40), style = plot.style_linebr)
+plot(showZone and posDir == 0 and not na(armSell) ? armSell : na, "SELL limit",
+     color = color.new(cSell, 40), style = plot.style_linebr)
+
+// the numbers live in the status line, off the candles
+plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
+plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
+plot(posDir != 0 ? math.abs(close - posStop) / atr : na, "Stop distance (ATR)",
+     display = display.status_line)
+plot(posDir != 0 ? posDir * (close - posEntry) : na, "Open points",
+     display = display.status_line)
+
+alertcondition(filledBuy,  "ZS BUY",  "Zone Sniper BUY filled")
+alertcondition(filledSell, "ZS SELL", "Zone Sniper SELL filled")

@@ -326,6 +326,13 @@ def _spec_count(fmt):
                 if fmt[j] == '*':
                     n += 1
                 j += 1
+            # length modifiers. MQL5 also accepts the Microsoft-style %I64u /
+            # %I32d for long and ulong, and those are used for order tickets.
+            # The old loop consumed the 'I' and then stopped on the '6', so the
+            # specifier was never counted and every StringFormat using a ticket
+            # was reported as having one argument too many.
+            if fmt.startswith("I64", j) or fmt.startswith("I32", j):
+                j += 3
             while j < len(fmt) and fmt[j] in "hlIq":
                 j += 1
             if j < len(fmt) and fmt[j] in "diouxXeEfgGcsp":
