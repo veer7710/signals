@@ -5323,3 +5323,104 @@ Two things follow, and both are load-bearing:
   terms, and it points the opposite way: E-081 says a small account must trade
   M1 for position sizing, cost says M1 is the most expensive place to do it.
   That tension is real and is not resolved.
+
+---
+
+## E-133 — HIGHER TIMEFRAME FOR CONTEXT, LOW TIMEFRAME FOR THE ENTRY
+`JARVIS/research/htf_bias.py`
+
+Veer, and this is the architecture as he stated it:
+
+> *"we trade m1 m5 m15 and m3 maybe, we simply LOOK AT higher timeframes we
+> don't trade them... if h1 shows that there may be a new trend direction then
+> we enter on a lower tf for perfect entry"*
+
+System A takes its direction from the **M1** SuperTrend — a 7-bar band on a
+one-minute chart, with no idea what the hour is doing. This tests whether the
+hour and the four-hour know something the minute does not.
+
+**No look-ahead:** an H1 bar is only usable once it has CLOSED, so every HTF read
+comes from the last closed HTF bar. Getting that off by one is how HTF filters
+"work" in a backtest and fail live.
+
+### NINE VARIANTS. NOT ONE BEATS READING DIRECTION OFF M1.
+Same M1 entry, stop, trail and ceiling throughout — the only variable is where
+direction comes from.
+
+| direction source | n | /day | win% | points | per trade | REFUSED n / per trade |
+|---|---|---|---|---|---|---|
+| **M1 only (shipped)** | 981 | 9.0 | 57.1% | **97.1** | +0.0990 | 685 / +0.0647 |
+| M1 + H1 | 850 | 7.8 | 56.9% | 80.2 | +0.0943 | 2282 / +0.0557 |
+| M1 + H4 | 851 | 7.8 | 57.6% | 93.1 | **+0.1094** | 2204 / +0.0543 |
+| M1 + H1 + H4 | 582 | 5.3 | 57.2% | 53.9 | +0.0926 | 6052 / +0.0578 |
+| H1 alone | 942 | 8.6 | 58.4% | 94.3 | +0.1001 | 1204 / +0.0370 |
+| H4 alone | 937 | 8.6 | 58.1% | 82.6 | +0.0882 | 1163 / +0.0230 |
+| M1 + M15 | 844 | 7.7 | 58.8% | 84.1 | +0.0997 | 2220 / +0.0431 |
+
+Every HTF filter **does** select better trades per-trade — the refused books all
+run at +0.02 to +0.06 against the +0.09 to +0.11 they allow — but every one of
+them removes so many trades that total points fall. The refused books are all
+**positive**: these filters throw away money.
+
+### THE GRADE LADDER IS NOT MONOTONE, so the EA must not size on it
+Veer also asked that the EA *"treat each trade according to the analysis behind
+it"*. That requires more agreement to mean a better trade. It does not:
+
+```
+0  M1 alone, HTF disagrees    300 trades   60.7% win   +0.0951/trade
+1  M1 + one higher clock      356          53.9%       +0.1058
+2  M1 + H1 + H4 all agree     325          57.2%       +0.0951
+MONOTONE: NO
+```
+
+Grading trades by HTF agreement and sizing on the grade is **not supported**.
+
+### E-133b — HIS EXACT WORDING RUNS BACKWARDS
+The table above tests HTF *state*. He described a *fresh turn*. Tested on its
+own terms — enter on M1 within N hours of a higher-timeframe SuperTrend flip:
+
+```
+H1 turn ->  within 1h +0.0753 | 3h +0.1176 | 6h +0.1131 | 12h +0.1008 | any +0.1010
+H4 turn ->  within 1h -0.0212 | 3h +0.0039 | 6h +0.0754 | 12h +0.0889 | any +0.0886
+                     (55 trades, 41.8% win)
+```
+
+**The fresher the higher-timeframe turn, the worse the entry**, recovering
+monotonically as it ages. H4 is outright negative in its first hour. That is
+mechanically sensible — right after an H4 band flips, nobody yet knows whether
+the flip holds, which is the definition of the fakeout — but the n is small (55)
+and it is one sample.
+
+### E-133c — AND THE INVERSE DOES NOT PAY EITHER
+If fresh turns are bad, stand aside after one. Seven variants:
+
+| stand aside after | n | points | per trade | refused / per trade |
+|---|---|---|---|---|
+| nothing (shipped) | 981 | **97.1** | +0.0990 | — |
+| H4 turn, 1 hour | 974 | 95.6 | +0.0982 | 60 / +0.0831 |
+| H4 turn, 3 hours | 940 | 93.9 | +0.0999 | 351 / +0.0931 |
+| H1 1h + H4 3h | 909 | 80.4 | +0.0885 | 610 / +0.1010 |
+
+Per-trade barely moves and total points always fall. The E-133b effect was real
+but too small and too rare to harvest.
+
+### VERDICT
+Higher-timeframe context as a direction input to System A is **REJECTED**:
+sixteen variants across three framings, none beats M1.
+
+**But the architecture behind the ask is right, and this measures it.** A trend
+filter is worth an enormous amount — without any direction filter the same
+entries make **48.4** points instead of **97.1** (E-127). Direction is close to
+half the system. The finding is only that *the best clock to read direction from
+is the one being traded*, not a higher one.
+
+### THE DEFECT THIS EXPOSED, which matters more than the experiment
+`SuperTrendSniper` and `LiquiditySniper` both read `_Period` and would trade
+**whatever chart they were attached to** — an H1 chart made them H1 strategies.
+Nothing stopped it. Every number either is quoted at was measured on M1, and
+E-132 showed the cost picture is completely different up there (the same 0.40
+spread is 0.220 of ATR on M1 and 0.047 on M15).
+
+`JARVIS/ea/include/TimeframeGuard.mqh` now **refuses to start above M30** in all
+three EAs. A refusal, not a warning — a warning in the Experts log is something
+you find out about after the trades.

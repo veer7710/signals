@@ -74,6 +74,9 @@
 // On market entries the LEVEL row reads zero and everything lands on TREND -
 // which is correct, not a gap: only a resting limit can earn a better fill.
 #include "ProfitBox.mqh"
+
+// M1-M30 only. Higher timeframes are context, not instruments (E-133).
+#include "TimeframeGuard.mqh"
 CTrade trade;
 
 //===================================================================
@@ -3925,6 +3928,7 @@ void OnTimer()
 
 int OnInit()
 {
+   if(!TfGuard("STS")) return INIT_FAILED;
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
    {
       Print("REFUSING TO START: InpDemoOnly is true and this is not a demo "

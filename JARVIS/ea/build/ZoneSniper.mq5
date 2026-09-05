@@ -45,6 +45,9 @@ CTrade trade;
 // rather not put a second file in MQL5/Include.
 #include "ProfitBox.mqh"
 
+// M1-M30 only. Higher timeframes are context, not instruments (E-133).
+#include "TimeframeGuard.mqh"
+
 #define ZS_BUILD "2.10"
 
 input group "=== SAFETY ==="
@@ -554,6 +557,7 @@ int OnInit()
             "InpDemoOnly=false deliberately, and only after a demo run.");
       return INIT_FAILED;
    }
+   if(!TfGuard("ZS")) return INIT_FAILED;
    g_atrM1 = iATR(_Symbol, PERIOD_M1, 14);
    if(g_atrM1 == INVALID_HANDLE) { Print("[ZS] ATR handle failed"); return INIT_FAILED; }
 

@@ -81,6 +81,9 @@
 // two things a level trade is made of - the fill the resting limit bought, and
 // what the trade did afterwards.
 #include "ProfitBox.mqh"
+
+// M1-M30 only. Higher timeframes are context, not instruments (E-133).
+#include "TimeframeGuard.mqh"
 CTrade trade;
 
 //==================== INPUTS =======================================
@@ -1567,6 +1570,7 @@ void Readout()
 //==================== EVENTS =======================================
 int OnInit()
 {
+   if(!TfGuard("LQS")) return INIT_FAILED;
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
    {
       Print("REFUSING TO START: InpDemoOnly is true and this is not a demo "
