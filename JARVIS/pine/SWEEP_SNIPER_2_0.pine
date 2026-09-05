@@ -1,0 +1,678 @@
+//@version=6
+// IF THE LINE ABOVE SHOWS ONLY ONE SLASH, YOUR PASTE DROPPED A CHARACTER.
+// It must read exactly:  //@version=6
+// TradingView's "Script could not be translated from: null" and "the Pine
+// version of this script is unspecified" both mean that one slash is missing.
+// Select ALL of this file (Ctrl+A in the file, Ctrl+A in the editor, paste).
+// ===========================================================================
+//  SWEEP SNIPER 2.0  —  liquidity sweeps + SMC + sessions, one clean chart
+//
+//  WHAT IS ON THE CHART, complete list, and everything is a toggle:
+//     the SWEEP SIGNAL      BUY / SELL where the validated setup fires
+//     the LIVE POSITION     entry, stop priced in money, running P&L
+//     SMC STRUCTURE         BOS / CHoCH, drawn only when structure breaks
+//     ORDER BLOCKS          the last opposing candle before the break
+//     FAIR VALUE GAPS       three-bar gaps, removed the moment they fill
+//     LIQUIDITY SWEEPS      the wick that took the level out
+//     SESSIONS              Asia / London / New York, as a faint tint
+//  BSL/SSL POOLS ARE COMPUTED AND NOT DRAWN, exactly as asked. Three or more
+//  extremes clustered inside an ATR margin is a pool - one high is a level,
+//  three stacked highs are where the stops actually are. Counted at every
+//  level, reported in the panel, and given NO VOTE: E-135 quartiled pool size
+//  against outcome and the ladder was not monotone. A number that does not
+//  separate winners from losers is context, not a filter.
+//
+//  ON THE TWO LUXALGO SCRIPTS: their code is CC BY-NC-SA 4.0, which is
+//  non-commercial and share-alike, so it cannot be copied into anything you
+//  might ship or sell. Everything here is written from the published
+//  DEFINITIONS instead, which is free to do. Their FVG also uses lookahead_on,
+//  a real future leak on higher-timeframe selection, and this does not.
+//
+//  THE TRADE, and every rule was measured before it was allowed in.
+//  157,051 real M1 bars from 18,816,940 bid/ask ticks, each bar charged its
+//  own measured spread.
+//     LEVEL     a confirmed swing pivot - resting liquidity
+//     SWEEP     price runs THROUGH it by 0.10 ATR - the stop run
+//     THE WICK  the sweep bar's body must be at most 64.6% of its range.
+//               THE FAKEOUT FILTER: a sweep that CLOSES with a big body is a
+//               real breakout and fading it is how you lose. Direction from
+//               ICT; the cut came from the first half of the sample and was
+//               tested once on the second.
+//     ENTRY     a STOP order back AT the level - price returning to it. Not a
+//               limit: after the sweep price is on the far side, so a limit
+//               would fill instantly at the bottom of the run.
+//     STOP      beyond the SWEEP EXTREME + 0.30 ATR
+//     RISK CAP  refuse the setup if that stop is wider than 1.2 ATR
+//     EXIT      give back 25% - the stop ratchets to entry + 75% of the best
+//               excursion. No fixed target; every one of them banked less.
+//
+//  MEASURED (E-134..E-141)
+//     M1   2579 trades  23.6/day  65.1% win  +309.5 pts  0.89 pts/trade today
+//     M5    569 trades   5.2/day  68.9% win  +162.9 pts  2.11 pts/trade today
+//     M15   204 trades   1.9/day  64.7% win   +82.3 pts  2.98 pts/trade today
+//     control 107.3 se | walk-forward 5/5 | OOS +0.0991 vs IS +0.1241
+//     max drawdown GBP12.68, worst single trade -GBP4.63 at 0.01 lots
+//  M1 BANKS THE MOST AND IS THE ONLY ONE THAT DIES UNDER SLIPPAGE: at 0.20
+//  points M1 is -206.3 and M5 is +49.1. Run M5 live, M1 on demo.
+//
+//  NOT PROVEN. One instrument, 2018 H1, never forward tested. SUPPORTED.
+// ===========================================================================
+indicator("SWEEP SNIPER 2.0", overlay = true, max_labels_count = 500,
+     max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
+
+// ------------------------------------------------------------------ inputs --
+gS = "1 · THE SETUP"
+pvLen    = input.int(5,    "Swing needs this many bars either side", group = gS, minval = 1)
+sweepAtr = input.float(0.10, "Sweep must clear the level by (ATR)", group = gS, step = 0.05)
+wickCut  = input.float(0.646, "Sweep body / range must be under", group = gS, step = 0.01,
+     tooltip = "THE FAKEOUT FILTER. A big-bodied sweep close is a real breakout, not a rejection.")
+useDisp  = input.bool(false, "Require displacement on the return leg", group = gS,
+     tooltip = "OFF, and the EA has it off too. It is evaluated at the FILL bar and an EA resting an order cannot know which bar will fill it. Leaving it ON here would make this chart disagree with the EA - the P92 defect.")
+lifeBars = input.int(120,  "Give up on a setup after N bars", group = gS)
+
+gR = "2 · RISK"
+stopBuf  = input.float(0.30, "Stop beyond the sweep extreme (ATR)", group = gR, step = 0.05)
+maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", group = gR, step = 0.1,
+     tooltip = "E-138. Uncapped, the worst trade was 57% of a GBP60 account. This costs almost nothing and removes two thirds of the drawdown.")
+giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
+maxHold  = input.int(240,  "Time exit (bars)", group = gR)
+
+gC = "3 · SMC"
+showSmc   = input.bool(true, "Structure: BOS / CHoCH", group = gC)
+smcLen    = input.int(10,   "Structure swing length",  group = gC, minval = 2)
+showOB    = input.bool(true, "Order blocks",           group = gC)
+maxOB     = input.int(4,    "Keep this many order blocks", group = gC, minval = 1, maxval = 12)
+showFVG   = input.bool(true, "Fair value gaps",        group = gC)
+maxFVG    = input.int(4,    "Keep this many gaps",     group = gC, minval = 1, maxval = 12)
+eqTol     = input.float(0.69, "Pool margin (ATR)", group = gC, step = 0.05,
+     tooltip = "Used to COUNT the BSL/SSL pool at each level. Reported in the panel, never drawn, and never used as a filter - E-135 found pool size does not separate winners from losers.")
+
+gT = "4 · SESSIONS"
+showSess = input.bool(true, "Show sessions", group = gT)
+tzSess   = input.string("Etc/UTC", "Session timezone", group = gT)
+sessA    = input.session("0000-0800", "Asia",     group = gT)
+sessL    = input.session("0700-1600", "London",   group = gT)
+sessN    = input.session("1200-2100", "New York", group = gT)
+
+gM = "5 · MONEY"
+lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01)
+gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = gM, step = 0.001,
+     tooltip = "A point here is 1.00 of price - one dollar. 0.01 lots is 1 ounce, so a $1 move is about 79p. Same unit you use when you say 3-4 points is 2-4 pound.")
+ccy      = input.string("£", "Currency symbol", group = gM)
+
+gD = "6 · CHART"
+paintBars = input.bool(true,  "Recolour the candles", group = gD)
+cUp    = input.color(#FFFFFF, "Up candle",   group = gD, inline = "k1")
+cDn    = input.color(#5BC8F5, "Down candle", group = gD, inline = "k1")
+cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
+cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
+showLvl   = input.bool(true, "Levels",         group = gD, inline = "s1")
+showSweep = input.bool(true, "Sweep marks",    group = gD, inline = "s1")
+showLive  = input.bool(true, "Position box",   group = gD, inline = "s1")
+showHist  = input.bool(true, "Finished trades",group = gD, inline = "s2")
+showPanel = input.bool(true, "Profit box",     group = gD, inline = "s2")
+panelPos  = input.string("Bottom right", "Profit box position", group = gD,
+     options = ["Bottom right", "Top right", "Bottom left"])
+
+f_num(x, d) =>
+    (x >= 0 ? "+" : "") + str.tostring(x, d)
+f_ccy(v) =>
+    (v >= 0 ? "+" : "-") + ccy + str.tostring(math.abs(v) * gbpPoint * lots / 0.01, "0.00")
+
+// ------------------------------------------------------------ candle theme --
+// White up, light blue down. barcolor recolours the chart's own candles, so
+// nothing is drawn on top and nothing can drift out of alignment with price.
+barcolor(paintBars ? (close >= open ? cUp : cDn) : na, title = "Candles")
+
+// ---------------------------------------------------------------- sessions --
+// A faint tint only. Sessions are CONTEXT - they are deliberately not a filter:
+// this data feed is missing the 00:00 UTC hour every day (DATA_QUALITY.md), so
+// any session-based rule measured on it would be measuring the gap.
+inA = showSess and not na(time(timeframe.period, sessA, tzSess))
+inL = showSess and not na(time(timeframe.period, sessL, tzSess))
+inN = showSess and not na(time(timeframe.period, sessN, tzSess))
+bgcolor(inN ? color.new(#F5A623, 94) : inL ? color.new(#4A90D9, 95) :
+        inA ? color.new(#7B68EE, 96) : na, title = "Sessions")
+
+// ================================ SMC LAYER ================================
+// Written from the published definitions, not copied from anyone's script.
+// Structure is drawn ONLY when it breaks - an indicator that draws every swing
+// is a picture of the past, not a signal.
+var float smcH  = na          // the swing high that matters right now
+var int   smcHb = na
+var float smcL  = na
+var int   smcLb = na
+var int   smcTrend = 0        // +1 after a bullish break, -1 after a bearish
+
+sph = ta.pivothigh(high, smcLen, smcLen)
+spl = ta.pivotlow(low,  smcLen, smcLen)
+if not na(sph)
+    smcH  := sph
+    smcHb := bar_index - smcLen
+if not na(spl)
+    smcL  := spl
+    smcLb := bar_index - smcLen
+
+// a break needs a CLOSE through the level, and it may only fire once - the
+// level is consumed by the break that used it
+brokeUp = showSmc and not na(smcH) and close > smcH and barstate.isconfirmed
+brokeDn = showSmc and not na(smcL) and close < smcL and barstate.isconfirmed
+
+// ---- order blocks ---------------------------------------------------------
+// The last opposing candle before the move that broke structure. Drawn from
+// its own high to its own low and removed once price trades back through it.
+var array<box> obBull = array.new<box>()
+var array<box> obBear = array.new<box>()
+
+f_trimBoxes(arr, cap) =>
+    while array.size(arr) > cap
+        box.delete(array.shift(arr))
+    true
+
+f_ob(dir, fromBar) =>
+    // scan back for the last candle of the opposite colour, capped so a long
+    // stretch of one-sided bars cannot make this expensive
+    idx = -1
+    lim = math.max(0, math.min(50, bar_index - math.max(0, fromBar)))
+    for i = 0 to lim
+        if dir > 0 ? close[i] < open[i] : close[i] > open[i]
+            idx := i
+            break
+    idx
+
+if brokeUp
+    lbl = smcTrend < 0 ? "CHoCH" : "BOS"
+    smcTrend := 1
+    line.new(smcHb, smcH, bar_index, smcH, color = color.new(cBuy, 55),
+         style = line.style_dashed, width = 1)
+    label.new(bar_index, smcH, lbl, style = label.style_label_down,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(cBuy, 10),
+         size = size.tiny)
+    if showOB
+        i = f_ob(1, smcHb)
+        if i >= 0
+            b = box.new(bar_index - i, high[i], bar_index + 6, low[i],
+                 border_color = color.new(cBuy, 60), border_width = 1,
+                 bgcolor = color.new(cBuy, 88))
+            array.push(obBull, b)
+            f_trimBoxes(obBull, maxOB)
+    smcH := na
+
+if brokeDn
+    lbl = smcTrend > 0 ? "CHoCH" : "BOS"
+    smcTrend := -1
+    line.new(smcLb, smcL, bar_index, smcL, color = color.new(cSell, 55),
+         style = line.style_dashed, width = 1)
+    label.new(bar_index, smcL, lbl, style = label.style_label_up,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(cSell, 10),
+         size = size.tiny)
+    if showOB
+        i = f_ob(-1, smcLb)
+        if i >= 0
+            b = box.new(bar_index - i, high[i], bar_index + 6, low[i],
+                 border_color = color.new(cSell, 60), border_width = 1,
+                 bgcolor = color.new(cSell, 88))
+            array.push(obBear, b)
+            f_trimBoxes(obBear, maxOB)
+    smcL := na
+
+// keep order blocks alive until price trades back through them, then delete
+if array.size(obBull) > 0
+    for i = array.size(obBull) - 1 to 0
+        b = array.get(obBull, i)
+        box.set_right(b, bar_index + 6)
+        if low < box.get_bottom(b)
+            box.delete(b)
+            array.remove(obBull, i)
+if array.size(obBear) > 0
+    for i = array.size(obBear) - 1 to 0
+        b = array.get(obBear, i)
+        box.set_right(b, bar_index + 6)
+        if high > box.get_top(b)
+            box.delete(b)
+            array.remove(obBear, i)
+
+// ---- fair value gaps ------------------------------------------------------
+// A three-bar gap: bar 3's extreme never met bar 1's. No higher-timeframe
+// request, so there is no lookahead question to get wrong.
+var array<box> fvgB = array.new<box>()
+var array<box> fvgS = array.new<box>()
+
+gapUp = showFVG and low > high[2] and barstate.isconfirmed
+gapDn = showFVG and high < low[2] and barstate.isconfirmed
+if gapUp
+    b = box.new(bar_index - 2, low, bar_index + 6, high[2],
+         border_color = color.new(cBuy, 80), border_width = 1,
+         bgcolor = color.new(cBuy, 90))
+    array.push(fvgB, b)
+    f_trimBoxes(fvgB, maxFVG)
+if gapDn
+    b = box.new(bar_index - 2, low[2], bar_index + 6, high,
+         border_color = color.new(cSell, 80), border_width = 1,
+         bgcolor = color.new(cSell, 90))
+    array.push(fvgS, b)
+    f_trimBoxes(fvgS, maxFVG)
+
+if array.size(fvgB) > 0
+    for i = array.size(fvgB) - 1 to 0
+        b = array.get(fvgB, i)
+        box.set_right(b, bar_index + 6)
+        if low <= box.get_bottom(b)
+            box.delete(b)
+            array.remove(fvgB, i)
+if array.size(fvgS) > 0
+    for i = array.size(fvgS) - 1 to 0
+        b = array.get(fvgS, i)
+        box.set_right(b, bar_index + 6)
+        if high >= box.get_top(b)
+            box.delete(b)
+            array.remove(fvgS, i)
+
+// ---- BSL / SSL POOLS — COMPUTED, NEVER DRAWN ------------------------------
+// Veer: "bsl ssl needs to be internal for analysis". So they are counted and
+// reported in the panel, and they get no vote: E-135 quartiled pool size
+// against outcome and the ladder was not monotone. A number that does not
+// separate winners from losers is context, not a filter.
+var array<float> poolH = array.new<float>()
+var array<float> poolL = array.new<float>()
+if not na(sph)
+    array.push(poolH, sph)
+    if array.size(poolH) > 60
+        array.shift(poolH)
+if not na(spl)
+    array.push(poolL, spl)
+    if array.size(poolL) > 60
+        array.shift(poolL)
+
+// A liquidity POOL is three or more extremes clustered inside a margin - one
+// high is a level, three stacked highs are where the stops actually are. The
+// standard implementations use an ATR-derived margin and require more than two;
+// this matches that so the number means what Veer expects it to mean.
+f_pool(arr, lvl, tol) =>
+    c = 0
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            if math.abs(array.get(arr, i) - lvl) <= tol
+                c += 1
+    c
+
+f_isPool(n) =>
+    n > 2
+
+atr = ta.atr(14)
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low,  pvLen, pvLen)
+
+// ---------------------------------------------------------- setup state ----
+// One live setup per side. A swing HIGH is sell-side liquidity: the sweep runs
+// UP through it and the trade is SHORT back through the level.
+// Pine has no comma-separated declarations - one name per line.
+var float lvlS  = na                    // the level price (sell side)
+var float lvlB  = na
+var float atrS  = na                    // the ATR at its confirmation
+var float atrB  = na
+var int   bornS = na
+var int   bornB = na
+var int   swS   = na                    // the bar the sweep happened
+var int   swB   = na
+var float extS  = na                    // the sweep's running extreme
+var float extB  = na
+var float dispS = na                    // the sweep bar's body / range
+var float dispB = na
+
+var int   posDir   = 0
+var float posEntry = na
+var float posStop  = na
+var float posInit  = na
+var float posPeak  = na
+var int   posBar   = na
+
+var int   nTrades = 0
+var int   nWins   = 0
+var float sumPts  = 0.0
+var float bestPts = 0.0
+var float worstPts= 0.0
+var float peakEq  = 0.0
+var float maxDD   = 0.0
+var int   nLong   = 0
+var int   nShort  = 0
+var float ptsLong = 0.0
+var float ptsShort= 0.0
+var int   nRefused= 0                   // setups the risk cap turned down
+var int   firstT  = 0
+
+// a new confirmed pivot replaces any unfilled setup on that side
+if not na(ph)
+    lvlS := ph
+    atrS := atr
+    bornS := bar_index
+    swS := na
+    extS := na
+if not na(pl)
+    lvlB := pl
+    atrB := atr
+    bornB := bar_index
+    swB := na
+    extB := na
+
+// ---- the sweep --------------------------------------------------------------
+if not na(lvlS) and na(swS) and high >= lvlS + sweepAtr * atrS and barstate.isconfirmed
+    swS := bar_index
+    extS := high
+    r = high - low
+    dispS := r > 0 ? math.abs(close - open) / r : 1.0
+if not na(lvlB) and na(swB) and low <= lvlB - sweepAtr * atrB and barstate.isconfirmed
+    swB := bar_index
+    extB := low
+    r = high - low
+    dispB := r > 0 ? math.abs(close - open) / r : 1.0
+
+// after a sweep the run can keep extending, and the stop goes with it
+if not na(swS) and bar_index > swS and posDir == 0
+    extS := math.max(extS, high)
+if not na(swB) and bar_index > swB and posDir == 0
+    extB := math.min(extB, low)
+
+// a setup that never came back is not a signal
+if not na(bornS) and bar_index - bornS > lifeBars
+    lvlS := na
+    swS := na
+if not na(bornB) and bar_index - bornB > lifeBars
+    lvlB := na
+    swB := na
+
+// ---- the return, the filters, and the fill ---------------------------------
+// displacement on the return leg, exactly as measured: bar j against bar j-2
+dispOkB = not useDisp or (low - high[2]) / atr >= -1.4909
+dispOkS = not useDisp or (low[2] - high) / atr >= -1.4909
+
+readyS = posDir == 0 and not na(swS) and bar_index > swS and low <= lvlS
+     and dispS <= wickCut and dispOkS and barstate.isconfirmed
+readyB = posDir == 0 and not na(swB) and bar_index > swB and high >= lvlB
+     and dispB <= wickCut and dispOkB and barstate.isconfirmed
+
+// THE RISK CAP. A stop wider than maxRisk ATR is refused outright - 0.01 lots
+// is the floor (E-081), so a stop too wide to afford cannot be sized down.
+riskS = readyS ? math.abs(lvlS - (extS + stopBuf * atrS)) : na
+riskB = readyB ? math.abs(lvlB - (extB - stopBuf * atrB)) : na
+tooWideS = readyS and riskS > maxRisk * atrS
+tooWideB = readyB and riskB > maxRisk * atrB
+
+fillS = readyS and not tooWideS
+fillB = readyB and not tooWideB
+
+if tooWideS or tooWideB
+    nRefused += 1
+    if tooWideS
+        lvlS := na
+        swS := na
+    if tooWideB
+        lvlB := na
+        swB := na
+
+// ============================ THE LIVE POSITION BOX ========================
+var box   pBox   = na
+var line  pEntry = na
+var line  pStop  = na
+var label lStop  = na
+var label lLive  = na
+
+// Pine takes a function's last expression as its return value, and a body of
+// if-statements returns na. An explicit bool keeps the type unambiguous.
+f_killLive() =>
+    if not na(pBox)
+        box.delete(pBox)
+    if not na(pEntry)
+        line.delete(pEntry)
+    if not na(pStop)
+        line.delete(pStop)
+    if not na(lStop)
+        label.delete(lStop)
+    if not na(lLive)
+        label.delete(lLive)
+    true
+
+if fillS or fillB
+    posDir   := fillS ? -1 : 1
+    posEntry := fillS ? lvlS : lvlB
+    posStop  := fillS ? extS + stopBuf * atrS : extB - stopBuf * atrB
+    posInit  := posStop
+    posPeak  := posEntry
+    posBar   := bar_index
+    if fillS
+        lvlS := na
+        swS := na
+    else
+        lvlB := na
+        swB := na
+    if showLive
+        f_killLive()
+        col = posDir > 0 ? cBuy : cSell
+        pBox   := box.new(posBar, posEntry, bar_index, close,
+             border_color = color.new(col, 55), border_width = 1,
+             bgcolor = color.new(col, 92))
+        pEntry := line.new(posBar, posEntry, bar_index, posEntry,
+             color = color.new(#B0BEC5, 15), width = 1)
+        pStop  := line.new(posBar, posStop, bar_index, posStop,
+             color = color.new(cSell, 10), width = 1, style = line.style_dashed)
+        lStop  := label.new(bar_index, posStop, "", style = label.style_label_left,
+             color = color.new(chart.bg_color, 100), textcolor = color.new(cSell, 0),
+             size = size.tiny)
+        lLive  := label.new(bar_index, close, "", style = label.style_label_left,
+             color = color.new(chart.bg_color, 100), textcolor = color.new(col, 0),
+             size = size.small)
+
+// ---- the exit ---------------------------------------------------------------
+// E-110: the bar that filled us may not book a FAVOURABLE exit. The stop IS
+// allowed on the entry bar, because a sweep running straight on through us is a
+// real loss and pretending otherwise flatters the result.
+var float exitPx = na
+closedNow = false
+
+if posDir != 0 and barstate.isconfirmed
+    hitStop = posDir > 0 ? low <= posStop : high >= posStop
+    aged    = bar_index - posBar >= maxHold
+    if hitStop or aged
+        exitPx    := hitStop ? posStop : close
+        pts       = posDir * (exitPx - posEntry)
+        if nTrades == 0
+            firstT := time
+        nTrades  += 1
+        nWins    += pts > 0 ? 1 : 0
+        sumPts   += pts
+        bestPts  := math.max(bestPts,  pts)
+        worstPts := math.min(worstPts, pts)
+        peakEq   := math.max(peakEq, sumPts)
+        maxDD    := math.max(maxDD, peakEq - sumPts)
+        if posDir > 0
+            nLong   += 1
+            ptsLong += pts
+        else
+            nShort   += 1
+            ptsShort += pts
+        if showHist
+            won = pts > 0
+            box.new(posBar, math.max(posEntry, exitPx), bar_index, math.min(posEntry, exitPx),
+                 border_color = color.new(won ? cBuy : cSell, 45), border_width = 1,
+                 bgcolor = color.new(won ? cBuy : cSell, 90))
+            label.new(bar_index, posDir > 0 ? math.max(posEntry, exitPx) : math.min(posEntry, exitPx),
+                 f_num(pts, "0.0") + "pt  " + f_ccy(pts),
+                 style = posDir > 0 ? label.style_label_lower_left : label.style_label_upper_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(won ? cBuy : cSell, 0), size = size.tiny)
+        f_killLive()
+        posDir := 0
+        posEntry := na
+        posStop := na
+        posBar := na
+        closedNow := true
+    else if bar_index > posBar
+        // the give-back ratchet, armed only from the bar AFTER the peak was set
+        posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
+        runUp = posDir * (posPeak - posEntry)
+        if runUp > 0
+            cand = posEntry + posDir * runUp * (1.0 - giveBack)
+            posStop := posDir > 0 ? math.max(posStop, cand) : math.min(posStop, cand)
+
+// ---- move the live objects, once per bar, never recreated ------------------
+if posDir != 0 and showLive and not na(pBox)
+    live = posDir * (close - posEntry)
+    col  = live >= 0 ? cBuy : cSell
+    box.set_right(pBox, bar_index)
+    box.set_top(pBox, math.max(posEntry, close))
+    box.set_bottom(pBox, math.min(posEntry, close))
+    box.set_bgcolor(pBox, color.new(col, 92))
+    box.set_border_color(pBox, color.new(col, 55))
+    line.set_x2(pEntry, bar_index)
+    line.set_x2(pStop, bar_index)
+    line.set_y1(pStop, posStop)
+    line.set_y2(pStop, posStop)
+    locked = posDir * (posStop - posEntry)
+    label.set_xy(lStop, bar_index, posStop)
+    label.set_text(lStop, (locked >= 0 ? "LOCKED  " : "SL  ") + f_num(locked, "0.0")
+         + "pt  " + f_ccy(locked))
+    label.set_textcolor(lStop, color.new(locked >= 0 ? cBuy : cSell, 0))
+    label.set_xy(lLive, bar_index, close)
+    label.set_text(lLive, f_num(live, "0.0") + "pt   " + f_ccy(live))
+    label.set_textcolor(lLive, color.new(col, 0))
+
+// ---- THE CLASSIC LIQUIDITY SWEEP, as a VISUAL ------------------------------
+// The standard definition, the one on the chart Veer already runs: the wick
+// goes THROUGH a level and the bar CLOSES back inside it. A sweep area is drawn
+// from the level to the wick's extreme.
+//
+// It is a MARKER HERE AND NOT A TRIGGER, and the number is the reason. E-130
+// tested "wait for the close back inside" as an ENTRY on this exact data and it
+// took the system from +97.1 points to +3.7 - it removed 97 of the 97.1 - and
+// it did not separate winners from losers either (MFE/MAE 0.92 -> 0.90). It is
+// a genuinely useful thing to SEE and a losing thing to TRADE. Both are true.
+var array<box> swBox = array.new<box>()
+
+classicUp = showSweep and not na(pl[1]) and low < pl[1] and close > pl[1] and barstate.isconfirmed
+classicDn = showSweep and not na(ph[1]) and high > ph[1] and close < ph[1] and barstate.isconfirmed
+if classicUp
+    b = box.new(bar_index - 1, pl[1], bar_index + 1, low,
+         border_color = color.new(cBuy, 70), border_width = 1,
+         bgcolor = color.new(cBuy, 86))
+    array.push(swBox, b)
+    f_trimBoxes(swBox, 8)
+if classicDn
+    b = box.new(bar_index - 1, high, bar_index + 1, ph[1],
+         border_color = color.new(cSell, 70), border_width = 1,
+         bgcolor = color.new(cSell, 86))
+    array.push(swBox, b)
+    f_trimBoxes(swBox, 8)
+
+// ---------------------------------------------------------------- drawing --
+plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side liquidity",
+     color = color.new(cSell, 40), style = plot.style_linebr, linewidth = 1)
+plot(showLvl and posDir == 0 and not na(lvlB) ? lvlB : na, "Buy-side liquidity",
+     color = color.new(cBuy, 40), style = plot.style_linebr, linewidth = 1)
+
+plotshape(showSweep and not na(swS) and swS == bar_index, "sweep up",
+     shape.triangledown, location.abovebar, color = color.new(cSell, 25), size = size.tiny)
+plotshape(showSweep and not na(swB) and swB == bar_index, "sweep down",
+     shape.triangleup, location.belowbar, color = color.new(cBuy, 25), size = size.tiny)
+
+plotshape(fillB, "BUY",  shape.labelup,   location.belowbar, color = cBuy,
+     text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(fillS, "SELL", shape.labeldown, location.abovebar, color = cSell,
+     text = "SELL", textcolor = color.white, size = size.tiny)
+// a setup the RISK CAP refused. Hollow, so it never competes with a real
+// signal - but visible, because that is how you know the cap is working
+// rather than silently eating the strategy.
+plotshape(tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
+     color = color.new(cBuy, 60),  size = size.tiny)
+plotshape(tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
+     color = color.new(cSell, 60), size = size.tiny)
+
+// ============================== THE PROFIT BOX =============================
+var table tp = na
+
+f_row(r, a, b, c, col) =>
+    table.cell(tp, 0, r, a, text_color = color.new(#8FA3B8, 0), text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, b, text_color = col, text_size = size.small,
+         text_halign = text.align_right)
+    table.cell(tp, 2, r, c, text_color = color.new(#8FA3B8, 25), text_size = size.tiny,
+         text_halign = text.align_right)
+
+f_sep(r, cap) =>
+    table.cell(tp, 0, r, cap, text_color = color.new(#5C7089, 0), text_size = size.tiny,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, "", text_color = color.new(#5C7089, 0))
+    table.cell(tp, 2, r, "", text_color = color.new(#5C7089, 0))
+
+if barstate.islast and showPanel
+    if not na(tp)
+        table.delete(tp)
+    pos = panelPos == "Top right" ? position.top_right :
+          panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
+    tp := table.new(pos, 3, 16, border_width = 1,
+         bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
+         frame_color = color.new(#2A3A4D, 20), frame_width = 1)
+
+    cVal  = color.new(#E6EDF5, 0)
+    cPos  = color.new(cBuy, 0)
+    cNeg  = color.new(cSell, 0)
+    winPc = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    avg   = nTrades > 0 ? sumPts / nTrades : 0.0
+    days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
+
+    table.cell(tp, 0, 0, "SWEEP SNIPER 2.0", text_color = cVal, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, 0, "", text_color = cVal)
+    table.cell(tp, 2, 0, posDir == 0 ? "flat" : posDir > 0 ? "LONG" : "SHORT",
+         text_color = posDir == 0 ? color.new(#8FA3B8, 0) : posDir > 0 ? cPos : cNeg,
+         text_size = size.tiny, text_halign = text.align_right)
+
+    // POINTS FIRST. E-074: the best per-trade gate set in this project banked
+    // the LEAST money, so R and expectancy are not the unit that matters.
+    f_row(1, "points",    f_num(sumPts, "0.0"), f_ccy(sumPts), sumPts >= 0 ? cPos : cNeg)
+    f_row(2, "trades",    str.tostring(nTrades),
+             str.tostring(nTrades / days, "0.0") + "/day", cVal)
+    f_row(3, "win rate",  str.tostring(winPc, "0.0") + "%",
+             str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
+    f_row(4, "avg trade", f_num(avg, "0.000"),
+             f_ccy(avg) + " each", avg >= 0 ? cPos : cNeg)
+
+    f_sep(5, "── risk ──")
+    f_row(6, "max drawdown", f_num(-maxDD, "0.0"), f_ccy(-maxDD), cNeg)
+    f_row(7, "worst trade",  f_num(worstPts, "0.0"), f_ccy(worstPts), cNeg)
+    f_row(8, "best trade",   f_num(bestPts, "0.0"),  f_ccy(bestPts), cPos)
+    f_row(9, "risk cap refused", str.tostring(nRefused), "setups too wide", cVal)
+
+    // ---- CONTEXT. Read, not obeyed. -----------------------------------
+    f_sep(10, "── context, not filters ──")
+    f_row(11, "structure",
+              smcTrend > 0 ? "bullish" : smcTrend < 0 ? "bearish" : "-",
+              "last BOS / CHoCH",
+              smcTrend > 0 ? cPos : smcTrend < 0 ? cNeg : cVal)
+    nBSL = f_pool(poolH, not na(lvlS) ? lvlS : high, eqTol * atr)
+    nSSL = f_pool(poolL, not na(lvlB) ? lvlB : low,  eqTol * atr)
+    f_row(12, "BSL pool", str.tostring(nBSL),
+              f_isPool(nBSL) ? "POOL (3+ highs)" : "equal highs",
+              f_isPool(nBSL) ? cVal : color.new(#8FA3B8, 0))
+    f_row(13, "SSL pool", str.tostring(nSSL),
+              f_isPool(nSSL) ? "POOL (3+ lows)" : "equal lows",
+              f_isPool(nSSL) ? cVal : color.new(#8FA3B8, 0))
+    f_row(14, "session",
+              inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
+              "context only", cVal)
+    f_row(15, "open", posDir == 0 ? "-" : f_num(posDir * (close - posEntry), "0.0"),
+              posDir == 0 ? str.tostring(lots, "0.00") + " lots"
+                          : f_ccy(posDir * (close - posEntry)),
+              posDir == 0 ? cVal : (posDir * (close - posEntry) >= 0 ? cPos : cNeg))
+
+plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
+plot(posDir != 0 ? posEntry : na, "Entry",  display = display.status_line)
+plot(posDir != 0 ? posDir * (close - posEntry) : na, "Open points",
+     display = display.status_line)
+plot(atr, "ATR(14)",   display = display.status_line)
+plot(smcTrend, "SMC trend (1 bull)", display = display.status_line)
+
+alertcondition(fillB,     "SS BUY",   "Sweep Sniper BUY")
+alertcondition(fillS,     "SS SELL",  "Sweep Sniper SELL")
+alertcondition(closedNow, "SS CLOSE", "Sweep Sniper trade closed")
+alertcondition(brokeUp,   "SS BOS UP",   "Structure broken up")
+alertcondition(brokeDn,   "SS BOS DOWN", "Structure broken down")

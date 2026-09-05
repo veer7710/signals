@@ -1,4 +1,8 @@
 //@version=6
+// IF THE LINE ABOVE SHOWS ONLY ONE SLASH, YOUR PASTE DROPPED A CHARACTER.
+// It must read exactly:  //@version=6
+// "Script could not be translated from: null" and "the Pine version of this
+// script is unspecified" both mean that one slash is missing.
 // ===========================================================================
 //  SUPERTREND CLEAN 4.1  —  the chart for SuperTrendSniper.mq5
 //
