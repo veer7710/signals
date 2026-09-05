@@ -5806,3 +5806,92 @@ Wick filter only, limit at the level, stop 0.30 ATR beyond the sweep extreme,
 **risk cap 1.2 ATR**, give-back 25%, 240-bar ceiling.
 `SweepSniper.mq5` (magic 990077) and `SWEEP_SNIPER_1_0.pine`, both with the
 displacement filter **off by default so the chart and the EA cannot disagree.**
+
+---
+
+## E-140 — THE UNITS, AND THE PER-TRADE SIZE PROBLEM
+`JARVIS/research/sweep_tf.py`
+
+> *"0.1840 is that points if so that's a joke, i hit 30 to 80 points trading
+> liquidity sweeps... supertrend signals normally hit 3-4 points on average low
+> end thats alot dude thats 2-4 pound"*
+
+### THE UNITS, stated plainly because they never were
+A **point** in this repo is **1.00 of XAUUSD price — one dollar.** E-081's
+£0.787 per point is 0.01 lots = 1 ounce, so a $1 move is $1 is about 79p. **That
+is the same unit Veer uses** — his "3-4 points is 2-4 pound" only works if a
+point is a dollar, and it is. There was never a unit mismatch; the number really
+was that small and he was right to call it out.
+
+```
+our system per trade   +0.1200 points (2018)  ->  x7.38  =  0.89 points = 70p
+his SuperTrend          3-4 points  =  £2.40-3.10
+his sweeps             30-80 points
+```
+
+**Our per-trade is roughly four times smaller than his SuperTrend average.** The
+system earns from 23.6 trades a day, not from the size of any one — which is
+exactly the shape most exposed to cost, and why 0.05 points of slippage already
+took 42% of it.
+
+### THE FIX IS A SLOWER CLOCK, AND IT IS ARITHMETIC
+E-132 measured cost in the only unit that compares across clocks: the same 0.40
+spread is **0.220 of ATR on M1, 0.088 on M5, 0.047 on M15**. M1 is the most
+expensive place on the chart to take a small move. Same rules, same wick filter,
+same stop, same give-back, same risk cap — only the clock changes:
+
+| TF | n | /day | win% | per trade (today) | £/day @0.01 | £ total |
+|---|---|---|---|---|---|---|
+| M1 | 2579 | 23.6 | 65.1% | **0.89 pts** | 16.48 | 1797.35 |
+| M5 | 569 | 5.2 | 68.9% | **2.11 pts** | 8.67 | 946.20 |
+| M15 | 204 | 1.9 | 64.7% | **2.98 pts** | 4.38 | 478.07 |
+
+**M5 lands at $2.11 a trade — inside the range Veer expects a trade to be worth.**
+
+### AND THE ROBUSTNESS INVERTS THE RANKING
+| TF | slip 0.02 | 0.05 | 0.10 | **0.20** |
+|---|---|---|---|---|
+| M1 | 257.9 | 180.5 | 51.6 | **−206.3** |
+| M5 | 151.5 | 134.5 | 106.0 | **+49.1** |
+| M15 | 78.2 | 72.1 | 61.9 | **+41.5** |
+
+**M1 banks the most and is the only one that dies.** M5 makes half as much and
+survives four times the slippage. Out of sample all three hold, and M5's OOS
+*exceeds* its in-sample (+0.3176 vs +0.2574).
+
+The parameters were tuned on M1 and were **not** retuned for M5 or M15 — they
+transfer as-is, which is evidence against them being fitted to M1.
+
+### SHIPPED CHANGE
+`SweepSniper.mq5` was hardcoded to `PERIOD_M1` (17 places). It now runs on
+whatever chart it is attached to, up to `InpMaxTF`. **Run M1 on demo to measure
+real stop fills; run M5 live until that measurement says M1 is safe.**
+
+---
+
+## E-141 — A CRITICAL ORDER-TYPE BUG, FOUND BY BEING ASKED ABOUT UNITS
+
+Veer's question about the size of the per-trade number sent me back through the
+execution path, and underneath it was this:
+
+`SweepSniper` placed **`BuyLimit` / `SellLimit`** at the level.
+
+**After a sweep, price is on the FAR SIDE of the level** — below it on a swept
+low, above it on a swept high. A **buy limit sitting at a level price is already
+under fills IMMEDIATELY**, at the bottom of the sweep. That is the exact opposite
+of the trade: instead of buying the return to the level, it buys the extreme of
+the run away from it.
+
+The entry the backtest measures — *"the first bar at or after the sweep whose
+range reaches back to the level"* — is a **STOP order**, not a limit.
+
+Fixed to `BuyStop` / `SellStop`, plus a guard that refuses the setup when price
+is already back at or through the level (a stop trigger must sit the broker's
+minimum distance away, and taking it at market there would be a different entry
+from the one measured).
+
+**The EA would have run, logged "armed BUY limit at ...", and filled every trade
+at the worst possible moment while reporting that it was doing the right thing.**
+The backtest was correct throughout; only the execution was wrong. `ZoneSniper`
+is unaffected — its limit rests 0.50 ATR *past* the level with price on the near
+side, so a limit is right there.

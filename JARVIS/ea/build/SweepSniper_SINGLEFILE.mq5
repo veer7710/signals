@@ -37,9 +37,12 @@
 //|                 cannot. This is the P92 lesson - a 52% signal gap  |
 //|                 between a Pine and an EA sat unnoticed for 180     |
 //|                 commits because nobody checked.                     |
-//|   5 ENTRY       a limit resting AT the level. NOT the sweep's     |
-//|                 close - E-130 measured that and it cost 97 of     |
-//|                 97.1 points on System A.                           |
+//|   5 ENTRY       a STOP order resting AT the level - price coming  |
+//|                 BACK to it. Not a limit: after the sweep price is |
+//|                 on the far side, so a limit would fill instantly  |
+//|                 at the bottom of the sweep. And not the sweep's   |
+//|                 close either - E-130 measured that and it cost 97 |
+//|                 of 97.1 points on System A.                        |
 //|   6 STOP        beyond the SWEEP EXTREME + 0.30 ATR. Where the    |
 //|                 setup is genuinely wrong, not a fixed distance.    |
 //|   7 RISK CAP    REFUSE the setup if that stop is wider than 2.0   |
@@ -81,6 +84,19 @@
 //|  at the edge of the tested range is the classic shape of a fitted  |
 //|  result, and 25% is the value the full harness was run on. Move    |
 //|  it if a demo run supports it, not because the backtest liked it.  |
+//|                                                                    |
+//|  WHICH CLOCK TO RUN IT ON (E-140). It is no longer hardcoded to   |
+//|  M1 - it runs on whatever chart it is attached to, up to InpMaxTF. |
+//|      TF    trades/day   per trade today   GBP/day   slip 0.20     |
+//|      M1        23.6        0.89 pts        16.48      -206.3      |
+//|      M5         5.2        2.11 pts         8.67       +49.1      |
+//|      M15        1.9        2.98 pts         4.38       +41.5      |
+//|  M1 banks the most in the backtest AND IS THE ONLY ONE THAT DIES  |
+//|  UNDER SLIPPAGE. M5 makes half as much and survives four times    |
+//|  the slippage, because a 0.40 spread is 0.220 of ATR on M1 and    |
+//|  0.088 on M5 (E-132) - the same cost against a bigger move.       |
+//|  Run M1 on DEMO to measure your real stop fills. Run M5 live      |
+//|  until that measurement says M1 is safe.                           |
 //|                                                                    |
 //|  NOT PROVEN. One instrument, 2018 H1, NEVER FORWARD TESTED, and   |
 //|  the money figure depends on scaling 2018 volatility to today.    |
@@ -785,7 +801,7 @@ input group "=== RISK — read E-138 before changing anything here ==="
 input double InpStopBufAtr   = 0.30;    // stop this far beyond the sweep extreme
 input double InpMaxRiskAtr   = 1.2;     // REFUSE the setup if the stop is wider
 input double InpGiveBack     = 0.25;    // give back this much of the best excursion
-input int    InpMaxBars      = 240;     // time exit, M1 bars
+input int    InpMaxBars      = 240;     // time exit, in chart bars
 input bool   InpUseFixedLots = true;
 input double InpFixedLots    = 0.01;    // E-081: 0.01 is GBP0.787/point and is the floor
 input double InpRiskPct      = 0.50;    // used only when InpUseFixedLots = false
@@ -847,7 +863,7 @@ double ATR()
    return b[0];
 }
 
-int BarNo() { return Bars(_Symbol, PERIOD_M1); }
+int BarNo() { return Bars(_Symbol, _Period); }
 
 //==================== PIVOTS =======================================
 // A pivot is only KNOWN InpPivotBars bars after it forms. This checks the bar
@@ -857,18 +873,18 @@ int BarNo() { return Bars(_Symbol, PERIOD_M1); }
 bool ConfirmedPivot(int k, bool wantHigh, double &px)
 {
    int c = k + 1;                      // the candidate, k bars back from bar 1
-   double v = wantHigh ? iHigh(_Symbol, PERIOD_M1, c) : iLow(_Symbol, PERIOD_M1, c);
+   double v = wantHigh ? iHigh(_Symbol, _Period, c) : iLow(_Symbol, _Period, c);
    for(int i = 1; i <= k; i++)
    {
       if(wantHigh)
       {
-         if(iHigh(_Symbol, PERIOD_M1, c - i) > v) return false;
-         if(iHigh(_Symbol, PERIOD_M1, c + i) > v) return false;
+         if(iHigh(_Symbol, _Period, c - i) > v) return false;
+         if(iHigh(_Symbol, _Period, c + i) > v) return false;
       }
       else
       {
-         if(iLow(_Symbol, PERIOD_M1, c - i) < v) return false;
-         if(iLow(_Symbol, PERIOD_M1, c + i) < v) return false;
+         if(iLow(_Symbol, _Period, c - i) < v) return false;
+         if(iLow(_Symbol, _Period, c + i) < v) return false;
       }
    }
    px = v;
@@ -961,10 +977,10 @@ void UpdateSetups()
       }
    }
 
-   double h1 = iHigh(_Symbol, PERIOD_M1, 1);
-   double l1 = iLow(_Symbol, PERIOD_M1, 1);
-   double o1 = iOpen(_Symbol, PERIOD_M1, 1);
-   double c1 = iClose(_Symbol, PERIOD_M1, 1);
+   double h1 = iHigh(_Symbol, _Period, 1);
+   double l1 = iLow(_Symbol, _Period, 1);
+   double o1 = iOpen(_Symbol, _Period, 1);
+   double c1 = iClose(_Symbol, _Period, 1);
    double r1 = h1 - l1;
 
    // ---- the sweep ---------------------------------------------------------
@@ -998,8 +1014,8 @@ bool DispOk(int dir, double a)
 {
    if(!InpUseDisp) return true;
    double gap = (dir > 0)
-      ? iLow(_Symbol, PERIOD_M1, 1) - iHigh(_Symbol, PERIOD_M1, 3)
-      : iLow(_Symbol, PERIOD_M1, 3) - iHigh(_Symbol, PERIOD_M1, 1);
+      ? iLow(_Symbol, _Period, 1) - iHigh(_Symbol, _Period, 3)
+      : iLow(_Symbol, _Period, 3) - iHigh(_Symbol, _Period, 1);
    return (gap / a) >= InpDispCut;
 }
 
@@ -1047,15 +1063,39 @@ void TryArm()
 
       double md = MinStopDist();
       if(md > 0.0 && risk < md) continue;
+      // a STOP order's trigger must also sit at least that far from the market,
+      // or the broker rejects it. If price is already back at the level the
+      // trade is gone - taking it at market here would be a different entry
+      // from the one that was measured.
+      double now = sellSide ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                            : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double away = sellSide ? (now - lvl) : (lvl - now);
+      if(away <= 0.0 || (md > 0.0 && away < md))
+      {
+         if(sellSide) ResetSetup(g_sell); else ResetSetup(g_buy);
+         continue;
+      }
 
       double lots = LotFor(risk);
       if(lots <= 0.0) continue;
 
       // NO TAKE PROFIT. E-137 measured every fixed target and all of them
       // banked less than the give-back trail.
+      // ---- STOP ORDERS, NOT LIMITS, AND THIS IS NOT A PREFERENCE --------
+      // After the sweep, price is on the FAR SIDE of the level: below it on a
+      // swept low, above it on a swept high. A BUY LIMIT sitting at a level
+      // that price is already UNDER fills IMMEDIATELY, at the bottom of the
+      // sweep - the exact opposite of the trade. The entry the backtest
+      // measures is "price comes BACK to the level", which is a STOP order.
+      //
+      // The first build of this file used BuyLimit/SellLimit and would have
+      // filled every trade at the worst possible moment while the log said it
+      // was doing the right thing. Veer's question about the size of the
+      // per-trade number is what sent me back to check the units, and this
+      // was underneath it.
       bool ok = sellSide
-         ? trade.SellLimit(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep")
-         : trade.BuyLimit(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep");
+         ? trade.SellStop(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep")
+         : trade.BuyStop(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep");
       if(ok)
       {
          g_pend = trade.ResultOrder();
@@ -1163,7 +1203,7 @@ int OnInit()
             "stop-fill slippage.");
       return INIT_FAILED;
    }
-   g_atr = iATR(_Symbol, PERIOD_M1, 14);
+   g_atr = iATR(_Symbol, _Period, 14);
    if(g_atr == INVALID_HANDLE) { Print("[SS] ATR handle failed"); return INIT_FAILED; }
 
    trade.SetExpertMagicNumber(InpMagic);
@@ -1226,7 +1266,7 @@ void OnTick()
 
    CheckGuards();
 
-   datetime b = iTime(_Symbol, PERIOD_M1, 0);
+   datetime b = iTime(_Symbol, _Period, 0);
    if(b != g_lastBar)
    {
       g_lastBar = b;
