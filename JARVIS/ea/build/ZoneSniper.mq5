@@ -30,22 +30,58 @@
 //|  NOT FORWARD TESTED. 2018 H1 only. DEMO FIRST.                   |
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade/Trade.mqh>
 CTrade trade;
 
-#define ZS_BUILD "1.00"
+#define ZS_BUILD "2.00"
 
 input group "=== SAFETY ==="
 input bool   InpDemoOnly     = true;    // refuse to start on a live account
 input long   InpMagic        = 880041;  // magic number
 
-input group "=== THE ZONE (M15) ==="
-input int    InpPivotBars    = 3;       // swing needs this many bars EITHER side
-input int    InpZoneLifeM15  = 200;     // a zone expires after this many M15 bars
+//==================== BUILD 2.00 — VEER'S ARCHITECTURE ==============
+// He said, and he was right: "supertrend is meant for m1, the point is we catch
+// every single m1 trend... m5 or m15 is caught late by supertrend but top ticked
+// by smc and ict thru liquidity strats".
+//
+// Build 1.00 used M15 zones and ignored SuperTrend's DIRECTION entirely, using
+// it only as the trail. Testing his combination - M1 SuperTrend supplies the
+// direction, an M1 liquidity pivot supplies the timing - measured far better,
+// and the trend filter helps ONLY at M1, which is exactly his claim:
+//
+//   zone TF        no filter    + ST direction    trades/day
+//   M15 pivot 3      39.2 pts        24.4 pts        3.2
+//   M5  pivot 5      58.6            55.4           6.1
+//   M1  pivot 5      48.4            97.1           9.0   <- SHIPPED
+//
+// The M1 filter DOUBLES the result (48.4 -> 97.1) while M15 and M5 are flat or
+// worse. E-127.
+//
+// VALIDATION (E-128), on 157,051 real M1 bars from 18.8M bid/ask ticks:
+//   train 46.7 pts -> TEST 50.3 pts        out of sample EXCEEDS in sample
+//   walk-forward   15.8 / 18.7 / 21.1 / 20.3 / 21.2   five of five positive
+//   long +56.3, short +40.8                both directions
+//   cost      0.11 -> 97.1 | 0.17 -> 82.6 | 0.25 -> 63.1 | 0.40 -> 26.7
+//             survives a standard retail spread
+//   parameters      a PLATEAU, not a peak: all nine neighbouring cells positive
+//   time-shifted control  -1099.3 pts -> EDGE +1196.5 = 79.2 control se
+//
+// THE KNOWN FAILURE MODE (E-129), stated because it is the thing that will
+// break this: the exit is a STOP, so it fills at or below its level.
+//   slippage 0.00 -> 97.1 pts | 0.02 -> 77.5 | 0.05 -> 48.1 | 0.10 -> -1.0
+// BREAKEVEN AT 0.10 POINTS OF EXIT SLIPPAGE. Normal M1 gold stop fills slip
+// 0.01-0.05, so it survives with roughly half the edge. It does not survive a
+// broker that slips a full tenth of a point, and that is measurable on demo
+// before any money is at risk.
+input group "=== THE ZONE ==="
+input ENUM_TIMEFRAMES InpZoneTF = PERIOD_M1;  // M1 measured best; M5/M15 also work
+input int    InpPivotBars    = 5;       // swing needs this many bars EITHER side
+input int    InpZoneLifeM15  = 200;     // a zone expires after this many zone-TF bars
 input int    InpMaxZones     = 60;      // zones tracked per side
+input bool   InpUseStDirection = true;  // E-127: only take sweeps the M1 SuperTrend agrees with
 
 input group "=== THE ENTRY (M1) ==="
 input double InpEntryPastAtr = 0.50;    // limit sits this far PAST the level, in M1 ATR
@@ -161,9 +197,9 @@ void BuildZones()
    int k = InpPivotBars;
    int need = k * 2 + 2;
    MqlRates r[];
-   int want = MathMin(InpZoneLifeM15 + need + 10, Bars(_Symbol, PERIOD_M15) - 1);
+   int want = MathMin(InpZoneLifeM15 + need + 10, Bars(_Symbol, InpZoneTF) - 1);
    if(want < need + 2) return;
-   if(CopyRates(_Symbol, PERIOD_M15, 1, want, r) != want) return;
+   if(CopyRates(_Symbol, InpZoneTF, 1, want, r) != want) return;
    ArraySetAsSeries(r, true);
 
    // shift k+1 is the newest bar that has k confirmed bars on its right
@@ -177,7 +213,7 @@ void BuildZones()
       if(r[t].low  <= r[c].low)  isLow  = false;
    }
    datetime born = r[c].time;
-   datetime dead = born + (datetime)(InpZoneLifeM15 * 15 * 60);
+   datetime dead = born + (datetime)(InpZoneLifeM15 * PeriodSeconds(InpZoneTF));
    if(isHigh) AddZone(r[c].high,  1, born, dead);
    if(isLow)  AddZone(r[c].low,  -1, born, dead);
 
@@ -334,6 +370,16 @@ void ArmSide(int dir)
    {
       Log(StringFormat("not arming: spread %.3f > %.3f", sp, InpMaxSpreadPts));
       return;
+   }
+
+   // E-127: SuperTrend supplies the DIRECTION, the zone supplies the TIMING.
+   // Only at M1 does this filter pay - it doubled the result there and was flat
+   // or negative on M5 and M15, which is why it is a switch and not a constant.
+   if(InpUseStDirection)
+   {
+      if(!g_stReady) return;
+      bool agrees = (g_stDir == -1 && dir > 0) || (g_stDir == 1 && dir < 0);
+      if(!agrees) return;
    }
 
    double px = (dir > 0) ? ask : bid;
@@ -495,8 +541,10 @@ int OnInit()
 
    PrintFormat("[ZS] === ZONE SNIPER %s ===  M15 zones -> M1 limit -> SuperTrend trail",
                ZS_BUILD);
-   Print("[ZS] Evidence: +623.8 points over a time-shifted control = 21.0 se; "
-         "out-of-sample 24.1 vs in-sample 15.5. 2018 H1 only. NOT forward tested.");
+   Print("[ZS] Evidence: +1196.5 points over a time-shifted control = 79.2 se; "
+         "OOS 50.3 vs IS 46.7; walk-forward 5 of 5. 2018 H1 only. NOT forward tested.");
+   Print("[ZS] KNOWN LIMIT: the exit is a stop, and the edge breaks even at 0.10 "
+         "points of exit slippage. Measure your broker's on demo first.");
    return INIT_SUCCEEDED;
 }
 
@@ -526,7 +574,7 @@ void OnTick()
       UpdateSuperTrend();
       AgeOrders();
       AgePositions();
-      datetime m15 = iTime(_Symbol, PERIOD_M15, 0);
+      datetime m15 = iTime(_Symbol, InpZoneTF, 0);
       if(m15 != g_lastM15) { g_lastM15 = m15; BuildZones(); }
       if(PosCount() == 0) { ArmSide(1); ArmSide(-1); }
    }

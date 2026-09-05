@@ -1,6 +1,6 @@
 //@version=6
 // ===========================================================================
-//  ZONE SNIPER 1.0  —  the chart for SYSTEM A
+//  ZONE SNIPER 2.0  —  the chart for SYSTEM A
 //
 //  Same rules as ZoneSniper.mq5, from the same spec
 //  (JARVIS/lab/FINAL_ARCHITECTURE.md). If this chart and the EA disagree, one
@@ -20,11 +20,14 @@
 //    EXIT    the trailed stop, or 240 bars. THERE IS NO TAKE PROFIT.
 //
 //  MEASURED (E-119..E-126, 157,051 real M1 bars from 18.8M bid/ask ticks):
-//    real zones                       +39.6 points
-//    the SAME zones, time-shifted    -584.2 points
-//    EDGE                            +623.8 points = 21.0 control se
-//    out-of-sample 24.1 vs in-sample 15.5 - OOS EXCEEDS IS
-//    356 trades over 109 days = 3.3/day
+//    real                             +97.1 points, 981 trades, 9.0/day
+//    the SAME zones, time-shifted   -1099.3 points
+//    EDGE                           +1196.5 points = 79.2 control se
+//    out-of-sample 50.3 vs in-sample 46.7 - OOS EXCEEDS IS
+//    walk-forward 15.8 / 18.7 / 21.1 / 20.3 / 21.2 - five of five positive
+//    long +56.3, short +40.8 - both directions
+//    survives a standard retail spread (63.1 pts at spread/ATR 0.25)
+//    KNOWN LIMIT: breakeven at 0.10 points of exit slippage (E-129)
 //
 //  WHAT IS NOT HERE, because it was tested on the same data and REMOVED:
 //    the SuperTrend FLIP as a signal   no edge at zero cost (+0.0021R, 1.2 se)
@@ -36,12 +39,20 @@
 //
 //  2018 H1 only. NEVER FORWARD TESTED.
 // ===========================================================================
-indicator("ZONE SNIPER 1.0", overlay = true, max_labels_count = 300,
+indicator("ZONE SNIPER 2.0", overlay = true, max_labels_count = 300,
      max_lines_count = 300, max_bars_back = 1000)
 
 gZ = "ZONE (M15)"
-pvLen   = input.int(3,   "Swing bars either side", group = gZ, minval = 1)
-zoneTf  = input.timeframe("15", "Zone timeframe", group = gZ)
+// 2.0: the zone is now M1 by default and the SuperTrend supplies the DIRECTION.
+// Veer's own architecture, and it measured far better than the M15 version:
+//   zone TF     no filter   + ST direction   trades/day
+//   M15 pivot 3   39.2 pts       24.4 pts       3.2
+//   M5  pivot 5   58.6           55.4          6.1
+//   M1  pivot 5   48.4           97.1          9.0   <- this
+// The direction filter DOUBLES the result at M1 and is flat or worse at M5/M15.
+pvLen   = input.int(5,   "Swing bars either side", group = gZ, minval = 1)
+zoneTf  = input.timeframe("1", "Zone timeframe", group = gZ)
+useStDir= input.bool(true, "Only take sweeps the SuperTrend agrees with", group = gZ)
 zoneLife= input.int(200, "Zone life (zone-TF bars)", group = gZ)
 
 gE = "ENTRY / RISK"
@@ -85,10 +96,14 @@ var int   posBar   = na
 // a new confirmed swing LOW gives a BUY zone; a swing HIGH gives a SELL zone
 newLow  = not na(zL) and (na(zL[1]) or zL != zL[1])
 newHigh = not na(zH) and (na(zH[1]) or zH != zH[1])
-if newLow and posDir == 0
+// stDir is -1 while bullish, +1 while bearish (Pine convention). A swing LOW is
+// a BUY zone, so it needs stDir == -1.
+dirOkBuy  = not useStDir or stDir == -1
+dirOkSell = not useStDir or stDir ==  1
+if newLow and posDir == 0 and dirOkBuy
     armBuy  := zL - pastAtr * atr
     armBuyB := bar_index
-if newHigh and posDir == 0
+if newHigh and posDir == 0 and dirOkSell
     armSell  := zH + pastAtr * atr
     armSellB := bar_index
 

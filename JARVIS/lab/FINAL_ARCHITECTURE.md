@@ -3,8 +3,23 @@
 forward-tested. 2018 H1 only.**
 
 ## THE EDGE, IN ONE LINE
-A limit resting inside a confirmed **M15 liquidity zone**, filled by the sweep,
-executed on **M1**, trailed by the **M1 SuperTrend band**.
+A limit resting inside a confirmed **M1 liquidity pivot**, taken only when the
+**M1 SuperTrend already points that way**, filled by the sweep, trailed by the
+**M1 SuperTrend band**.
+
+**This is Veer's architecture, not mine.** He said: *"supertrend is meant for m1,
+the point is we catch every single m1 trend... m5 or m15 is caught late by
+supertrend but top ticked by smc and ict thru liquidity strats"*. Every earlier
+test used SuperTrend's FLIP as the entry — the exact lateness he describes.
+Giving it the DIRECTION job and letting a liquidity pivot supply the TIMING
+measured better than anything else in this repository, and the filter helps
+**only at M1**, which is precisely his claim:
+
+| zone TF | no filter | + SuperTrend direction | trades/day |
+|---|---|---|---|
+| M15 pivot 3 | 39.2 pts | 24.4 | 3.2 |
+| M5 pivot 5 | 58.6 | 55.4 | 6.1 |
+| **M1 pivot 5** | 48.4 | **97.1** | **9.0** |
 
 ## WHY EACH COMPONENT IS THERE (§14 — every part must carry information)
 
@@ -28,21 +43,35 @@ executed on **M1**, trailed by the **M1 SuperTrend band**.
 | fixed 2R/3R target | E-122: −29.3 and −43.6 pts |
 | 25% giveback trail | E-126: TRAIN 11.1 → **TEST −0.1**. Dies out of sample. |
 
-## THE EVIDENCE
+## THE EVIDENCE (E-127, E-128, E-129)
 ```
-                                    TRAIN pts   TEST pts (OOS)
-25% giveback                             11.1            -0.1
-SuperTrend band trail                    15.5           +24.1   <- OOS > IS
-
-FAIR CONTROL (same zones, time-shifted, 14 shifts, ST trail):
-   real  +39.6 points      time-shifted  -584.2 points     se 29.8
-   EDGE  +623.8 points  =  21.0 control standard errors
+train 46.7 pts  ->  TEST 50.3 pts          out of sample EXCEEDS in sample
+walk-forward    15.8 / 18.7 / 21.1 / 20.3 / 21.2     FIVE OF FIVE positive
+long +56.3      short +40.8                both directions
+cost   0.11 -> 97.1 | 0.17 -> 82.6 | 0.25 -> 63.1 | 0.40 -> 26.7 | 0.93 -> -103
+       survives a standard retail spread
+parameters      a PLATEAU: all nine neighbouring cells positive (60.9 to 99.5)
+time-shifted control -1099.3 pts  ->  EDGE +1196.5 = 79.2 control se
 ```
-356 trades over 109 trading days = **3.3/day**. 39.6 points = **£230 at today's
-volatility, per 0.01 lot** (£2.11/day). It scales with size, not with skill.
+**981 trades over 109 days = 9.0/day.** 97.1 points = **£564 per 0.01 lot at
+today's volatility** (£5.17/day), and it scales with size.
 
-**Out-of-sample performance EXCEEDS in-sample.** That is the signature of a
-mechanism rather than a fit.
+No block carries it; no direction carries it; it is a plateau not a peak; and
+out-of-sample beats in-sample. That is the profile of a mechanism.
+
+## THE KNOWN FAILURE MODE — state it before deploying (E-129)
+The entry is a **limit** (fills at the level or better, no slippage). The exit is
+a **stop** (a long sells when price falls to the band, so it fills at or below).
+```
+exit slippage   0.00p    0.02p    0.05p    0.10p    0.15p
+points          97.1     77.5     48.1     -1.0    -50.0
+£/day           5.17     4.13     2.56    -0.05    -2.66
+```
+**BREAKEVEN AT 0.10 POINTS OF EXIT SLIPPAGE.** Normal M1 gold stop fills slip
+0.01-0.05, so it survives with about half the edge. It does not survive a broker
+that slips a full tenth of a point — and that is measurable on demo in a week,
+before any money is at risk. **This is the single number that decides whether
+this system is real in practice.**
 
 ## THE RULES (the shared spec for both Pine and MQL5)
 ```

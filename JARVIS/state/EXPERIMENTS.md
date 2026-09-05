@@ -5032,3 +5032,61 @@ groping for with fixed percentages, and it is why a percentage could not do it.
 **Status: PROMISING.** 2018 H1 only, 109 trading days, never forward tested,
 and the modelled edge (0.111 points/trade) survives about 0.10 points of
 slippage and no more. `InpDemoOnly` defaults TRUE.
+
+## E-127 / E-128 / E-129 — VEER'S ARCHITECTURE. The best-validated result in the project.
+
+Him: *"supertrend is meant for m1, the point is we catch every single m1 trend...
+m5 or m15 is caught late by supertrend but top ticked by smc and ict thru
+liquidity strats"*.
+
+**He was right, and every previous test here had SuperTrend doing the wrong
+job.** E-112..E-117 used the FLIP as the entry — the exact lateness he describes.
+E-119..E-126 used M15 zones and threw SuperTrend's direction away entirely. The
+untested combination was his: **SuperTrend supplies the DIRECTION, a liquidity
+pivot supplies the TIMING, the band supplies the TRAIL.**
+
+```
+zone TF / pivot     trend filter      n    /day    win%    points   £ today
+M15 pivot 3         none            354     3.2   58.5%     39.2    227.40
+M15 pivot 3         ST agrees       180     1.7   59.4%     24.4    141.97
+M5  pivot 5         none            664     6.1   62.3%     58.6    340.39
+M5  pivot 5         ST agrees       470     4.3   62.1%     55.4    321.98
+M1  pivot 5         none           1056     9.7   54.4%     48.4    281.03
+M1  pivot 5         ST agrees       981     9.0   57.1%     97.1    564.17
+```
+**The direction filter DOUBLES the result at M1 (48.4 → 97.1) and is flat or
+worse at M5 and M15.** That is his claim, confirmed mechanically: the filter only
+adds information where SuperTrend is fast enough to still be current.
+
+### E-128 — attacked five ways, survives all of them
+```
+train 46.7 -> TEST 50.3               out of sample EXCEEDS in sample
+walk-forward 15.8/18.7/21.1/20.3/21.2 five of five positive, none carries it
+long +56.3, short +40.8               both directions
+cost 0.11->97.1 0.17->82.6 0.25->63.1 0.40->26.7   survives a retail spread
+parameters: all nine neighbouring cells positive (60.9-99.5)  PLATEAU not peak
+time-shifted control -1099.3          EDGE +1196.5 = 79.2 control se
+```
+
+### E-129 — and the one number that decides it in practice
+The entry is a limit (no slippage). The exit is a stop (fills at or below).
+```
+slippage  0.00p   0.02p   0.05p   0.10p   0.15p
+points     97.1    77.5    48.1    -1.0   -50.0
+£/day      5.17    4.13    2.56   -0.05   -2.66
+```
+**Breakeven at 0.10 points of exit slippage.** E-118's promising result had
+0.043 points of edge and died at 0.05; this has 0.099 and dies at 0.10 — **2.3x
+the headroom**, which is the difference between "inside the friction" and
+"survives it with half the edge intact".
+
+### SHIPPED
+- `JARVIS/ea/build/ZoneSniper.mq5` **2.00** — M1 zones, `InpUseStDirection`,
+  SuperTrend band trail, no take profit, demo-gated.
+- `JARVIS/pine/ZONE_SNIPER_2_0.pine` — same spec, same defaults.
+- `JARVIS/lab/FINAL_ARCHITECTURE.md` — rules, evidence, and the slippage limit.
+
+**Status: PROMISING and the best-evidenced thing in this repository. Still 2018
+H1 only and still never forward tested.** The decisive next measurement is not
+another backtest — it is a week on demo recording actual stop-fill slippage
+against the 0.10-point breakeven.
