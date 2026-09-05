@@ -4890,3 +4890,79 @@ The result is still inside the transaction cost.
 at 00h, and 199 gaps of exactly 61 minutes. Any session or time-of-day analysis
 on this feed is contaminated at the daily boundary and must exclude 23:00-01:00.
 Recorded in `JARVIS/lab/DATA_QUALITY.md`.
+
+## E-119 — E-124 — LIQUIDITY AT M1. The levels are real; the conversion is not (yet).
+
+Veer: *"liquidity sweeps and smc and ict are the most used strats because they
+actually work"*. Tested properly for the first time, on real M1 tick data, with
+the architecture he specified from the start (D-010: M15 → M5 → M1).
+
+### E-119 / E-121 — M15 ZONES CARRY ENORMOUS STRUCTURAL INFORMATION
+Zones = confirmed M15 swing pivots, known only k bars after they form. A limit
+rests inside the zone; M1 does the execution; cost from each bar's own spread.
+
+The first control (random CLOSES as levels) was **wrong** — a close is a
+specifically bad entry, not a neutral one, and it made the edge read +15 se in
+one sizing and −3.3 se in another. **The fair control is the SAME zones,
+time-shifted**: identical levels, identical geometry, identical fill mechanics,
+only the alignment with real structure destroyed.
+```
+configuration               n    points   time-shifted   edge     se
+pivot 3, limit 0.25A     497     -12.6         -433.9   +421.3   20.4
+pivot 3, limit 0.50A     476      +8.0         -433.0   +441.1   21.5
+pivot 5, limit 0.50A     222      +5.4         -265.4   +270.8   22.0
+```
+**A zone offered at the right moment breaks even. The identical zone offered at
+a random moment loses 433 points. That is 20-22 control standard errors.**
+The level alignment is doing enormous work — it is what stops you being wrong.
+
+### E-120 — but a lesson about my own method
+Sizing the stop off the M15 ATR instead of the M1 ATR flipped the reported edge
+from +15 se to −3.3 se. **Mean R is not comparable across different stop sizes** —
+a tiny stop inflates R without earning a penny. E-074 again. Everything after
+this is judged in POINTS.
+
+### E-122 — WHY IT ONLY BREAKS EVEN
+356 filled sweeps, MFE and MAE over the following 240 M1 bars:
+```
+              MFE pts   MAE pts
+MEDIAN          1.937    -2.183
+mean            2.694    -2.808     MFE / |MAE| = 0.96
+median bars to peak: 98
+```
+**After the sweep fills you, the trade goes as far against you as for you.** The
+zones prevent the loss; they do not create a gain. Every exit that profits does
+so at ~0.046 points/trade — the same sub-slippage residual as E-118.
+
+### E-123 / E-124 — THE FIRST FILTER IN THIS PROJECT TO SURVIVE OUT OF SAMPLE
+If the average is symmetric, the population must contain clean rejections and
+genuine breaks. Eight discriminators computable at the fill, no look-ahead.
+In-sample quartiles pointed at the **rejection wick** (top quartile +0.367 net
+against −0.828) — but that is ~1.4 se across ~50 comparisons, which is how
+E-094 and E-109 both fooled me. So it was tested honestly:
+```
+threshold chosen on the FIRST half only (wick >= 0.433):
+  TRAIN     n=63   kept +0.206   refused -0.591
+  TEST      n=71   kept +0.546   refused -0.389      <- out of sample
+walk-forward, threshold from everything before, scored on the next block:
+  block 1  -0.011  | block 2  -0.656 | block 3  +1.112 (t 2.08) | block 4 +0.574 (t 1.50)
+  3 of 4 blocks beat taking everything
+```
+**SUPPORTED, weakly.** t ≈ 1.6 out of sample, one block negative. It is the
+first filter here to survive an out-of-sample test at all — E-094's six sideways
+detectors and E-109's four level-selection rules all failed the same test.
+
+### WHERE THIS LEAVES THE TWO SYSTEMS
+- **The levels are real and strongly so.** Veer's instinct about liquidity is
+  supported by the strongest structural result in the repository (20+ se).
+- **The conversion is the unsolved problem.** MFE/MAE = 0.96 means taking every
+  sweep is a coin flip; the money is entirely in separating the two populations,
+  and only one discriminator has survived so far.
+- **This is a foundation, not a system.** One weak filter on a symmetric
+  distribution is not deployable. The next work is more discriminators, tested
+  the same honest way, until the kept population's MFE/MAE is materially above 1.
+
+### CAVEATS
+2018 H1 only. 499 filled sweeps is a small sample for filter research. The feed
+is missing the 00:00 UTC hour daily, so the hour-of-day column in E-123 is
+contaminated and was not acted on (its n per hour is 12-30 anyway, which is noise).
