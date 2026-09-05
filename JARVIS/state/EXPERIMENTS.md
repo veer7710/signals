@@ -5895,3 +5895,78 @@ at the worst possible moment while reporting that it was doing the right thing.*
 The backtest was correct throughout; only the execution was wrong. `ZoneSniper`
 is unaffected — its limit rests 0.50 ATR *past* the level with price on the near
 side, so a limit is right there.
+
+---
+
+## E-142 — THE ORDER BLOCK FINDER, MEASURED
+`JARVIS/research/orderblock.py`
+
+> *"this orderblock script i just sent u is so perfect... possibly best
+> indicator ive ever found... catches real births of alot of the massive trends"*
+
+The rule (wugamlo, **MPL-2.0** — permissive, so unlike the LuxAlgo scripts this
+one can be used and modified in something shipped): a **down** candle followed by
+N consecutive **up** candles clearing a % threshold is a bullish order block; the
+zone is that candle's range; mirror for bearish.
+
+The claim tested is not "does it mark good places" — it does, that is what made
+him notice it. It is **"is price returning to that zone a trade"**, which is what
+an EA would have to do with it. Same stop, same 1.2 ATR risk cap, same give-back
+exit as the validated sweep, so only the SIGNAL differs.
+
+### THE CONTROL WAS BROKEN AGAIN — THIRD TIME THIS SESSION
+It seeded the RNG **inside** the function, so all ten "independent" control runs
+were the same run and the standard error came out `0.0000`. It also fed random
+bar indices through a **cooldown filter that assumes time order**, silently
+discarding an arbitrary subset. Fixed by drawing the entries first, sorting them,
+then walking them like the real book — which also corrected the *real* book's
+ordering (M1 trade count 3437 → 6026).
+
+### WITH THE CONTROL FIXED, IT IS A REAL EDGE
+| | n | /day | win% | points | per trade | control | EDGE |
+|---|---|---|---|---|---|---|---|
+| **M1** | 6026 | 55.2 | 60.4% | +98.1 | +0.0163 | −0.0153 | **56.8 se** |
+| **M5** | 1243 | 11.4 | 64.9% | +55.1 | +0.0443 | −0.0400 | **18.7 se** |
+
+Out of sample holds on both: M1 +0.0173 → **+0.0152**; M5 +0.0578 → **+0.0307**.
+The same parameters win on both clocks — **3 candles, high/low zone, entry at the
+near edge** — which is a coherent choice rather than a per-timeframe fit. Note the
+original ships `periods = 5`; **3 measured better on every clock here**.
+
+### AND IT IS ABOUT FIVE TIMES WEAKER THAN THE SWEEP
+```
+              per trade      M1        M5
+  sweep system            +0.1200   +0.2863
+  order block             +0.0163   +0.0443
+```
+
+So it is **drawn** (which is what he actually values — the zone at the birth of
+the move), it fires a **second signal marked differently** (hollow diamonds), and
+it does **not** override the sweep. Verdict: **SUPPORTED**, as a secondary.
+
+### LICENCES, settled
+- **wugamlo's Order Block Finder — MPL-2.0.** Commercial use, modification and
+  redistribution all permitted with the notice kept. **Used.** The notice is at
+  the top of `LIQUIDITY_SNIPER_1_0.pine`.
+- **LuxAlgo's three scripts — CC BY-NC-SA 4.0.** *NonCommercial*. Veer read the
+  ShareAlike clause as permission to copy-and-edit; it is not — it governs how
+  you may share a derivative, and NC forbids commercial use regardless. Their
+  **definitions** are implemented from scratch instead, which is free to do.
+
+---
+
+## THE TWO CHARTS, AND HOW THEY STAY OUT OF EACH OTHER'S WAY
+He can run two scripts at once and asked that nothing overlap. The split is
+absolute, not cosmetic:
+
+| | LIQUIDITY SNIPER 1.0 | SUPERTREND SNIPER 5.0 |
+|---|---|---|
+| draws | boxes, zones, level lines, **word** labels | two lines, **triangles** |
+| panel | **bottom right** | **top right** |
+| right-edge text | on the current bar | pushed right by `labOff` bars |
+| candles | untouched | untouched |
+| job | infrequent, big, any clock | frequent, low timeframe |
+
+Neither recolours the candles — the white and light blue are Veer's own chart
+setting, and an indicator fighting him for them is noise. The earlier
+`SWEEP_SNIPER_2_0` did recolour them and was wrong to.

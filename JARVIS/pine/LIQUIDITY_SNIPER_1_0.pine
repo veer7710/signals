@@ -4,8 +4,22 @@
 // TradingView's "Script could not be translated from: null" and "the Pine
 // version of this script is unspecified" both mean that one slash is missing.
 // Select ALL of this file (Ctrl+A in the file, Ctrl+A in the editor, paste).
+// ---------------------------------------------------------------------------
+//  The ORDER BLOCK rule below is from "Order Block Finder" by wugamlo,
+//  licensed under the Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
+//  MPL-2.0 permits commercial use, modification and redistribution provided
+//  this notice is kept. It is, and the rule is used and adapted here. The
+//  LuxAlgo scripts are CC BY-NC-SA 4.0, which forbids commercial use outright,
+//  so none of their code is here - only their published definitions, which are
+//  free to implement.
+// ---------------------------------------------------------------------------
 // ===========================================================================
-//  SWEEP SNIPER 2.0  —  liquidity sweeps + SMC + sessions, one clean chart
+//  LIQUIDITY SNIPER 1.0  —  sweeps + order blocks + SMC + sessions
+//
+//  CHART 1 OF 2. Run this together with SUPERTREND SNIPER and nothing
+//  overlaps: this one owns the boxes, the zones and the word labels, and puts
+//  its panel BOTTOM RIGHT. That one draws two lines and small triangles and
+//  puts its panel TOP RIGHT.
 //
 //  WHAT IS ON THE CHART, complete list, and everything is a toggle:
 //     the SWEEP SIGNAL      BUY / SELL where the validated setup fires
@@ -57,7 +71,7 @@
 //
 //  NOT PROVEN. One instrument, 2018 H1, never forward tested. SUPPORTED.
 // ===========================================================================
-indicator("SWEEP SNIPER 2.0", overlay = true, max_labels_count = 500,
+indicator("LIQUIDITY SNIPER 1.0", overlay = true, max_labels_count = 500,
      max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
 
 // ------------------------------------------------------------------ inputs --
@@ -81,7 +95,12 @@ gC = "3 · SMC"
 showSmc   = input.bool(true, "Structure: BOS / CHoCH", group = gC)
 smcLen    = input.int(10,   "Structure swing length",  group = gC, minval = 2)
 showOB    = input.bool(true, "Order blocks",           group = gC)
+obLen     = input.int(3,    "Candles after the OB candle", group = gC, minval = 1, maxval = 10,
+     tooltip = "3 measured best on both M1 and M5 (E-142). The original ships 5; 5 measured worse here on every clock.")
+obThr     = input.float(0.0,"Minimum % move to qualify",  group = gC, step = 0.05)
 maxOB     = input.int(4,    "Keep this many order blocks", group = gC, minval = 1, maxval = 12)
+showOBsig = input.bool(true, "Signal when price returns to an order block", group = gC,
+     tooltip = "A SECOND signal, drawn differently. E-142 measured it at about a fifth of the sweep's per-trade edge - real, and weaker. The panel keeps its book separate so you can see which is carrying you.")
 showFVG   = input.bool(true, "Fair value gaps",        group = gC)
 maxFVG    = input.int(4,    "Keep this many gaps",     group = gC, minval = 1, maxval = 12)
 eqTol     = input.float(0.69, "Pool margin (ATR)", group = gC, step = 0.05,
@@ -101,9 +120,6 @@ gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = 
 ccy      = input.string("£", "Currency symbol", group = gM)
 
 gD = "6 · CHART"
-paintBars = input.bool(true,  "Recolour the candles", group = gD)
-cUp    = input.color(#FFFFFF, "Up candle",   group = gD, inline = "k1")
-cDn    = input.color(#5BC8F5, "Down candle", group = gD, inline = "k1")
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
 cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
 showLvl   = input.bool(true, "Levels",         group = gD, inline = "s1")
@@ -119,10 +135,9 @@ f_num(x, d) =>
 f_ccy(v) =>
     (v >= 0 ? "+" : "-") + ccy + str.tostring(math.abs(v) * gbpPoint * lots / 0.01, "0.00")
 
-// ------------------------------------------------------------ candle theme --
-// White up, light blue down. barcolor recolours the chart's own candles, so
-// nothing is drawn on top and nothing can drift out of alignment with price.
-barcolor(paintBars ? (close >= open ? cUp : cDn) : na, title = "Candles")
+// NO CANDLE PAINTING. Veer's white/light-blue candles are his own chart
+// setting; an indicator recolouring them would just fight him for control of
+// his own screen.
 
 // ---------------------------------------------------------------- sessions --
 // A faint tint only. Sessions are CONTEXT - they are deliberately not a filter:
@@ -158,9 +173,27 @@ if not na(spl)
 brokeUp = showSmc and not na(smcH) and close > smcH and barstate.isconfirmed
 brokeDn = showSmc and not na(smcL) and close < smcL and barstate.isconfirmed
 
-// ---- order blocks ---------------------------------------------------------
-// The last opposing candle before the move that broke structure. Drawn from
-// its own high to its own low and removed once price trades back through it.
+// ---- ORDER BLOCKS ---------------------------------------------------------
+// Rule from "Order Block Finder" by wugamlo, MPL-2.0. That licence is
+// PERMISSIVE - commercial use, modification and redistribution are all allowed
+// provided the notice stays - so unlike the CC BY-NC-SA scripts this one can
+// genuinely be used and adapted here. Notice kept above; logic reimplemented
+// against this file's own state.
+//
+//   BULLISH OB   a DOWN candle followed by `obLen` consecutive UP candles,
+//                where the move from that candle's close to the last of them
+//                clears `obThr` percent. Zone = its HIGH..LOW.
+//   BEARISH OB   the mirror.
+//
+// MEASURED BEFORE IT WAS GIVEN A VOTE (E-142). As a trade - limit at the near
+// edge on the revisit, stop past the far edge, same give-back exit as the
+// sweep - it is a REAL edge and a WEAKER one:
+//     M1  6026 trades  60.4% win  +98.1 pts  56.8 control se  OOS +0.0152
+//     M5  1243 trades  64.9% win  +55.1 pts  18.7 control se  OOS +0.0307
+// against the sweep's +0.1200/trade on M1 and +0.2863 on M5 - about five times
+// smaller per trade. So it is drawn, and it fires a SECOND signal marked
+// differently, and the panel keeps its book separate. It does not get to
+// override the sweep.
 var array<box> obBull = array.new<box>()
 var array<box> obBear = array.new<box>()
 
@@ -169,68 +202,62 @@ f_trimBoxes(arr, cap) =>
         box.delete(array.shift(arr))
     true
 
-f_ob(dir, fromBar) =>
-    // scan back for the last candle of the opposite colour, capped so a long
-    // stretch of one-sided bars cannot make this expensive
-    idx = -1
-    lim = math.max(0, math.min(50, bar_index - math.max(0, fromBar)))
-    for i = 0 to lim
-        if dir > 0 ? close[i] < open[i] : close[i] > open[i]
-            idx := i
-            break
-    idx
+obp = obLen + 1
+obMove = close[obp] != 0 ? math.abs(close[obp] - close[1]) / close[obp] * 100.0 : 0.0
+obUps = 0
+obDns = 0
+for i = 1 to obLen
+    obUps += close[i] > open[i] ? 1 : 0
+    obDns += close[i] < open[i] ? 1 : 0
 
-if brokeUp
-    lbl = smcTrend < 0 ? "CHoCH" : "BOS"
-    smcTrend := 1
-    line.new(smcHb, smcH, bar_index, smcH, color = color.new(cBuy, 55),
-         style = line.style_dashed, width = 1)
-    label.new(bar_index, smcH, lbl, style = label.style_label_down,
-         color = color.new(chart.bg_color, 100), textcolor = color.new(cBuy, 10),
-         size = size.tiny)
-    if showOB
-        i = f_ob(1, smcHb)
-        if i >= 0
-            b = box.new(bar_index - i, high[i], bar_index + 6, low[i],
-                 border_color = color.new(cBuy, 60), border_width = 1,
-                 bgcolor = color.new(cBuy, 88))
-            array.push(obBull, b)
-            f_trimBoxes(obBull, maxOB)
-    smcH := na
+obBullNew = showOB and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
+     and barstate.isconfirmed
+obBearNew = showOB and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
+     and barstate.isconfirmed
 
-if brokeDn
-    lbl = smcTrend > 0 ? "CHoCH" : "BOS"
-    smcTrend := -1
-    line.new(smcLb, smcL, bar_index, smcL, color = color.new(cSell, 55),
-         style = line.style_dashed, width = 1)
-    label.new(bar_index, smcL, lbl, style = label.style_label_up,
-         color = color.new(chart.bg_color, 100), textcolor = color.new(cSell, 10),
-         size = size.tiny)
-    if showOB
-        i = f_ob(-1, smcLb)
-        if i >= 0
-            b = box.new(bar_index - i, high[i], bar_index + 6, low[i],
-                 border_color = color.new(cSell, 60), border_width = 1,
-                 bgcolor = color.new(cSell, 88))
-            array.push(obBear, b)
-            f_trimBoxes(obBear, maxOB)
-    smcL := na
+var float obBullTop = na
+var float obBullBot = na
+var float obBearTop = na
+var float obBearBot = na
 
-// keep order blocks alive until price trades back through them, then delete
+if obBullNew
+    obBullTop := high[obp]
+    obBullBot := low[obp]
+    b = box.new(bar_index - obp, obBullTop, bar_index + 8, obBullBot,
+         border_color = color.new(cBuy, 55), border_width = 1,
+         bgcolor = color.new(cBuy, 88))
+    array.push(obBull, b)
+    f_trimBoxes(obBull, maxOB)
+if obBearNew
+    obBearTop := high[obp]
+    obBearBot := low[obp]
+    b = box.new(bar_index - obp, obBearTop, bar_index + 8, obBearBot,
+         border_color = color.new(cSell, 55), border_width = 1,
+         bgcolor = color.new(cSell, 88))
+    array.push(obBear, b)
+    f_trimBoxes(obBear, maxOB)
+
+// an order block lives until price trades through its far edge
 if array.size(obBull) > 0
     for i = array.size(obBull) - 1 to 0
         b = array.get(obBull, i)
-        box.set_right(b, bar_index + 6)
+        box.set_right(b, bar_index + 8)
         if low < box.get_bottom(b)
             box.delete(b)
             array.remove(obBull, i)
 if array.size(obBear) > 0
     for i = array.size(obBear) - 1 to 0
         b = array.get(obBear, i)
-        box.set_right(b, bar_index + 6)
+        box.set_right(b, bar_index + 8)
         if high > box.get_top(b)
             box.delete(b)
             array.remove(obBear, i)
+
+// THE SECOND SIGNAL: price returns to the near edge of a live order block.
+obBuy  = showOBsig and not na(obBullTop) and array.size(obBull) > 0
+     and low <= obBullTop and low[1] > obBullTop and barstate.isconfirmed
+obSell = showOBsig and not na(obBearBot) and array.size(obBear) > 0
+     and high >= obBearBot and high[1] < obBearBot and barstate.isconfirmed
 
 // ---- fair value gaps ------------------------------------------------------
 // A three-bar gap: bar 3's extreme never met bar 1's. No higher-timeframe
@@ -339,6 +366,7 @@ var int   nShort  = 0
 var float ptsLong = 0.0
 var float ptsShort= 0.0
 var int   nRefused= 0                   // setups the risk cap turned down
+var int   nObSig  = 0                   // order-block returns, counted not traded
 var int   firstT  = 0
 
 // a new confirmed pivot replaces any unfilled setup on that side
@@ -563,6 +591,9 @@ if classicDn
     array.push(swBox, b)
     f_trimBoxes(swBox, 8)
 
+if obBuy or obSell
+    nObSig += 1
+
 // ---------------------------------------------------------------- drawing --
 plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side liquidity",
      color = color.new(cSell, 40), style = plot.style_linebr, linewidth = 1)
@@ -578,6 +609,14 @@ plotshape(fillB, "BUY",  shape.labelup,   location.belowbar, color = cBuy,
      text = "BUY",  textcolor = color.white, size = size.tiny)
 plotshape(fillS, "SELL", shape.labeldown, location.abovebar, color = cSell,
      text = "SELL", textcolor = color.white, size = size.tiny)
+// THE SECOND SIGNAL: a return to a live order block. Hollow diamonds, so it
+// can never be mistaken for the sweep signal - E-142 measured it at about a
+// fifth of the sweep's per-trade edge and it does not get equal billing.
+plotshape(obBuy,  "OB return (buy)",  shape.diamond, location.belowbar,
+     color = color.new(cBuy, 35),  size = size.tiny)
+plotshape(obSell, "OB return (sell)", shape.diamond, location.abovebar,
+     color = color.new(cSell, 35), size = size.tiny)
+
 // a setup the RISK CAP refused. Hollow, so it never competes with a real
 // signal - but visible, because that is how you know the cap is working
 // rather than silently eating the strategy.
@@ -608,7 +647,7 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, 16, border_width = 1,
+    tp := table.new(pos, 3, 17, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 
@@ -619,7 +658,7 @@ if barstate.islast and showPanel
     avg   = nTrades > 0 ? sumPts / nTrades : 0.0
     days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
 
-    table.cell(tp, 0, 0, "SWEEP SNIPER 2.0", text_color = cVal, text_size = size.small,
+    table.cell(tp, 0, 0, "LIQUIDITY SNIPER", text_color = cVal, text_size = size.small,
          text_halign = text.align_left)
     table.cell(tp, 1, 0, "", text_color = cVal)
     table.cell(tp, 2, 0, posDir == 0 ? "flat" : posDir > 0 ? "LONG" : "SHORT",
@@ -656,10 +695,11 @@ if barstate.islast and showPanel
     f_row(13, "SSL pool", str.tostring(nSSL),
               f_isPool(nSSL) ? "POOL (3+ lows)" : "equal lows",
               f_isPool(nSSL) ? cVal : color.new(#8FA3B8, 0))
-    f_row(14, "session",
+    f_row(14, "OB returns", str.tostring(nObSig), "drawn, not traded", cVal)
+    f_row(15, "session",
               inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
               "context only", cVal)
-    f_row(15, "open", posDir == 0 ? "-" : f_num(posDir * (close - posEntry), "0.0"),
+    f_row(16, "open", posDir == 0 ? "-" : f_num(posDir * (close - posEntry), "0.0"),
               posDir == 0 ? str.tostring(lots, "0.00") + " lots"
                           : f_ccy(posDir * (close - posEntry)),
               posDir == 0 ? cVal : (posDir * (close - posEntry) >= 0 ? cPos : cNeg))
