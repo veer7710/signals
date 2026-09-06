@@ -482,3 +482,35 @@ It found **three** in the shipped file, not one: the `bgcolor` session tint, the
 `posStop` ternary, and the `posTgt` ternary. Two of them were pre-existing and
 had never compiled. Both big ternaries are now built from single-line pieces,
 which is more readable anyway and cannot fail this way at all.
+
+---
+
+## 2026-09-06 — THE SAME TRAIL LEAK WAS STILL LIVE IN THE SUPERTREND PINE
+
+E-151 found the give-back trail filling at prices no order could rest at, and it
+was fixed in twelve research files, in `LIQUIDITY_SNIPER_2_0.pine`, in
+`SweepSniper.mq5` and (as E-158) in `funded.py`'s SuperTrend trade builder.
+
+**`SUPERTREND_SNIPER_5_0.pine` was never checked.** It updated `posPeak` from
+the current bar's high, moved the trail to `posPeak − 3·ATR`, and then let *that
+same bar's low* hit it — peak and retrace inside one bar, booking a fill at a
+level that could not have been placed until the bar closed. E-158 fixed exactly
+this defect in the Python version of this same system and nobody came back for
+the chart.
+
+Five more, all in the accounting rather than the strategy:
+- the panel booked **gross** points — no spread, no slippage — while every
+  figure quoted for this system elsewhere is net, and the shadow "flip and hold"
+  comparison book was free while the real one would not be
+- **exit gaps were booked at the stop price**, not the open
+- `nAged` counted take-profit exits as time exits
+- the live position label read the **band** rather than the position, so on a
+  forming bar it could print LONG over a short
+- the alert strings said "SuperTrend 4.1" in a file called 5.0
+
+### The lesson, and it is the same one as this morning's
+**A fix is not finished when the file you were looking at is fixed.** E-151 was
+applied to everything that came up in a grep for the give-back trail; this file
+spells it differently, so it did not come up, and `check_trails.py` only scans
+`JARVIS/research/`. **The tool that finds a bug class must be pointed at every
+place that class can live, and for this project that includes the Pine files.**
