@@ -111,13 +111,23 @@ sessA    = input.session("0000-0800", "Asia",     group = gT)
 sessL    = input.session("0700-1600", "London",   group = gT)
 sessN    = input.session("1200-2100", "New York", group = gT)
 
-gM = "7 · MONEY"
+gK = "7 · COST — the panel was lying without this"
+// THE PANEL USED TO BOOK GROSS POINTS: entry to exit, no spread, no slippage.
+// Every backtest number quoted for this system is NET, so the panel flattered
+// itself against its own evidence and there was no way to see it. Now every
+// trade pays the round trip.
+spreadPts = input.float(0.30, "Your spread, in points", group = gK, step = 0.05,
+     tooltip = "One point = $1.00 of price. Veer's broker runs about 0.20-0.40 on XAUUSD. Charged once per trade: you buy the ask and sell the bid.")
+slipPts   = input.float(0.02, "Slippage per side, in points", group = gK, step = 0.01,
+     tooltip = "Entries and exits here are STOP orders, which fill at or worse than their level. E-129 broke the older system at 0.10. Charged twice - once in, once out.")
+
+gM = "8 · MONEY"
 lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01)
 gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = gM, step = 0.001,
      tooltip = "A point is 1.00 of price - one dollar. 0.01 lots is 1 ounce, so a $1 move is about 79p. The same unit you use when you say 3-4 points is 2-4 pound.")
 ccy      = input.string("£", "Currency symbol", group = gM)
 
-gD = "8 · CHART"
+gD = "9 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
 cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
 showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
@@ -505,7 +515,10 @@ if posDir != 0 and barstate.isconfirmed
     aged    = bar_index - posBar >= maxHold
     if hitStop or aged
         exitPx  := hitStop ? posStop : close
-        pts     = posDir * (exitPx - posEntry)
+        // NET, not gross. The spread once (buy the ask, sell the bid) and the
+        // slippage twice (a stop order fills at or worse than its level, both
+        // on the way in and on the way out).
+        pts     = posDir * (exitPx - posEntry) - spreadPts - 2.0 * slipPts
         if nTrades == 0
             firstT := time
         nTrades  += 1
@@ -616,7 +629,7 @@ if posDir == 0 and not na(pEnt)
     lPnl := na
 
 if posDir != 0 and showLive and not na(pEnt)
-    live = posDir * (close - posEntry)
+    live = posDir * (close - posEntry) - spreadPts - 2.0 * slipPts
     col  = live >= 0 ? cBuy : cSell
     box.set_right(pBox, bar_index)
     box.set_top(pBox, math.max(posEntry, close))

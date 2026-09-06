@@ -6078,3 +6078,108 @@ Also verified rather than assumed:
   `plotshape` output cannot be deleted or moved. The only `delete` calls in the
   file act on order-block zones and the live position drawing — never on a signal
   or a finished-trade label. `Keep dead zones` turns off even the zone removal.
+
+---
+
+## E-145 — ORDER BLOCK *AT* SWEPT LIQUIDITY: NOT SUPPORTED
+`JARVIS/research/ob_confluence.py`
+
+> *"orderblock entries maybe can be combined w liquidity entries, like after a
+> big sell or buy a top tick entry is often shown by orderblock yk, and thats
+> when liquidity is swept and the high or low is broken"*
+
+The right shape of idea — the block says where the last opposing orders sat, the
+sweep says the stops there were just cleared — and order block is the weakest of
+the three signals, so it is the one that most needs help. A block was labelled
+"confluent" when a swing level taken by a **wick** (not a close) sat within 0.50
+ATR of it, within 120 bars before the block confirmed.
+
+| | n | win% | points | per trade |
+|---|---|---|---|---|
+| **M1** all blocks | 3437 | 60.9% | 89.6 | +0.0261 |
+| at swept liquidity | 1286 | 60.2% | 28.1 | **+0.0219** |
+| it would refuse | 2151 | 61.4% | 61.4 | **+0.0286** |
+| **M5** all blocks | 683 | 64.7% | 44.9 | +0.0658 |
+| at swept liquidity | 289 | 65.1% | 30.9 | **+0.1068** |
+| it would refuse | 394 | 64.5% | 14.1 | +0.0357 |
+
+M1 says the confluence is *worse*; M5 says it is much better. Out of sample it
+falls apart on both: M5's first half +0.1639 vs +0.0213 collapses to +0.0435 vs
++0.0481 in the second, and M1 flips sign between halves. **A filter that reverses
+between instruments and between halves is noise.**
+
+Verdict: **UNPROVEN**, not shipped. The idea is not being called wrong — the
+mechanical encoding of it does not separate, which is a different claim.
+
+---
+
+## E-146 — DOES ANY OF THIS SURVIVE OFF XAUUSD 2018?
+`JARVIS/research/multi_market.py`
+
+Two questions answered at once, and they are the ones that decide whether this
+is a strategy or a curve fit.
+
+Veer asked about NASDAQ. There is no NASDAQ series here but there **is US500** —
+same asset class, same session structure, same kind of clean trending move. And
+these files turn out to be **CURRENT**: gold at 4189, timestamped June 2026. So
+they also test today's volatility regime directly, and the ×7.38 scaling
+assumption drops out entirely. **Every number in this project until now came from
+2018 H1 gold.**
+
+All three signals, **parameters completely unchanged**, cost charged at
+spread/ATR 0.11, per-trade in ATRs so instruments compare:
+
+| | SWEEP | BREAK+RETEST | ORDER BLOCK |
+|---|---|---|---|
+| GOLD 15m | **+0.6202 · 26.4 se** | −0.0638 · −0.8 se | +0.1004 · 6.2 se |
+| GOLD 1h | **+0.4089 · 29.1 se** | +0.1700 · 11.3 se | +0.0495 · 6.7 se |
+| US500 15m | **+0.4670 · 7.1 se** | −0.0663 · −0.6 se | +0.0942 · 2.6 se |
+| US500 1h | **+0.5295 · 33.9 se** | +0.1322 · 9.8 se | +0.0151 · 4.7 se |
+| EURUSD 15m | **+0.3423 · 14.2 se** | +0.1702 · 8.4 se | +0.0698 · 5.3 se |
+| GBPUSD 15m | **+0.7251 · 26.4 se** | +0.5089 · 12.3 se | −0.1081 · −2.4 se |
+
+### THE SWEEP IS POSITIVE IN ALL SIX CELLS
+Six instruments-and-clocks, two asset classes it was never tuned on, and the
+current regime rather than 2018 — with **no re-fitting of any parameter**. Control
+se from 7.1 to 33.9. This is the strongest evidence in the project that the sweep
+is a market structure effect rather than a gold artefact, and it is the first
+result here that is not 2018 H1.
+
+**Break+retest is 4 of 6** — it fails on both 15m sets and is strong on both 1h
+sets and both FX sets. **Order block is 5 of 6** and weak throughout, and it goes
+*negative* on GBPUSD. That ranking matches the M1 measurement exactly: sweep,
+then break+retest, then order block.
+
+### FOUR CAVEATS, and they are not small
+1. **Cost is ASSUMED at 0.11 spread/ATR, not measured** — these files carry no
+   spread column. Real US500 and FX spread/ATR may differ materially. This is the
+   weakest part of the test.
+2. **15m and 1h, not M1/M5.** The shipped system is M1/M5, so this asks whether
+   the same *geometry* finds an edge elsewhere, not whether the shipped system
+   reproduces. Corroboration, not confirmation.
+3. **Small n on the 15m sets** (52–190 trades). Low power.
+4. **Entry is at the level price with no entry slippage modelled.** E-131 showed
+   the fill *is* the edge, so a real stop order filling worse would eat into it.
+
+### ON NASDAQ
+US500 works on both clocks. NASDAQ is the same asset class and the parameters are
+all ATR-relative, so nothing in the design needs changing to point it there. That
+is a reason to **test** it, not a reason to trade it — no NASDAQ series exists in
+this repo yet and the cost structure is unmeasured.
+
+---
+
+## AND A DEFECT IN THE PINE PANEL, FOUND WHILE AUDITING
+Veer: *"in terms of the profit box on pine it's showing insane results... but
+what's it based of"*.
+
+Two answers, and the second is the real one:
+1. **It measures every bar TradingView has loaded on that chart** — on M1 that is
+   roughly a fortnight, not today. `LIQUIDITY_SNIPER_2_0` now prints the date
+   range in the panel.
+2. **IT WAS BOOKING GROSS POINTS.** Entry to exit, no spread, no slippage — while
+   every backtest number quoted for this system is NET. The panel flattered
+   itself against its own evidence and there was no way to see it from the chart.
+   Fixed: a cost group charges the spread once and the slippage twice per trade,
+   defaulting to a 0.30 spread and 0.02 per side. **The panel's numbers will drop
+   and that is the correction, not a regression.**
