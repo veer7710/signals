@@ -1,0 +1,749 @@
+//@version=6
+// IF LINE 1 ABOVE SHOWS ONE SLASH, YOUR PASTE DROPPED A CHARACTER.
+// It must read exactly:  //@version=6
+// ---------------------------------------------------------------------------
+//  The ORDER BLOCK rule is from "Order Block Finder" by wugamlo, licensed
+//  under the Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
+//  MPL-2.0 permits commercial use, modification and redistribution provided
+//  this notice is kept.
+// ---------------------------------------------------------------------------
+// ===========================================================================
+//  LIQUIDITY SNIPER 2.0
+//
+//  THREE SIGNALS. Every one measured on 157,051 real M1 bars built from
+//  18,816,940 bid/ask ticks, each bar charged its own spread, each against a
+//  control that keeps the geometry and destroys only the timing.
+//
+//    1  SWEEP          the level is taken by a WICK and price comes back
+//                      2579 trades  65.1% win  +309.5 pts  107.3 control se
+//                      in-sample +0.1241  ->  out of sample +0.0991
+//                      >>> UNCHANGED IN THIS VERSION. Veer: "dont change
+//                      signals that already exist they are good". The engine
+//                      below is lifted from 1.0 line for line.
+//
+//    2  BREAK+RETEST   the level is DISRESPECTED - a bar CLOSES through it -
+//                      then price comes back, holds, and resumes
+//                      2013 trades  64.3% win  +97.3 pts  73.8 control se
+//                      in-sample +0.0465  ->  out of sample +0.0502
+//                      This is the class of entry he pointed at as missed,
+//                      and it is real. It trades WITH the break, where the
+//                      sweep fades it - opposites, separated by whether the
+//                      level was taken by a wick or by a close.
+//
+//    3  ORDER BLOCK    price returns to the last opposing candle before a run
+//                      6026 trades  60.4% win  +98.1 pts  56.8 control se
+//                      in-sample +0.0173  ->  out of sample +0.0152
+//                      Weakest per trade of the three and still clearly real.
+//
+//  They share ONE position at a time, first come first served, and the panel
+//  keeps a SEPARATE BOOK for each so you can see which is carrying you.
+//
+//  SIGNALS NEVER DISAPPEAR. Every one fires only on a CONFIRMED bar and is
+//  drawn with plotshape, which cannot be deleted or moved afterwards. Zones
+//  fade when price invalidates them - that is the zone dying, not a signal
+//  vanishing - and "Keep dead zones" turns even that off.
+//
+//  WHAT IS ON THE CHART, complete list:
+//     BUY / SELL labels           the sweep signal
+//     B+R triangles               break and retest
+//     OB diamonds                 order block return
+//     order block zones           the boxes
+//     the two live levels         one per side, thin
+//     BOS / CHoCH                 small text, the structure that matters
+//     the live position           entry, stop and target, priced in money
+//     one panel, bottom right
+//  Removed since 1.0 because Veer said the zones looked horrible: fair value
+//  gap boxes, sweep-area boxes, structure lines, the classic-sweep markers.
+//
+//  RISK, and this is what makes it survivable rather than clever (E-138):
+//     stop beyond the setup's own invalidation + 0.30 ATR
+//     REFUSE the setup outright if that stop is wider than 1.2 ATR. Uncapped,
+//     one trade took 57% of a GBP60 account. Capped: worst -GBP4.63.
+//     exit gives back 25% of the best excursion. No fixed target - every
+//     fixed target measured worse (E-137).
+//
+//  2018 H1, one instrument, never forward tested. SUPPORTED, not proven.
+// ===========================================================================
+indicator("LIQUIDITY SNIPER 2.0", overlay = true, max_labels_count = 500,
+     max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
+
+// ------------------------------------------------------------------ inputs --
+gX = "1 · WHICH SIGNALS"
+useSweep = input.bool(true, "SWEEP  — wick takes the level, price returns", group = gX)
+useBR    = input.bool(true, "BREAK + RETEST — close through, then holds",   group = gX)
+useOB    = input.bool(true, "ORDER BLOCK — return to the block",            group = gX)
+
+gS = "2 · THE SWEEP  (measured; leave alone unless testing)"
+pvLen    = input.int(5,    "Swing needs this many bars either side", group = gS, minval = 1)
+sweepAtr = input.float(0.10, "Sweep must clear the level by (ATR)", group = gS, step = 0.05)
+wickCut  = input.float(0.646, "Sweep body / range must be under", group = gS, step = 0.01,
+     tooltip = "THE FAKEOUT FILTER. A big-bodied sweep close is a real breakout, not a rejection - and a real breakout is what BREAK+RETEST trades instead.")
+useDisp  = input.bool(false, "Require displacement on the return leg", group = gS,
+     tooltip = "OFF, and the EA has it off too. It is evaluated at the FILL bar and an EA resting an order cannot know which bar will fill it.")
+lifeBars = input.int(120,  "Give up on a setup after N bars", group = gS)
+
+gB = "3 · BREAK + RETEST"
+brAtr    = input.float(0.10, "A close this far through the level is a break (ATR)", group = gB, step = 0.05)
+brTol    = input.float(0.20, "Retest must come this close (ATR)", group = gB, step = 0.05)
+brWait   = input.int(60,   "Bars allowed for the break, the retest, the resume", group = gB)
+
+gO = "4 · ORDER BLOCKS"
+obLen    = input.int(3,    "Candles after the OB candle", group = gO, minval = 1, maxval = 10,
+     tooltip = "3 measured best on M1 and M5. The original ships 5, which measured worse on every clock.")
+obThr    = input.float(0.0,"Minimum % move to qualify", group = gO, step = 0.05)
+maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
+keepDead = input.bool(false,"Keep dead zones on the chart", group = gO,
+     tooltip = "Off: a zone is removed when price trades through it, because it is no longer a zone. Signals are never removed either way.")
+
+gR = "5 · RISK"
+stopBuf  = input.float(0.30, "Stop beyond the invalidation (ATR)", group = gR, step = 0.05)
+maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", group = gR, step = 0.1,
+     tooltip = "E-138. Not an optimisation - uncapped, the worst single trade was 57% of a GBP60 account.")
+giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
+maxHold  = input.int(240,  "Time exit (bars)", group = gR)
+tgtR     = input.float(0.0, "Draw a target at N x risk (0 = none)", group = gR, step = 0.5,
+     tooltip = "DRAWN ONLY - the exit is the give-back trail. Every fixed target measured worse (E-137). This is here so you can see where N x risk sits, not so the system aims at it.")
+
+gT = "6 · SESSIONS"
+showSess = input.bool(true, "Show sessions", group = gT)
+tzSess   = input.string("Etc/UTC", "Timezone", group = gT)
+sessA    = input.session("0000-0800", "Asia",     group = gT)
+sessL    = input.session("0700-1600", "London",   group = gT)
+sessN    = input.session("1200-2100", "New York", group = gT)
+
+gM = "7 · MONEY"
+lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01)
+gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = gM, step = 0.001,
+     tooltip = "A point is 1.00 of price - one dollar. 0.01 lots is 1 ounce, so a $1 move is about 79p. The same unit you use when you say 3-4 points is 2-4 pound.")
+ccy      = input.string("£", "Currency symbol", group = gM)
+
+gD = "8 · CHART"
+cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
+cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
+showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
+showSmc   = input.bool(true, "BOS / CHoCH",   group = gD, inline = "s1")
+showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
+showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
+showHist  = input.bool(true, "Finished trades", group = gD, inline = "s2")
+showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
+panelPos  = input.string("Bottom right", "Panel position", group = gD,
+     options = ["Bottom right", "Top right", "Bottom left"])
+
+f_num(x, d) =>
+    (x >= 0 ? "+" : "") + str.tostring(x, d)
+f_ccy(v) =>
+    (v >= 0 ? "+" : "-") + ccy + str.tostring(math.abs(v) * gbpPoint * lots / 0.01, "0.00")
+
+atr = ta.atr(14)
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low,  pvLen, pvLen)
+
+// ---------------------------------------------------------------- sessions --
+// Context only. Deliberately not a filter: this data feed is missing the 00:00
+// UTC hour every day, so any session rule measured on it would be measuring
+// the gap rather than the session.
+inA = showSess and not na(time(timeframe.period, sessA, tzSess))
+inL = showSess and not na(time(timeframe.period, sessL, tzSess))
+inN = showSess and not na(time(timeframe.period, sessN, tzSess))
+bgcolor(inN ? color.new(#F5A623, 95) : inL ? color.new(#4A90D9, 96) :
+        inA ? color.new(#7B68EE, 97) : na, title = "Sessions")
+
+// ---------------------------------------------------------- setup state ----
+// One live setup per side. A swing HIGH is sell-side liquidity: the sweep runs
+// UP through it and the trade is SHORT back through the level.
+// Pine has no comma-separated declarations - one name per line.
+var float lvlS  = na                    // the level price (sell side)
+var float lvlB  = na
+var float atrS  = na                    // the ATR at its confirmation
+var float atrB  = na
+var int   bornS = na
+var int   bornB = na
+var int   swS   = na                    // the bar the sweep happened
+var int   swB   = na
+var float extS  = na                    // the sweep's running extreme
+var float extB  = na
+var float dispS = na                    // the sweep bar's body / range
+var float dispB = na
+
+var int   posDir   = 0
+var float posEntry = na
+var float posStop  = na
+var float posInit  = na
+var float posPeak  = na
+var int   posBar   = na
+
+var int   nTrades = 0
+var int   nWins   = 0
+var float sumPts  = 0.0
+var float bestPts = 0.0
+var float worstPts= 0.0
+var float peakEq  = 0.0
+var float maxDD   = 0.0
+var int   nLong   = 0
+var int   nShort  = 0
+var float ptsLong = 0.0
+var float ptsShort= 0.0
+var int   nRefused= 0                   // setups the risk cap turned down
+var int   nObSig  = 0                   // order-block returns, counted not traded
+var int   firstT  = 0
+
+// a new confirmed pivot replaces any unfilled setup on that side
+if not na(ph)
+    lvlS := ph
+    atrS := atr
+    bornS := bar_index
+    swS := na
+    extS := na
+if not na(pl)
+    lvlB := pl
+    atrB := atr
+    bornB := bar_index
+    swB := na
+    extB := na
+
+// ---- the sweep --------------------------------------------------------------
+if not na(lvlS) and na(swS) and high >= lvlS + sweepAtr * atrS and barstate.isconfirmed
+    swS := bar_index
+    extS := high
+    r = high - low
+    dispS := r > 0 ? math.abs(close - open) / r : 1.0
+if not na(lvlB) and na(swB) and low <= lvlB - sweepAtr * atrB and barstate.isconfirmed
+    swB := bar_index
+    extB := low
+    r = high - low
+    dispB := r > 0 ? math.abs(close - open) / r : 1.0
+
+// after a sweep the run can keep extending, and the stop goes with it
+if not na(swS) and bar_index > swS and posDir == 0
+    extS := math.max(extS, high)
+if not na(swB) and bar_index > swB and posDir == 0
+    extB := math.min(extB, low)
+
+// a setup that never came back is not a signal
+if not na(bornS) and bar_index - bornS > lifeBars
+    lvlS := na
+    swS := na
+if not na(bornB) and bar_index - bornB > lifeBars
+    lvlB := na
+    swB := na
+
+// ---- the return, the filters, and the fill ---------------------------------
+// displacement on the return leg, exactly as measured: bar j against bar j-2
+dispOkB = not useDisp or (low - high[2]) / atr >= -1.4909
+dispOkS = not useDisp or (low[2] - high) / atr >= -1.4909
+
+readyS = posDir == 0 and not na(swS) and bar_index > swS and low <= lvlS
+     and dispS <= wickCut and dispOkS and barstate.isconfirmed
+readyB = posDir == 0 and not na(swB) and bar_index > swB and high >= lvlB
+     and dispB <= wickCut and dispOkB and barstate.isconfirmed
+
+// THE RISK CAP. A stop wider than maxRisk ATR is refused outright - 0.01 lots
+// is the floor (E-081), so a stop too wide to afford cannot be sized down.
+riskS = readyS ? math.abs(lvlS - (extS + stopBuf * atrS)) : na
+riskB = readyB ? math.abs(lvlB - (extB - stopBuf * atrB)) : na
+tooWideS = readyS and riskS > maxRisk * atrS
+tooWideB = readyB and riskB > maxRisk * atrB
+
+fillS = readyS and not tooWideS
+fillB = readyB and not tooWideB
+
+if tooWideS or tooWideB
+    nRefused += 1
+    if tooWideS
+        lvlS := na
+        swS := na
+    if tooWideB
+        lvlB := na
+        swB := na
+
+// ================================ SMC ======================================
+// Structure is drawn only when it BREAKS. An indicator that draws every swing
+// is a picture of the past.
+var float smcH  = na
+var int   smcHb = na
+var float smcL  = na
+var int   smcLb = na
+var int   smcTrend = 0
+
+if not na(ph)
+    smcH  := ph
+    smcHb := bar_index - pvLen
+if not na(pl)
+    smcL  := pl
+    smcLb := bar_index - pvLen
+
+bosUp = showSmc and not na(smcH) and close > smcH and barstate.isconfirmed
+bosDn = showSmc and not na(smcL) and close < smcL and barstate.isconfirmed
+if bosUp
+    label.new(bar_index, smcH, smcTrend < 0 ? "CHoCH" : "BOS",
+         style = label.style_label_down, color = color.new(chart.bg_color, 100),
+         textcolor = color.new(cBuy, 15), size = size.tiny)
+    smcTrend := 1
+    smcH := na
+if bosDn
+    label.new(bar_index, smcL, smcTrend > 0 ? "CHoCH" : "BOS",
+         style = label.style_label_up, color = color.new(chart.bg_color, 100),
+         textcolor = color.new(cSell, 15), size = size.tiny)
+    smcTrend := -1
+    smcL := na
+
+// ============================ ORDER BLOCKS =================================
+// wugamlo's rule, MPL-2.0 (notice at the top). A DOWN candle followed by obLen
+// consecutive UP candles clearing obThr percent is a bullish block; its zone is
+// that candle's high..low. Mirror for bearish.
+var array<box> obBullBx = array.new<box>()
+var array<box> obBearBx = array.new<box>()
+var float obBullTop = na
+var float obBullBot = na
+var float obBearTop = na
+var float obBearBot = na
+
+f_trim(arr, cap) =>
+    while array.size(arr) > cap
+        box.delete(array.shift(arr))
+    true
+
+obp    = obLen + 1
+obMove = close[obp] != 0 ? math.abs(close[obp] - close[1]) / close[obp] * 100.0 : 0.0
+obUps  = 0
+obDns  = 0
+for i = 1 to obLen
+    obUps += close[i] > open[i] ? 1 : 0
+    obDns += close[i] < open[i] ? 1 : 0
+
+newObBull = useOB and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
+     and barstate.isconfirmed
+newObBear = useOB and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
+     and barstate.isconfirmed
+
+if newObBull
+    obBullTop := high[obp]
+    obBullBot := low[obp]
+    if showZones
+        array.push(obBullBx, box.new(bar_index - obp, obBullTop, bar_index + 10, obBullBot,
+             border_color = color.new(cBuy, 65), border_width = 1,
+             bgcolor = color.new(cBuy, 90)))
+        f_trim(obBullBx, maxOB)
+if newObBear
+    obBearTop := high[obp]
+    obBearBot := low[obp]
+    if showZones
+        array.push(obBearBx, box.new(bar_index - obp, obBearTop, bar_index + 10, obBearBot,
+             border_color = color.new(cSell, 65), border_width = 1,
+             bgcolor = color.new(cSell, 90)))
+        f_trim(obBearBx, maxOB)
+
+// a zone that price has traded through is no longer a zone. SIGNALS are never
+// removed - only zones - and "keep dead zones" turns even this off.
+if array.size(obBullBx) > 0
+    for i = array.size(obBullBx) - 1 to 0
+        b = array.get(obBullBx, i)
+        box.set_right(b, bar_index + 10)
+        if low < box.get_bottom(b) and not keepDead
+            box.delete(b)
+            array.remove(obBullBx, i)
+if array.size(obBearBx) > 0
+    for i = array.size(obBearBx) - 1 to 0
+        b = array.get(obBearBx, i)
+        box.set_right(b, bar_index + 10)
+        if high > box.get_top(b) and not keepDead
+            box.delete(b)
+            array.remove(obBearBx, i)
+
+obAliveB = useOB and not na(obBullBot) and low >= obBullBot
+obAliveS = useOB and not na(obBearTop) and high <= obBearTop
+// THE RISK CAP APPLIES TO EVERY SOURCE. The first build of this file computed
+// obRisk after the take conditions and never used it, so an order block with a
+// stop wider than the cap would have been taken anyway. That cap is the only
+// thing standing between this and the -GBP34 trade E-138 found.
+obRiskB  = not na(obBullTop) and not na(obBullBot)
+     ? math.abs(obBullTop - (obBullBot - stopBuf * atr)) : na
+obRiskS  = not na(obBearTop) and not na(obBearBot)
+     ? math.abs(obBearBot - (obBearTop + stopBuf * atr)) : na
+obFillB  = obAliveB and low <= obBullTop and low[1] > obBullTop
+     and obRiskB <= maxRisk * atr and barstate.isconfirmed
+obFillS  = obAliveS and high >= obBearBot and high[1] < obBearBot
+     and obRiskS <= maxRisk * atr and barstate.isconfirmed
+
+// ========================== BREAK AND RETEST ===============================
+// The level is DISRESPECTED by a CLOSE, price comes back, holds, then resumes.
+// Its own level tracking, kept separate from the sweep engine's so the two can
+// never disturb each other - the sweep engine nulls its levels on a fill and
+// this must not inherit that.
+var float rLvl = na
+var float rAtr = na
+var int   rState = 0
+var int   rBar = na
+var float rTrig = na
+var float rStop = na
+var float sLvl = na
+var float sAtr = na
+var int   sState = 0
+var int   sBar = na
+var float sTrig = na
+var float sStop = na
+
+if useBR and not na(ph) and rState == 0
+    rLvl := ph
+    rAtr := atr
+if useBR and not na(pl) and sState == 0
+    sLvl := pl
+    sAtr := atr
+
+if useBR and barstate.isconfirmed
+    // ---- upside: break a swing HIGH, retest it, buy the resumption
+    if rState == 0 and not na(rLvl) and close > rLvl + brAtr * rAtr
+        rState := 1
+        rBar := bar_index
+    else if rState == 1
+        if bar_index - rBar > brWait or close < rLvl - brTol * rAtr
+            rState := 0
+            rLvl := na
+        else if low <= rLvl + brTol * rAtr and close > rLvl
+            rState := 2
+            rTrig := high
+            rStop := low - stopBuf * rAtr
+            rBar := bar_index
+    else if rState == 2
+        if bar_index - rBar > brWait or close < rLvl - brTol * rAtr
+            rState := 0
+            rLvl := na
+    // ---- downside: break a swing LOW, retest it, sell the resumption
+    if sState == 0 and not na(sLvl) and close < sLvl - brAtr * sAtr
+        sState := 1
+        sBar := bar_index
+    else if sState == 1
+        if bar_index - sBar > brWait or close > sLvl + brTol * sAtr
+            sState := 0
+            sLvl := na
+        else if high >= sLvl - brTol * sAtr and close < sLvl
+            sState := 2
+            sTrig := low
+            sStop := high + stopBuf * sAtr
+            sBar := bar_index
+    else if sState == 2
+        if bar_index - sBar > brWait or close > sLvl + brTol * sAtr
+            sState := 0
+            sLvl := na
+
+brFillB = useBR and rState == 2 and bar_index > rBar and high >= rTrig
+     and math.abs(rTrig - rStop) <= maxRisk * rAtr and barstate.isconfirmed
+brFillS = useBR and sState == 2 and bar_index > sBar and low <= sTrig
+     and math.abs(sTrig - sStop) <= maxRisk * sAtr and barstate.isconfirmed
+
+// ======================= ONE POSITION, THREE SOURCES =======================
+// First come, first served, strongest first when two fire on the same bar.
+// Sweep is strongest by measurement (107.3 control se), then break+retest
+// (73.8), then order block (56.8) - so that is the priority order.
+var int   posSrc = 0          // 1 sweep, 2 break+retest, 3 order block
+var float posTgt = na
+
+// per-source books, so the panel can show which one is carrying
+var int   nS = 0
+var int   nB = 0
+var int   nO = 0
+var float pS = 0.0
+var float pB = 0.0
+var float pO = 0.0
+var int   wS = 0
+var int   wB = 0
+var int   wO = 0
+
+takeSweepB = useSweep and fillB and posDir == 0
+takeSweepS = useSweep and fillS and posDir == 0
+takeBrB    = brFillB and posDir == 0 and not takeSweepB and not takeSweepS
+takeBrS    = brFillS and posDir == 0 and not takeSweepB and not takeSweepS
+takeObB    = obFillB and posDir == 0 and not takeSweepB and not takeSweepS
+     and not takeBrB and not takeBrS
+takeObS    = obFillS and posDir == 0 and not takeSweepB and not takeSweepS
+     and not takeBrB and not takeBrS
+
+anyBuy  = takeSweepB or takeBrB or takeObB
+anySell = takeSweepS or takeBrS or takeObS
+
+// ---------------------------------------------------------- open a trade ---
+if anyBuy or anySell
+    posDir   := anyBuy ? 1 : -1
+    posSrc   := (takeSweepB or takeSweepS) ? 1 : (takeBrB or takeBrS) ? 2 : 3
+    posEntry := takeSweepB ? lvlB : takeSweepS ? lvlS :
+                takeBrB    ? rTrig : takeBrS   ? sTrig :
+                takeObB    ? obBullTop : obBearBot
+    posStop  := takeSweepB ? extB - stopBuf * atrB : takeSweepS ? extS + stopBuf * atrS :
+                takeBrB    ? rStop : takeBrS ? sStop :
+                takeObB    ? obBullBot - stopBuf * atr : obBearTop + stopBuf * atr
+    posInit  := posStop
+    posPeak  := posEntry
+    posBar   := bar_index
+    posTgt   := tgtR > 0 ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
+    // consume the setup that fired, so it cannot fire twice
+    if takeSweepB
+        lvlB := na
+        swB  := na
+    if takeSweepS
+        lvlS := na
+        swS  := na
+    if takeBrB
+        rState := 0
+        rLvl := na
+    if takeBrS
+        sState := 0
+        sLvl := na
+    if takeObB
+        obBullTop := na
+    if takeObS
+        obBearBot := na
+
+// ----------------------------------------------------------- the exit ------
+// E-110: the bar that filled us may not book a FAVOURABLE exit. The stop IS
+// allowed on the entry bar, because a move running straight on through us is a
+// real loss and pretending otherwise flatters the result.
+var float exitPx = na
+closedNow = false
+
+if posDir != 0 and barstate.isconfirmed
+    hitStop = posDir > 0 ? low <= posStop : high >= posStop
+    aged    = bar_index - posBar >= maxHold
+    if hitStop or aged
+        exitPx  := hitStop ? posStop : close
+        pts     = posDir * (exitPx - posEntry)
+        if nTrades == 0
+            firstT := time
+        nTrades  += 1
+        nWins    += pts > 0 ? 1 : 0
+        sumPts   += pts
+        bestPts  := math.max(bestPts, pts)
+        worstPts := math.min(worstPts, pts)
+        peakEq   := math.max(peakEq, sumPts)
+        maxDD    := math.max(maxDD, peakEq - sumPts)
+        if posDir > 0
+            nLong   += 1
+            ptsLong += pts
+        else
+            nShort   += 1
+            ptsShort += pts
+        if posSrc == 1
+            nS += 1
+            pS += pts
+            wS += pts > 0 ? 1 : 0
+        else if posSrc == 2
+            nB += 1
+            pB += pts
+            wB += pts > 0 ? 1 : 0
+        else
+            nO += 1
+            pO += pts
+            wO += pts > 0 ? 1 : 0
+        if showHist
+            label.new(bar_index, posDir > 0 ? math.max(posEntry, exitPx) : math.min(posEntry, exitPx),
+                 f_num(pts, "0.0") + "pt " + f_ccy(pts),
+                 style = posDir > 0 ? label.style_label_lower_left : label.style_label_upper_left,
+                 color = color.new(chart.bg_color, 100),
+                 textcolor = color.new(pts > 0 ? cBuy : cSell, 15), size = size.tiny)
+        posDir := 0
+        posEntry := na
+        posStop := na
+        posBar := na
+        posSrc := 0
+        posTgt := na
+        closedNow := true
+    else if bar_index > posBar
+        // the give-back ratchet, armed only from the bar AFTER the peak is set
+        posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
+        runUp = posDir * (posPeak - posEntry)
+        if runUp > 0
+            cand = posEntry + posDir * runUp * (1.0 - giveBack)
+            posStop := posDir > 0 ? math.max(posStop, cand) : math.min(posStop, cand)
+
+// ======================= THE LIVE POSITION, DRAWN ==========================
+// One set of objects, created on the fill and moved each bar, deleted on the
+// exit. Nothing is recreated per bar.
+var box   pBox   = na
+var line  pEnt   = na
+var line  pSl    = na
+var line  pTp    = na
+var label lSl    = na
+var label lTp    = na
+var label lPnl   = na
+
+f_killLive() =>
+    if not na(pBox)
+        box.delete(pBox)
+    if not na(pEnt)
+        line.delete(pEnt)
+    if not na(pSl)
+        line.delete(pSl)
+    if not na(pTp)
+        line.delete(pTp)
+    if not na(lSl)
+        label.delete(lSl)
+    if not na(lTp)
+        label.delete(lTp)
+    if not na(lPnl)
+        label.delete(lPnl)
+    true
+
+if (anyBuy or anySell) and showLive
+    f_killLive()
+    col = posDir > 0 ? cBuy : cSell
+    pBox := box.new(posBar, posEntry, bar_index, close,
+         border_color = color.new(col, 60), border_width = 1,
+         bgcolor = color.new(col, 93))
+    pEnt := line.new(posBar, posEntry, bar_index, posEntry,
+         color = color.new(#B0BEC5, 20), width = 1)
+    pSl  := line.new(posBar, posStop, bar_index, posStop,
+         color = color.new(cSell, 15), width = 1, style = line.style_dashed)
+    lSl  := label.new(bar_index, posStop, "", style = label.style_label_left,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(cSell, 0),
+         size = size.tiny)
+    lPnl := label.new(bar_index, close, "", style = label.style_label_left,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(col, 0),
+         size = size.small)
+    if not na(posTgt)
+        pTp := line.new(posBar, posTgt, bar_index, posTgt,
+             color = color.new(cBuy, 30), width = 1, style = line.style_dotted)
+        lTp := label.new(bar_index, posTgt, "", style = label.style_label_left,
+             color = color.new(chart.bg_color, 100), textcolor = color.new(cBuy, 10),
+             size = size.tiny)
+
+if posDir == 0 and not na(pEnt)
+    f_killLive()
+    pBox := na
+    pEnt := na
+    pSl  := na
+    pTp  := na
+    lSl  := na
+    lTp  := na
+    lPnl := na
+
+if posDir != 0 and showLive and not na(pEnt)
+    live = posDir * (close - posEntry)
+    col  = live >= 0 ? cBuy : cSell
+    box.set_right(pBox, bar_index)
+    box.set_top(pBox, math.max(posEntry, close))
+    box.set_bottom(pBox, math.min(posEntry, close))
+    box.set_bgcolor(pBox, color.new(col, 93))
+    box.set_border_color(pBox, color.new(col, 60))
+    line.set_x2(pEnt, bar_index)
+    line.set_x2(pSl, bar_index)
+    line.set_y1(pSl, posStop)
+    line.set_y2(pSl, posStop)
+    locked = posDir * (posStop - posEntry)
+    label.set_xy(lSl, bar_index, posStop)
+    label.set_text(lSl, (locked >= 0 ? "LOCKED " : "SL ") + f_num(locked, "0.0")
+         + "pt " + f_ccy(locked))
+    label.set_textcolor(lSl, color.new(locked >= 0 ? cBuy : cSell, 0))
+    label.set_xy(lPnl, bar_index, close)
+    label.set_text(lPnl, (posSrc == 1 ? "SWEEP " : posSrc == 2 ? "B+R " : "OB ")
+         + f_num(live, "0.0") + "pt " + f_ccy(live))
+    label.set_textcolor(lPnl, color.new(col, 0))
+    if not na(pTp)
+        line.set_x2(pTp, bar_index)
+        label.set_xy(lTp, bar_index, posTgt)
+        label.set_text(lTp, "TP " + f_num(posDir * (posTgt - posEntry), "0.0")
+             + "pt " + f_ccy(posDir * (posTgt - posEntry)))
+
+// ---------------------------------------------------------------- drawing --
+// SIGNALS ARE plotshape ON CONFIRMED BARS. plotshape output cannot be deleted
+// or moved after the fact, so these can never vanish from history.
+plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side level",
+     color = color.new(cSell, 45), style = plot.style_linebr, linewidth = 1)
+plot(showLvl and posDir == 0 and not na(lvlB) ? lvlB : na, "Buy-side level",
+     color = color.new(cBuy, 45), style = plot.style_linebr, linewidth = 1)
+
+plotshape(takeSweepB, "BUY  sweep",  shape.labelup,   location.belowbar,
+     color = cBuy,  text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(takeSweepS, "SELL sweep",  shape.labeldown, location.abovebar,
+     color = cSell, text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(takeBrB, "BUY  break+retest",  shape.triangleup,   location.belowbar,
+     color = cBuy,  size = size.small)
+plotshape(takeBrS, "SELL break+retest",  shape.triangledown, location.abovebar,
+     color = cSell, size = size.small)
+plotshape(takeObB, "BUY  order block",  shape.diamond, location.belowbar,
+     color = cBuy,  size = size.tiny)
+plotshape(takeObS, "SELL order block",  shape.diamond, location.abovebar,
+     color = cSell, size = size.tiny)
+plotshape(tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
+     color = color.new(cBuy, 70),  size = size.tiny)
+plotshape(tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
+     color = color.new(cSell, 70), size = size.tiny)
+
+// ================================ THE PANEL ================================
+var table tp = na
+
+f_row(r, a, b, c, col) =>
+    table.cell(tp, 0, r, a, text_color = color.new(#8FA3B8, 0), text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, b, text_color = col, text_size = size.small,
+         text_halign = text.align_right)
+    table.cell(tp, 2, r, c, text_color = color.new(#8FA3B8, 25), text_size = size.tiny,
+         text_halign = text.align_right)
+
+f_sep(r, cap) =>
+    table.cell(tp, 0, r, cap, text_color = color.new(#5C7089, 0), text_size = size.tiny,
+         text_halign = text.align_left)
+    table.cell(tp, 1, r, "", text_color = color.new(#5C7089, 0))
+    table.cell(tp, 2, r, "", text_color = color.new(#5C7089, 0))
+
+if barstate.islast and showPanel
+    if not na(tp)
+        table.delete(tp)
+    pos = panelPos == "Top right" ? position.top_right :
+          panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
+    tp := table.new(pos, 3, 14, border_width = 1,
+         bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
+         frame_color = color.new(#2A3A4D, 20), frame_width = 1)
+
+    cVal = color.new(#E6EDF5, 0)
+    cPos = color.new(cBuy, 0)
+    cNeg = color.new(cSell, 0)
+    winPc = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
+    days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
+
+    table.cell(tp, 0, 0, "LIQUIDITY SNIPER", text_color = cVal, text_size = size.small,
+         text_halign = text.align_left)
+    table.cell(tp, 1, 0, "", text_color = cVal)
+    table.cell(tp, 2, 0, posDir == 0 ? "flat" : posDir > 0 ? "LONG" : "SHORT",
+         text_color = posDir == 0 ? color.new(#8FA3B8, 0) : posDir > 0 ? cPos : cNeg,
+         text_size = size.tiny, text_halign = text.align_right)
+
+    // WHAT PERIOD IS THIS? Veer asked and the old panel never said. It is every
+    // bar TradingView has loaded on this chart - on M1 that is roughly a
+    // fortnight, not today - so the range is printed.
+    f_row(1, "measured over",
+             nTrades > 0 ? str.format("{0,date,dd MMM}", firstT) : "-",
+             "to " + str.format("{0,date,dd MMM}", time), cVal)
+    f_row(2, "profit", f_num(sumPts, "0.0") + "pt", f_ccy(sumPts),
+             sumPts >= 0 ? cPos : cNeg)
+    f_row(3, "trades", str.tostring(nTrades),
+             str.tostring(nTrades / days, "0.0") + "/day", cVal)
+    f_row(4, "win rate", str.tostring(winPc, "0.0") + "%",
+             str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
+
+    f_sep(5, "── which signal is paying ──")
+    f_row(6, "SWEEP", f_num(pS, "0.0") + "pt",
+             str.tostring(nS) + " tr  " + (nS > 0 ? str.tostring(100.0 * wS / nS, "0") + "%W" : "-"),
+             pS >= 0 ? cPos : cNeg)
+    f_row(7, "BREAK+RETEST", f_num(pB, "0.0") + "pt",
+             str.tostring(nB) + " tr  " + (nB > 0 ? str.tostring(100.0 * wB / nB, "0") + "%W" : "-"),
+             pB >= 0 ? cPos : cNeg)
+    f_row(8, "ORDER BLOCK", f_num(pO, "0.0") + "pt",
+             str.tostring(nO) + " tr  " + (nO > 0 ? str.tostring(100.0 * wO / nO, "0") + "%W" : "-"),
+             pO >= 0 ? cPos : cNeg)
+
+    f_sep(9, "── risk ──")
+    f_row(10, "worst trade",   f_num(worstPts, "0.0") + "pt", f_ccy(worstPts), cNeg)
+    f_row(11, "max drawdown",  f_num(-maxDD, "0.0") + "pt",   f_ccy(-maxDD), cNeg)
+    f_row(12, "refused",       str.tostring(nRefused), "stop too wide", cVal)
+    f_row(13, "session",
+              inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
+              posDir == 0 ? str.tostring(lots, "0.00") + " lots"
+                          : f_ccy(posDir * (close - posEntry)), cVal)
+
+plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
+plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)
+plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
+plot(atr, "ATR(14)", display = display.status_line)
+
+alertcondition(anyBuy,     "LS BUY",   "Liquidity Sniper BUY")
+alertcondition(anySell,    "LS SELL",  "Liquidity Sniper SELL")
+alertcondition(closedNow,  "LS CLOSE", "Liquidity Sniper trade closed")

@@ -5970,3 +5970,111 @@ absolute, not cosmetic:
 Neither recolours the candles — the white and light blue are Veer's own chart
 setting, and an indicator fighting him for them is noise. The earlier
 `SWEEP_SNIPER_2_0` did recolour them and was wrong to.
+
+---
+
+## E-143 — "IT REACTED THERE BEFORE" — AND IT RUNS BACKWARDS
+`JARVIS/research/reacted_levels.py`
+
+Veer, pointing at his own chart: *"where my mouse crosshair is, price reacted to
+that zone at 7pm which it had ALSO reacted to at 3pm. point being there was
+liquidity there and a zone"*.
+
+Nothing in the system knew that. A **reaction** was defined before any outcome
+was looked at — price comes within 0.15 ATR of the level and then moves 0.50 ATR
+away without closing through it: *it came, it was refused, it left*. That is
+behaviour, unlike E-135's pool size, which is geometry (three highs at one price)
+and which came back non-monotone.
+
+Then the validated sweep setup was left completely unchanged and each trade
+labelled with how many reactions its level already had.
+
+| prior reactions | n | share | win% | points | per trade |
+|---|---|---|---|---|---|
+| **0 — never reacted** | 91 | 3.5% | **76.9%** | 27.3 | **+0.2999** |
+| 1 — once | 363 | 14.1% | 68.3% | 59.3 | +0.1634 |
+| 2 — twice | 198 | 7.7% | 67.2% | 29.6 | +0.1495 |
+| 3+ | 1927 | 74.7% | 63.7% | 193.2 | +0.1003 |
+
+**Perfectly monotone, and in the opposite direction to the claim.** A level that
+has *never* reacted is the best one to trade; one that has reacted repeatedly is
+the worst. It holds in both halves independently:
+
+```
+first half   fresh +0.3674   lightly tested +0.1345   heavily tested +0.1087
+second half  fresh +0.2211   lightly tested +0.1830   heavily tested +0.0913
+```
+
+The mechanism is not mysterious and it is the ICT view too: **liquidity is
+consumed by being taken.** A level nobody has hit yet still has orders resting at
+it. A level price has bounced off three times has been drained.
+
+Two honest limits: the 0-reaction bucket is thin (91 trades on M1, 16 on M5), and
+the *total* points still come mostly from the 3+ bucket simply because it is 75%
+of the trades. So this is **not** a filter to bolt on — cutting to fresh levels
+only would lose two thirds of the book. It is recorded because it says the missed
+entries Veer identified are, on average, the *worse* ones, and because it is the
+cleanest monotone feature found in this project.
+
+Verdict: "a level that has reacted before is a better level" is **DISPROVEN** on
+M1 and M5. The inverse is **SUPPORTED**.
+
+---
+
+## E-144 — BREAK AND RETEST, THE ENTRY HE SAID WE WERE MISSING
+`JARVIS/research/break_retest.py`
+
+> *"say smc liquidity zone we should have on chart, if price disrespected them
+> and goes above we should look for entry to buy or sell accordingly to
+> direction, probably wait for small pullback or retest and get a sniper entry"*
+
+That is the S/R flip and it is the **opposite** of the sweep: the sweep fades a
+level, this trades with the break. Both can be true because the wick filter
+separates the cases — a level taken by a **wick** is a rejection, a level taken
+by a **close** is a real break.
+
+**E-100 rejected "S/R flip" and that rejection is inadmissible for the third
+time in this project**, for the same three reasons: 15m/1h only with no M1 data,
+spread charged at 0.46 against a real 0.229, and it predates the E-110 fix.
+
+Rule fixed in advance: a bar **closes** through the level by 0.10 ATR; price
+returns within 0.20 ATR and closes back on the break side; a stop order at the
+retest bar's extreme takes us in as it resumes. Same stop, same 1.2 ATR cap, same
+give-back exit as the sweep, so only the signal differs.
+
+| | n | /day | win% | points | per trade | control | EDGE |
+|---|---|---|---|---|---|---|---|
+| **M1** | 2013 | 18.5 | 64.3% | +97.3 | +0.0483 | −0.0147 | **73.8 se** |
+| **M5** | 366 | 3.4 | 65.8% | +24.5 | +0.0670 | −0.0388 | **22.3 se** |
+
+In-sample +0.0465 → **out of sample +0.0502** on M1 — OOS exceeds IS. Long +56.8,
+short +40.5. Survives a 0.40 spread (45.2 pts). **Dies at 0.05 slippage on M1
+(−3.3)** and survives it on M5 (+6.2), which is the same M1 fragility E-140 found.
+
+Verdict: **SUPPORTED**, and it is the missed-entry class he identified.
+
+### THE THREE SIGNALS, RANKED, ALL AGAINST THE SAME CONTROL
+```
+SWEEP          +0.1200/trade   107.3 control se   IS +0.1241 -> OOS +0.0991
+BREAK+RETEST   +0.0483          73.8              IS +0.0465 -> OOS +0.0502
+ORDER BLOCK    +0.0163          56.8              IS +0.0173 -> OOS +0.0152
+```
+All three ship in `LIQUIDITY_SNIPER_2_0.pine`, sharing one position, strongest
+first when two fire on the same bar, with a separate book per source in the panel.
+
+### THE AUDIT THAT CAUGHT A REAL BUG BEFORE IT SHIPPED
+Veer: *"be careful and audit as we have an ok starting system, we need to improve
+now not make worse... this could be the strat we run on a funded account"*.
+
+The first build computed the order block's risk **after** the take conditions and
+never used it — **the 1.2 ATR cap was not applied to order-block entries at all.**
+That cap is the only thing standing between this and the −£34 trade E-138 found.
+Fixed, and the cap now gates all three sources.
+
+Also verified rather than assumed:
+- **The sweep engine is byte-identical to 1.0** (checked by hash, not by eye) —
+  he said *"dont change signals that already exist they are good"*.
+- **No signal can vanish.** Every one is `plotshape` on a confirmed bar, and
+  `plotshape` output cannot be deleted or moved. The only `delete` calls in the
+  file act on order-block zones and the live position drawing — never on a signal
+  or a finished-trade label. `Keep dead zones` turns off even the zone removal.
