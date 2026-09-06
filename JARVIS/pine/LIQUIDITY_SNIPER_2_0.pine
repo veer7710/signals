@@ -13,12 +13,15 @@
 //  Attribution: LuxAlgo. If this script is ever PUBLISHED, the NonCommercial
 //  and ShareAlike terms apply to it; private use is not distribution.
 //
-//  ONE DELIBERATE DEPARTURE FROM THE ORIGINAL: LuxAlgo's version deletes a
-//  block once price mitigates it and only draws on the last bar, so scrolling
-//  back you see ONLY the blocks that survived. That makes the rule look far
-//  more accurate than it is. Here every block that formed is kept and a
-//  mitigated one is faded, not erased. Veer: "make sure like signals dont
-//  disappear some indictors do that to scam u".
+//  ZONES vs SIGNALS, and the difference is the whole point:
+//    A SIGNAL - a BUY or SELL mark - can NEVER be removed. Every one is drawn
+//    with plotshape on a confirmed bar, which cannot be deleted or moved
+//    afterwards. That is the guarantee Veer asked for: "make sure like signals
+//    dont disappear some indictors do that to scam u". It holds absolutely.
+//    A ZONE is live context, not history. A block price has traded through is
+//    finished, so it comes off the chart to keep it clean - which is what Veer
+//    asked for: "i dont want all blocks drawn, on screen i want a clean chart".
+//    Switch on "Keep dead zones" if you want to study them instead.
 // ---------------------------------------------------------------------------
 // ===========================================================================
 //  LIQUIDITY SNIPER 2.0
@@ -192,8 +195,9 @@ obThr    = input.float(0.0,"Minimum % move to qualify", group = gO, step = 0.05)
 obMode   = input.string("both", "Order block entry", group = gO,
      options = ["at detection", "on the return", "both"],
      tooltip = "BOTH is kept as the default so the two entries stay visible together, but under E-151 NEITHER of them makes money: at detection is -0.0089 a trade on M1 and on the return -0.0319, and the order block is negative in 6 of 6 cells off XAUUSD. The figures this tooltip used to quote (+0.0280 and +0.0163) came from the trail leak. This setting only does anything when ORDER BLOCK is switched on, which it is not by default, and switching it on costs money.")
-maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
-obRule   = input.string("both", "How a block is found", group = gO,
+maxOB    = input.int(3,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10,
+     tooltip = "Kept deliberately small. These are live context, not a history lesson - the newest few are the ones price is actually near.")
+obRule   = input.string("volume pivot (LuxAlgo)", "How a block is found", group = gO,
      options = ["3 candles (wugamlo)", "volume pivot (LuxAlgo)", "both"],
      tooltip = "TWO DIFFERENT IDEAS about which candle becomes the block. '3 candles' takes a candle followed by a clean run the other way - it is the wugamlo rule and it is what everything in this repo was measured on. 'Volume pivot' takes the candle where PARTICIPATION peaked, which is the LuxAlgo idea and a genuinely different question. Neither has been shown to make money as a mechanical entry (E-151), and both are real structure worth seeing. Volume pivot needs your feed to actually carry volume - the panel says if it does not.")
 volLen   = input.int(5,  "Volume pivot length", group = gO, minval = 1,
@@ -244,9 +248,9 @@ cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
 showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
 showLevels = input.bool(true, "Mark out every swing level", group = gD,
      tooltip = "The SMC level layer: every confirmed swing drawn as a line and carried forward. A level price CLOSES through is not deleted - it turns dotted and stays, because a broken level is exactly what you watch for the pullback back into it. This is the analysis done for you; the entry is still your call.")
-showBreak = input.bool(true, "Label a level when it breaks", group = gD,
+showBreak = input.bool(false, "Label a level when it breaks", group = gD,
      tooltip = "A small 'broken' tag the moment price closes through a level. Turn it off if the chart gets busy - the dotted line already tells you.")
-maxLvl    = input.int(6, "Levels to keep per side", group = gD, minval = 1, maxval = 20)
+maxLvl    = input.int(4, "Levels to keep per side", group = gD, minval = 1, maxval = 20)
 showSmc   = input.bool(true, "BOS / CHoCH",   group = gD, inline = "s1")
 showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
 showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")

@@ -95,7 +95,7 @@ gE = "2 · RISK / EXIT"
 stopAtr  = input.float(2.0, "Initial stop (ATR)", group = gE, step = 0.5)
 useTrail = input.bool(true, "ATR trail", group = gE)
 trailAtr = input.float(3.0, "Trail distance (ATR)", group = gE, step = 0.5,
-     tooltip = "Wide on purpose, and inherited from the EA - it has NOT been optimised on this system, so there is no number here to quote. What has been measured, on the sweep system rather than this one (E-154), is the shape of the trade-off: a 3 ATR trail there banked the most points and drew down 3.4x as deep as a give-back, which at 0.01 lots was the whole of a GBP 60 account. Widen it in the knowledge that the drawdown widens faster than the profit."
+     tooltip = "Wide on purpose, and inherited from the EA - it has NOT been optimised on this system, so there is no number here to quote. What has been measured, on the sweep system rather than this one (E-154), is the shape of the trade-off: a 3 ATR trail there banked the most points and drew down 3.4x as deep as a give-back, which at 0.01 lots was the whole of a GBP 60 account. Widen it in the knowledge that the drawdown widens faster than the profit.")
 useSt    = input.bool(false, "Trail on the SuperTrend band instead", group = gE,
      tooltip = "E-125 measured the band against a fixed give-back on the liquidity system and it won 39.6 points to 11.0, with E-126's out-of-sample result exceeding in-sample. That was measured on M15 zones, NOT on this flip system, so it is a switch to test with the panel rather than a default to trust.")
 maxStall = input.int(25,    "Close a stalled trade after N bars", group = gE,
