@@ -180,6 +180,8 @@ obMode   = input.string("both", "Order block entry", group = gO,
      options = ["at detection", "on the return", "both"],
      tooltip = "BOTH is kept as the default so the two entries stay visible together, but under E-151 NEITHER of them makes money: at detection is -0.0089 a trade on M1 and on the return -0.0319, and the order block is negative in 6 of 6 cells off XAUUSD. The figures this tooltip used to quote (+0.0280 and +0.0163) came from the trail leak. This setting only does anything when ORDER BLOCK is switched on, which it is not by default, and switching it on costs money.")
 maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
+obRealtime = input.bool(true, "Show the block AS IT FORMS (dashed)", group = gO,
+     tooltip = "The wugamlo rule needs a full run of candles after the block candle, so a CONFIRMED block is always that many bars late - that is the rule itself, not this code. This draws the block that is one candle short of confirming, dashed and fainter, one bar earlier. It is redrawn every bar and WILL disappear if the next candle breaks the pattern: that is a maybe that did not happen, and it is drawn to look like a maybe. Solid boxes have confirmed and are permanent. No BUY/SELL signal is affected by this in any way.")
 keepDead = input.bool(false,"Keep dead zones on the chart", group = gO,
      tooltip = "Off: a zone is removed when price trades through it, because it is no longer a zone. Signals are never removed either way.")
 
@@ -365,6 +367,33 @@ var float ptsShort= 0.0
 var int   nRefused= 0                   // setups the risk cap turned down
 var int   firstT  = 0
 
+// ------------------------------------------------------------- TODAY ONLY --
+// Veer: "make sure it's for the day only so from 12 am till live". The panel
+// used to total every bar TradingView had loaded - roughly a fortnight on M1 -
+// which is a different question from "how is today going". Everything above
+// resets at the session day boundary, so the panel always reads midnight to
+// now, in the timezone chosen for the sessions.
+//
+// The boundary is the DATE in `tzSess`, not `dayofmonth`, because the chart's
+// own timezone and the session timezone are not the same thing and using the
+// wrong one silently shifts the reset by hours.
+todayKey = str.format_time(time, "yyyyMMdd", tzSess)
+newDay   = todayKey != todayKey[1]
+if newDay
+    nTrades  := 0
+    nWins    := 0
+    sumPts   := 0.0
+    bestPts  := 0.0
+    worstPts := 0.0
+    peakEq   := 0.0
+    maxDD    := 0.0
+    nLong    := 0
+    nShort   := 0
+    ptsLong  := 0.0
+    ptsShort := 0.0
+    nRefused := 0
+    firstT   := 0
+
 // a new confirmed pivot replaces any unfilled setup on that side
 if not na(ph)
     lvlS := ph
@@ -509,6 +538,48 @@ newObBull = obDetect and obMove >= obThr and close[obp] < open[obp] and obUps ==
      and barstate.isconfirmed
 newObBear = obDetect and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
      and barstate.isconfirmed
+
+// ---- REAL TIME: the block AS IT FORMS -------------------------------------
+// Veer: "real time orderblock if thats possible idk". It is, with one honest
+// caveat. The wugamlo rule needs obLen candles AFTER the block candle, so a
+// CONFIRMED block is always obLen bars late - that is the rule, not a
+// limitation of this code. What can be shown now is the block that is one
+// candle short of confirming: the same shape, one bar earlier.
+//
+// It is drawn DASHED and fainter, and it is redrawn from scratch every bar, so
+// it can and will disappear if the next candle breaks the pattern. That is NOT
+// a signal vanishing - it is a maybe that did not happen, and it looks like a
+// maybe on purpose. Every SOLID box has confirmed and is permanent, and no
+// plotshape signal is ever affected by any of this.
+formUps = 0
+formDns = 0
+if obLen > 1
+    for i = 1 to obLen - 1
+        formUps += close[i] > open[i] ? 1 : 0
+        formDns += close[i] < open[i] ? 1 : 0
+formP    = obLen                       // the candle one bar closer than obp
+formMove = close[formP] != 0 ? math.abs(close[formP] - close[1]) / close[formP] * 100.0 : 0.0
+formBull = showZones and obRealtime and obLen > 1 and formMove >= obThr
+     and close[formP] < open[formP] and formUps == obLen - 1
+formBear = showZones and obRealtime and obLen > 1 and formMove >= obThr
+     and close[formP] > open[formP] and formDns == obLen - 1
+
+var box fBull = na
+var box fBear = na
+if not na(fBull)
+    box.delete(fBull)
+    fBull := na
+if not na(fBear)
+    box.delete(fBear)
+    fBear := na
+if formBull
+    fBull := box.new(bar_index - formP, high[formP], bar_index + 4, low[formP],
+         border_color = color.new(cBuy, 45), border_width = 1,
+         border_style = line.style_dashed, bgcolor = color.new(cBuy, 94))
+if formBear
+    fBear := box.new(bar_index - formP, high[formP], bar_index + 4, low[formP],
+         border_color = color.new(cSell, 45), border_width = 1,
+         border_style = line.style_dashed, bgcolor = color.new(cSell, 94))
 
 if newObBull
     obBullTop := high[obp]
@@ -661,6 +732,20 @@ var float pO = 0.0
 var int   wS = 0
 var int   wB = 0
 var int   wO = 0
+
+// The per-signal books reset with the day too. They are declared here rather
+// than with the others, and Pine is single-pass, so this is the earliest point
+// they CAN be reset - hence a second block instead of one.
+if newDay
+    nS := 0
+    nB := 0
+    nO := 0
+    pS := 0.0
+    pB := 0.0
+    pO := 0.0
+    wS := 0
+    wB := 0
+    wO := 0
 
 takeSweepB = useSweep and sessOk and fillB and posDir == 0
 takeSweepS = useSweep and sessOk and fillS and posDir == 0
@@ -1000,7 +1085,6 @@ if barstate.islast and showPanel
     cPos = color.new(cBuy, 0)
     cNeg = color.new(cSell, 0)
     winPc = nTrades > 0 ? 100.0 * nWins / nTrades : 0.0
-    days  = nTrades > 0 ? math.max(1.0, (time - firstT) / 86400000.0) : 1.0
 
     table.cell(tp, 0, 0, "LIQUIDITY SNIPER", text_color = cVal, text_size = size.small,
          text_halign = text.align_left)
@@ -1016,9 +1100,10 @@ if barstate.islast and showPanel
     // WHAT PERIOD IS THIS? He asked and the old panel never said: it is every
     // bar TradingView has loaded on the chart - roughly a fortnight on M1, not
     // today - so the range is printed.
-    f_row(r, "measured over",
-             nTrades > 0 ? str.format("{0,date,dd MMM}", firstT) : "-",
-             "to " + str.format("{0,date,dd MMM}", time), cVal)
+    f_row(r, "today",
+             str.format_time(time, "EEE dd MMM", tzSess),
+             nTrades > 0 ? "since " + str.format_time(firstT, "HH:mm", tzSess)
+                         : "no trades yet", cVal)
     r += 1
     // Labelled "if traded", not "profit". With the E-165 fill correction this
     // number is what the signals would REALLY have paid on the bars loaded -
@@ -1028,7 +1113,7 @@ if barstate.islast and showPanel
              sumPts >= 0 ? cPos : cNeg)
     r += 1
     f_row(r, "trades", str.tostring(nTrades),
-             str.tostring(nTrades / days, "0.0") + "/day", cVal)
+             str.tostring(nTrades) + " so far today", cVal)
     r += 1
     f_row(r, "win rate", str.tostring(winPc, "0.0") + "%",
              str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
