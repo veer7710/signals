@@ -200,6 +200,9 @@ maxOB    = input.int(3,    "Keep this many zones per side", group = gO, minval =
 obRule   = input.string("volume pivot (LuxAlgo)", "How a block is found", group = gO,
      options = ["3 candles (wugamlo)", "volume pivot (LuxAlgo)", "both"],
      tooltip = "TWO DIFFERENT IDEAS about which candle becomes the block. '3 candles' takes a candle followed by a clean run the other way - it is the wugamlo rule and it is what everything in this repo was measured on. 'Volume pivot' takes the candle where PARTICIPATION peaked, which is the LuxAlgo idea and a genuinely different question. Neither has been shown to make money as a mechanical entry (E-151), and both are real structure worth seeing. Volume pivot needs your feed to actually carry volume - the panel says if it does not.")
+volPush  = input.bool(true, "Mark volume pushes", group = gO,
+     tooltip = "Veer: 'catch volume pushes asap'. A bar whose volume clears its own recent median by this multiple AND whose body is most of its range - participation arriving with direction, not just noise. Marked with a small triangle at the bar. CONTEXT ONLY: E-167 tested break-vs-pullback volume as a filter and it was the strongest feature there at t 1.68, which is nothing. It is on the chart because you asked to see it, not because it has been shown to pay.")
+volPushX = input.float(2.5, "Volume push = this x the median", group = gO, step = 0.5, minval = 1.0)
 volLen   = input.int(5,  "Volume pivot length", group = gO, minval = 1,
      tooltip = "How many bars either side the volume peak must beat. Like every pivot this only CONFIRMS this many bars later - that is the rule, not a flaw in the code, and it is why no order block of any kind is truly real-time.")
 obRealtime = input.bool(true, "Show the block AS IT FORMS (dashed)", group = gO,
@@ -212,6 +215,10 @@ stopBuf  = input.float(0.30, "Stop beyond the invalidation (ATR)", group = gR, s
 maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", group = gR, step = 0.1,
      tooltip = "E-138. Not an optimisation - uncapped, the worst single trade was 57% of a GBP60 account.")
 giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
+beAtR    = input.float(1.0, "Move the stop to breakeven at (R)", group = gR, step = 0.25, minval = 0.0,
+     tooltip = "0 = never. It moves to the TRUE breakeven - entry plus the spread and both slippages - because a stop at the entry price still loses you the round trip. E-147 measured PARTIALS and they cost money; moving the stop costs nothing and is a different thing.")
+trailAtR = input.float(1.0, "Arm the give-back trail at (R)", group = gR, step = 0.25, minval = 0.0,
+     tooltip = "0 = trail from the first bar, which is what every measurement in this repo used. Veer: 'trail sl not too aggressively for liquidity sweeps' - a sweep needs room before the ratchet starts, so the default gives it 1R first. This has NOT been measured and it is a genuine change to the exit: watch the panel to see what it does to your own numbers.")
 maxHold  = input.int(240,  "Time exit (bars)", group = gR)
 tgtMode  = input.string("next liquidity level", "Reference line", group = gR,
      options = ["none", "next liquidity level", "N x risk"],
@@ -261,6 +268,10 @@ lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01)
 gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = gM, step = 0.001,
      tooltip = "A point is 1.00 of price - one dollar. 0.01 lots is 1 ounce, so a $1 move is about 79p. The same unit you use when you say 3-4 points is 2-4 pound.")
 ccy      = input.string("£", "Currency symbol", group = gM)
+acctSize = input.float(10000, "Account size", group = gM, step = 500, minval = 1,
+     tooltip = "Used only for the sizing row - what lot size the LIVE setup's stop distance allows at your chosen risk. Set it to the funded account you are running.")
+riskPct  = input.float(0.25, "Risk per trade (%)", group = gM, step = 0.05, minval = 0.01,
+     tooltip = "E-156 measured this: at 0.25% a trade the simulated funded pass rate was ~100% at FTMO, FundedNext, E8 Classic and The5ers. At 0.50% it was WORSE at EVERY single firm - prop rules charge for variance, not mean. This is the one number where going bigger reliably made things worse.")
 
 gL = "8b · THE LEGS  (bottom to top, top to bottom)"
 // Veer, repeatedly and correctly: "our signals aren't catching top to bottom or
@@ -721,6 +732,17 @@ if newVolBear and showZones
          bgcolor = color.new(cSell, 88)))
     f_trim(obBearBx, maxOB)
 
+// ---- VOLUME PUSH ----------------------------------------------------------
+// Participation arriving WITH direction: volume well above its own recent
+// median and a bar that is mostly body. Tick volume, so broker-dependent.
+volMed  = ta.median(volume, 50)
+pushUp  = volPush and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
+     and volume >= volPushX * volMed and close > open
+     and (high - low) > 0 and (close - open) / (high - low) >= 0.55
+pushDn  = volPush and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
+     and volume >= volPushX * volMed and close < open
+     and (high - low) > 0 and (open - close) / (high - low) >= 0.55
+
 // ---- REAL TIME: the block AS IT FORMS -------------------------------------
 // Veer: "real time orderblock if thats possible idk". It is, with one honest
 // caveat. The wugamlo rule needs obLen candles AFTER the block candle, so a
@@ -1151,7 +1173,23 @@ if posDir != 0 and barstate.isconfirmed
     if not hitStop and bar_index > posBar
         posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
         runUp = posDir * (posPeak - posEntry)
-        if runUp > 0
+        risk0 = math.abs(posEntry - posInit)
+        runR  = risk0 > 0 ? runUp / risk0 : 0.0
+
+        // STAGE 1 - BREAK EVEN. Veer: "sl closer to be as it grows". The stop
+        // goes to the TRUE breakeven, which is entry plus the spread and both
+        // slippages, not entry - a stop at entry still loses the round trip.
+        if beAtR > 0 and runR >= beAtR
+            beLvl = posEntry + posDir * (spreadPts + 2.0 * slipPts)
+            if posDir > 0 ? beLvl < close : beLvl > close
+                posStop := posDir > 0 ? math.max(posStop, beLvl)
+                                      : math.min(posStop, beLvl)
+
+        // STAGE 2 - THE TRAIL, and only once the trade has earned it. Veer:
+        // "trail sl not too aggressively for liquidity sweeps". A sweep needs
+        // room to breathe before the ratchet starts, so the trail arms at
+        // trailAtR rather than on bar one.
+        if runUp > 0 and runR >= trailAtR
             cand = posEntry + posDir * runUp * (1.0 - giveBack)
             if posDir > 0 ? cand >= close : cand <= close
                 trailOut := true
@@ -1358,6 +1396,10 @@ plotshape(sigSweepB and (not htfDim or withB), "BUY  sweep",
 plotshape(sigSweepS and (not htfDim or withS), "SELL sweep",
      shape.labeldown, location.abovebar,
      color = cSell, text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(pushUp, "volume push up",   shape.triangleup,   location.belowbar,
+     color = color.new(cBuy, 30),  size = size.tiny)
+plotshape(pushDn, "volume push down", shape.triangledown, location.abovebar,
+     color = color.new(cSell, 30), size = size.tiny)
 plotshape(htfDim and sigSweepB and not withB, "buy sweep (against bias)",
      shape.circle, location.belowbar, color = color.new(cBuy, 55), size = size.tiny)
 plotshape(htfDim and sigSweepS and not withS, "sell sweep (against bias)",

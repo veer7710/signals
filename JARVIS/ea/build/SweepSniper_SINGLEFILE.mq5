@@ -831,6 +831,8 @@ input group "=== RISK — read E-138 before changing anything here ==="
 input double InpStopBufAtr   = 0.30;    // stop this far beyond the sweep extreme
 input double InpMaxRiskAtr   = 1.2;     // REFUSE the setup if the stop is wider
 input double InpGiveBack     = 0.25;    // give back this much of the best excursion
+input double InpBeAtR        = 1.0;     // move the stop to TRUE breakeven at this R (0 = never)
+input double InpTrailAtR     = 1.0;     // arm the give-back trail at this R (0 = from the first tick)
 input int    InpMaxBars      = 240;     // time exit, in chart bars
 input bool   InpUseFixedLots = true;
 input double InpFixedLots    = 0.01;    // E-081: 0.01 is GBP0.787/point and is the floor
@@ -920,6 +922,7 @@ double   g_peakPrice = 0.0; // best excursion of the open position
 datetime g_posBarTime = 0;  // F10: a TIME, because Bars() plateaus and jumps
 double   g_lastSl = 0.0;    // F7: the last stop we successfully asked for
 datetime g_lastTry = 0;     // F7: throttle on exit retries
+double   g_posInit = 0.0;   // the ORIGINAL stop, so R can be measured
 double   g_posEntry = 0.0;
 int      g_posDir = 0;
 
@@ -1670,11 +1673,40 @@ void TrailStop()
          g_posDir = dir; g_posEntry = entry; g_peakPrice = entry;
          g_posBarTime = (datetime)PositionGetInteger(POSITION_TIME);
          g_lastSl = 0.0;
+         g_posInit = sl;          // the stop as it was placed = 1R
       }
       g_peakPrice = (dir > 0) ? MathMax(g_peakPrice, px) : MathMin(g_peakPrice, px);
 
+      int    dg0   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+      double risk0 = (g_posInit > 0.0) ? MathAbs(entry - g_posInit) : 0.0;
       double runUp = dir * (g_peakPrice - entry);
-      if(runUp > 0.0)
+      double runR  = (risk0 > 0.0) ? runUp / risk0 : 0.0;
+
+      // STAGE 1 - TRUE BREAKEVEN. Not the entry price: entry plus the spread
+      // and the slippage both ways, because a stop AT entry still loses the
+      // round trip. Veer: "sl closer to be as it grows".
+      if(InpBeAtR > 0.0 && runR >= InpBeAtR && risk0 > 0.0)
+      {
+         double sp   = SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                     - SymbolInfoDouble(_Symbol, SYMBOL_BID);
+         double beLv = NormPx(entry + dir * sp);
+         bool   bett = (dir > 0) ? (beLv > sl) : (beLv < sl);
+         bool   safe = (dir > 0) ? (beLv < px) : (beLv > px);
+         double gd   = MathMax(MinStopDist(), FreezeDist());
+         if(bett && safe && (gd <= 0.0 || dir * (px - beLv) >= gd))
+         {
+            if(trade.PositionModify(tk, beLv, 0.0))
+               { sl = beLv; g_lastSl = beLv; Log("stop to breakeven"); }
+            else
+               Log(StringFormat("BREAKEVEN MODIFY REJECTED %d %s - stop still %.*f",
+                                trade.ResultRetcode(),
+                                trade.ResultRetcodeDescription(), dg0, sl));
+         }
+      }
+
+      // STAGE 2 - the give-back trail, and only once the trade has earned it.
+      // Veer: "trail sl not too aggressively for liquidity sweeps".
+      if(runUp > 0.0 && runR >= InpTrailAtR)
       {
          int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
          double cand = NormPx(entry + dir * runUp * (1.0 - InpGiveBack));
@@ -2066,6 +2098,7 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          g_posDir = 0;
          g_peakPrice = 0.0;
          g_lastSl = 0.0;
+         g_posInit = 0.0;
       }
       g_pbDirty = true;
       Log(StringFormat("closed, profit %.2f",
