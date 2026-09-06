@@ -91,6 +91,9 @@ gO = "4 · ORDER BLOCKS"
 obLen    = input.int(3,    "Candles after the OB candle", group = gO, minval = 1, maxval = 10,
      tooltip = "3 measured best on M1 and M5. The original ships 5, which measured worse on every clock.")
 obThr    = input.float(0.0,"Minimum % move to qualify", group = gO, step = 0.05)
+obMode   = input.string("both", "Order block entry", group = gO,
+     options = ["at detection", "on the return", "both"],
+     tooltip = "E-148. AT DETECTION - market, on the bar the block confirms - measured +0.0280/trade on M1 against +0.0163 for waiting for the return, and its out-of-sample is BETTER than its in-sample. ON THE RETURN fires far more often, so it makes more total points. They are different moments and both are positive, so 'both' is the default.")
 maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
 keepDead = input.bool(false,"Keep dead zones on the chart", group = gO,
      tooltip = "Off: a zone is removed when price trades through it, because it is no longer a zone. Signals are never removed either way.")
@@ -136,8 +139,10 @@ showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
 showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
 showHist  = input.bool(true, "Finished trades", group = gD, inline = "s2")
 showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
-panelPos  = input.string("Bottom right", "Panel position", group = gD,
-     options = ["Bottom right", "Top right", "Bottom left"])
+panelPos  = input.string("Top right", "Panel position", group = gD,
+     options = ["Top right", "Bottom right", "Bottom left"])
+panelBig  = input.bool(false, "Show the full panel", group = gD,
+     tooltip = "Off: profit, trades, win rate, which signal is paying, and the enter-by price. On: adds the risk block and the session row.")
 
 f_num(x, d) =>
     (x >= 0 ? "+" : "") + str.tostring(x, d)
@@ -370,9 +375,22 @@ obRiskB  = not na(obBullTop) and not na(obBullBot)
      ? math.abs(obBullTop - (obBullBot - stopBuf * atr)) : na
 obRiskS  = not na(obBearTop) and not na(obBearBot)
      ? math.abs(obBearBot - (obBearTop + stopBuf * atr)) : na
-obFillB  = obAliveB and low <= obBullTop and low[1] > obBullTop
+obUseDet = obMode != "on the return"
+obUseRet = obMode != "at detection"
+// AT DETECTION. The block confirms on THIS bar, so this is the earliest a
+// human or an EA could act - and E-148 measured it at nearly double the
+// return entry per trade on M1, with out-of-sample BETTER than in-sample.
+// The marker the eye loves is drawn obp bars back on the block candle, and
+// that price was not knowable when the block formed. This is the honest
+// version of "catch the birth of the move".
+obDetRiskB = newObBull ? math.abs(close - (low[obp] - stopBuf * atr)) : na
+obDetRiskS = newObBear ? math.abs(close - (high[obp] + stopBuf * atr)) : na
+obDetB   = obUseDet and newObBull and obDetRiskB <= maxRisk * atr
+obDetS   = obUseDet and newObBear and obDetRiskS <= maxRisk * atr
+
+obFillB  = obUseRet and obAliveB and low <= obBullTop and low[1] > obBullTop
      and obRiskB <= maxRisk * atr and barstate.isconfirmed
-obFillS  = obAliveS and high >= obBearBot and high[1] < obBearBot
+obFillS  = obUseRet and obAliveS and high >= obBearBot and high[1] < obBearBot
      and obRiskS <= maxRisk * atr and barstate.isconfirmed
 
 // ========================== BREAK AND RETEST ===============================
@@ -467,9 +485,13 @@ takeObB    = obFillB and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS
 takeObS    = obFillS and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS
+takeDetB   = obDetB and posDir == 0 and not takeSweepB and not takeSweepS
+     and not takeBrB and not takeBrS and not takeObB and not takeObS
+takeDetS   = obDetS and posDir == 0 and not takeSweepB and not takeSweepS
+     and not takeBrB and not takeBrS and not takeObB and not takeObS
 
-anyBuy  = takeSweepB or takeBrB or takeObB
-anySell = takeSweepS or takeBrS or takeObS
+anyBuy  = takeSweepB or takeBrB or takeObB or takeDetB
+anySell = takeSweepS or takeBrS or takeObS or takeDetS
 
 // ---------------------------------------------------------- open a trade ---
 if anyBuy or anySell
@@ -477,10 +499,12 @@ if anyBuy or anySell
     posSrc   := (takeSweepB or takeSweepS) ? 1 : (takeBrB or takeBrS) ? 2 : 3
     posEntry := takeSweepB ? lvlB : takeSweepS ? lvlS :
                 takeBrB    ? rTrig : takeBrS   ? sTrig :
-                takeObB    ? obBullTop : obBearBot
+                takeObB    ? obBullTop : takeObS ? obBearBot : close
     posStop  := takeSweepB ? extB - stopBuf * atrB : takeSweepS ? extS + stopBuf * atrS :
                 takeBrB    ? rStop : takeBrS ? sStop :
-                takeObB    ? obBullBot - stopBuf * atr : obBearTop + stopBuf * atr
+                takeObB    ? obBullBot - stopBuf * atr :
+                takeObS    ? obBearTop + stopBuf * atr :
+                takeDetB   ? low[obp] - stopBuf * atr : high[obp] + stopBuf * atr
     posInit  := posStop
     posPeak  := posEntry
     posBar   := bar_index
@@ -708,6 +732,10 @@ plotshape(takeObB, "BUY  order block",  shape.diamond, location.belowbar,
      color = cBuy,  size = size.tiny)
 plotshape(takeObS, "SELL order block",  shape.diamond, location.abovebar,
      color = cSell, size = size.tiny)
+plotshape(takeDetB, "BUY  OB at detection",  shape.circle, location.belowbar,
+     color = cBuy,  size = size.tiny)
+plotshape(takeDetS, "SELL OB at detection",  shape.circle, location.abovebar,
+     color = cSell, size = size.tiny)
 plotshape(tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
      color = color.new(cBuy, 70),  size = size.tiny)
 plotshape(tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
@@ -735,7 +763,7 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, 15, border_width = 1,
+    tp := table.new(pos, 3, panelBig ? 15 : 10, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 
@@ -755,44 +783,65 @@ if barstate.islast and showPanel
     // WHAT PERIOD IS THIS? Veer asked and the old panel never said. It is every
     // bar TradingView has loaded on this chart - on M1 that is roughly a
     // fortnight, not today - so the range is printed.
-    f_row(1, "measured over",
+    // Rows are placed from a running counter, not hard-coded indices, so
+    // hiding a block cannot leave a hole or stack two rows on each other.
+    r = 1
+
+    // WHAT PERIOD IS THIS? He asked and the old panel never said: it is every
+    // bar TradingView has loaded on the chart - roughly a fortnight on M1, not
+    // today - so the range is printed.
+    f_row(r, "measured over",
              nTrades > 0 ? str.format("{0,date,dd MMM}", firstT) : "-",
              "to " + str.format("{0,date,dd MMM}", time), cVal)
-    f_row(2, "profit", f_num(sumPts, "0.0") + "pt", f_ccy(sumPts),
+    r += 1
+    f_row(r, "profit", f_num(sumPts, "0.0") + "pt", f_ccy(sumPts),
              sumPts >= 0 ? cPos : cNeg)
-    f_row(3, "trades", str.tostring(nTrades),
+    r += 1
+    f_row(r, "trades", str.tostring(nTrades),
              str.tostring(nTrades / days, "0.0") + "/day", cVal)
-    f_row(4, "win rate", str.tostring(winPc, "0.0") + "%",
+    r += 1
+    f_row(r, "win rate", str.tostring(winPc, "0.0") + "%",
              str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
+    r += 1
 
-    f_sep(5, "── which signal is paying ──")
-    f_row(6, "SWEEP", f_num(pS, "0.0") + "pt",
+    f_sep(r, "── which signal is paying ──")
+    r += 1
+    f_row(r, "SWEEP", f_num(pS, "0.0") + "pt",
              str.tostring(nS) + " tr  " + (nS > 0 ? str.tostring(100.0 * wS / nS, "0") + "%W" : "-"),
              pS >= 0 ? cPos : cNeg)
-    f_row(7, "BREAK+RETEST", f_num(pB, "0.0") + "pt",
+    r += 1
+    f_row(r, "BREAK+RETEST", f_num(pB, "0.0") + "pt",
              str.tostring(nB) + " tr  " + (nB > 0 ? str.tostring(100.0 * wB / nB, "0") + "%W" : "-"),
              pB >= 0 ? cPos : cNeg)
-    f_row(8, "ORDER BLOCK", f_num(pO, "0.0") + "pt",
+    r += 1
+    f_row(r, "ORDER BLOCK", f_num(pO, "0.0") + "pt",
              str.tostring(nO) + " tr  " + (nO > 0 ? str.tostring(100.0 * wO / nO, "0") + "%W" : "-"),
              pO >= 0 ? cPos : cNeg)
+    r += 1
 
-    f_sep(9, "── risk ──")
-    f_row(10, "worst trade",   f_num(worstPts, "0.0") + "pt", f_ccy(worstPts), cNeg)
-    f_row(11, "max drawdown",  f_num(-maxDD, "0.0") + "pt",   f_ccy(-maxDD), cNeg)
-    f_row(12, "refused",       str.tostring(nRefused), "stop too wide", cVal)
     // how late can he be and still have a valid trade? The stop does not move
-    // when he chases, so the cap is what breaks first.
+    // when he chases, so the risk cap is what breaks first - not the profit.
     chaseTo  = posDir != 0 ? posStop + posDir * maxRisk * atr : na
     chasePts = posDir != 0 ? posDir * (chaseTo - close) : na
-    f_row(13, "enter by",
-              posDir == 0 ? "-" : str.tostring(chaseTo, format.mintick),
-              posDir == 0 ? "no trade open"
-                          : f_num(chasePts, "0.0") + "pt of chase left",
-              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
-    f_row(14, "session",
-              inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
-              posDir == 0 ? str.tostring(lots, "0.00") + " lots"
-                          : f_ccy(posDir * (close - posEntry)), cVal)
+    f_row(r, "enter by",
+             posDir == 0 ? "-" : str.tostring(chaseTo, format.mintick),
+             posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
+             posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
+    r += 1
+
+    if panelBig
+        f_sep(r, "── risk ──")
+        r += 1
+        f_row(r, "worst trade", f_num(worstPts, "0.0") + "pt", f_ccy(worstPts), cNeg)
+        r += 1
+        f_row(r, "max drawdown", f_num(-maxDD, "0.0") + "pt", f_ccy(-maxDD), cNeg)
+        r += 1
+        f_row(r, "refused", str.tostring(nRefused), "stop too wide", cVal)
+        r += 1
+        f_row(r, "session",
+                 inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
+                 posDir == 0 ? str.tostring(lots, "0.00") + " lots"
+                             : f_ccy(posDir * (close - posEntry)), cVal)
 
 plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
 plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)

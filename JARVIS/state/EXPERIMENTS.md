@@ -6258,3 +6258,72 @@ price the trade no longer fits the 1.2 ATR cap that keeps the worst trade at
 now shows it as **"enter by"** with the points of chase remaining, and it goes red
 when there is none left. **Past that price the trade should be skipped, not
 chased.**
+
+---
+
+## E-148 — IS THE ORDER BLOCK'S "TOP TICK" REAL, OR DRAWN IN HINDSIGHT?
+`JARVIS/research/ob_hindsight.py`
+
+Veer sent five XAUUSD M1 screenshots: *"it catches top tick entrys and some that
+we wouldnt missed or been late on... use logic when auditing, actually try to
+disprove your point"*. So this is the disproof attempt, and it found something
+better than either of us expected.
+
+### LOOK AT WHERE THE MARKER IS DRAWN
+wugamlo's indicator plots the triangle with `offset = -ob_period` — back on the
+**order block candle**. But the block is only identified after `periods` more
+candles have closed the other way. On these settings that is **four bars later**.
+
+So the triangle sits on the extreme of the move and **that price was not
+knowable when it is drawn**. The indicator is drawing history correctly; the
+danger is reading *entries* off it, because the eye sees a marker at the top tick
+and concludes the top tick was catchable. **This is the same class of error as
+E-110**, which invalidated six separate "validations" in this project.
+
+Three entries, identical stop, identical 1.2 ATR cap, identical give-back exit.
+Only the entry price differs:
+
+| entry | n | /day | win% | points | per trade |
+|---|---|---|---|---|---|
+| **A at the marker — IMPOSSIBLE** | 6667 | 61.1 | **76.4%** | 632.1 | +0.0948 |
+| **B at detection — earliest actionable** | 1472 | 13.5 | 61.1% | 41.2 | **+0.0280** |
+| **C on the return — what shipped** | 6026 | 55.3 | 60.4% | 98.1 | +0.0163 |
+
+### BOTH HALVES OF THE ANSWER MATTER
+**The top tick is partly an illusion.** A wins **76.4%** and cannot be traded —
+that is the size of what the eye is seeing, and no live version of this reaches
+it.
+
+**But Veer's instinct was right about the direction.** Entering at **detection**,
+market, on the confirming bar — the earliest a human or an EA could act — beats
+waiting for the return by nearly **double** per trade on M1 (+0.0280 vs +0.0163)
+and by **2.4×** on M5 (+0.1055 vs +0.0443). And it is the more robust of the two:
+
+```
+M1  at detection    IS +0.0263  ->  OOS +0.0297      out of sample is BETTER
+    on the return   IS +0.0173  ->  OOS +0.0152
+M5  at detection    IS +0.1470  ->  OOS +0.0652
+    on the return   IS +0.0578  ->  OOS +0.0307
+```
+
+He said the block *catches the birth of the move*, and the measurement agrees —
+the shipped version was waiting for a pullback that costs half the edge.
+
+**The return entry is not dropped**, because it fires four times as often and so
+still makes more total points (98.1 vs 41.2 on M1). They are different moments
+and both are positive.
+
+### SHIPPED
+`Order block entry` — **at detection / on the return / both**, defaulting to
+**both**. Detection entries draw as a filled circle, return entries as a hollow
+diamond, so which one fired is never ambiguous. The 1.2 ATR risk cap gates both.
+
+### ON THE MULTI-MARKET TEST HE OBJECTED TO
+> *"why u testing other pairs i told u i saw insane results on xau m1"*
+
+Fair challenge, and the answer is that it was the test most likely to **destroy**
+the strategy rather than flatter it. Anything can look good on the one sample it
+was built from; the only way to tell a market structure effect from a curve fit
+is to point it somewhere it was never tuned. The sweep came back positive in all
+six cells with no re-fitting (E-146) — that is the strongest reason to trust the
+XAU M1 numbers, not a distraction from them. XAU M1 remains the shipping target.
