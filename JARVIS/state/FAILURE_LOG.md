@@ -348,3 +348,50 @@ Prime's actual stops level, freeze level, volume min/step, tick size, filling
 mode and XAUUSD margin are all numbers the code now reads instead of assuming,
 but which of them bite can only be seen on a live chart. **Print them all in
 OnInit and read them off the terminal before the funded account.**
+
+---
+
+## 2026-09-06 — THE CHART WAS MORE OPTIMISTIC THAN THE BACKTEST
+
+A code review of the E-151 fix found that I had fixed the research and shipped a
+DIFFERENT fix to the Pine.
+
+`engine.trail_level()` returns `None` meaning *exit at this bar's close*, and
+every research call site does exactly that. The Pine instead moved the stop to
+the close and held the position into the next bar. Not wrong in an obvious way —
+it is a third model, and it fires on about **40% of trades**, booking **9.4% per
+trade more** than the strategy the file's own header claimed to be measuring.
+
+Worse, in the same file: the SWEEP's headline block still carried the pre-E-151
+numbers — *"2579 trades, 65.1% win, +309.5 pts"* — which the reviewer reproduced
+exactly by restoring the bug. The corrected figures were fifty lines below.
+**One file, two contradictory results for the same signal, and the wrong one at
+the top**, on the only signal that is on by default. I annotated signals 2 and 3
+as withdrawn and missed signal 1, because signal 1 was the one that survived and
+I stopped reading.
+
+Also found: a control in `sweep_parity.py` still running the leaky trail,
+because it wrote its give-back as a literal `0.75` and my patch matched
+`1.0 - give`. **The book was corrected and its own control was not.**
+
+### The three lessons
+1. **A fix applied to the model must be applied to the display, in the same
+   change, in the same words.** Two implementations of one rule is how E-151
+   started; I ended the day having created a third.
+2. **When a correction withdraws some numbers, re-read EVERY number in the file,
+   including the ones about the thing that survived.** Surviving is not the same
+   as being unchanged.
+3. **A mechanical patch matches a pattern, not a meaning.** The regex fixed ten
+   sites and missed one that spelled the same idea differently. `check_trails.py`
+   now greps for the defect by shape and found **eleven** more files — three of
+   them the human review had also missed.
+
+### And a self-inflicted one, same day
+Adding those E-151 banners to eleven files prepended a SECOND module docstring,
+which puts a string literal ahead of `from __future__ import annotations` and
+stopped nine of them compiling. I swept with `ast.parse` and it passed —
+**the `__future__` position rule is enforced by the compiler, not the parser.**
+The breakage surfaced only when the test suite imported one of the files, after
+the commit was pushed. `check_trails.py` now compiles every research file before
+doing anything else. **A syntax check that is not the real compiler is not a
+syntax check.**

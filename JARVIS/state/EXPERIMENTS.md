@@ -6879,3 +6879,55 @@ cannot answer.
 `showSess and ...`, so hiding the session shading would have silently switched
 off any filter built on them. Detection is now separate from drawing — the same
 defect, and the same fix, as the order-block one earlier today.
+
+---
+
+## E-163 — THE COOLDOWN WAS NEVER CHOSEN, IT WAS ASSUMED
+
+A code review found that the research waits 5 bars after an exit before taking
+another trade and the Pine waits 1, so the panel would always report more trades
+than the header. Rather than force one to match the other, the parameter was
+measured for the first time.
+
+```
+  M1 cooldown      n   win%   points   /trade   maxDD   |  M5      n   points   /trade
+          0     4407  53.9%    354.1  +0.0803     2.6   |       1043    205.7  +0.1972
+          1     4265  53.9%    340.1  +0.0797     3.2   |        994    204.5  +0.2058
+          5     3916  53.5%    301.5  +0.0770     3.3   |        884    180.6  +0.2043
+         20     2854  53.8%    219.9  +0.0771     2.2   |        632    136.6  +0.2161
+         60     1669  54.0%    133.3  +0.0799     3.2   |        354     60.2  +0.1702
+```
+
+**Per-trade is flat from 0 to 60 bars** — +0.0770 to +0.0803 on M1, +0.1702 to
++0.2161 on M5, with no trend in either. The cooldown is **not a strategy
+parameter, it is a throttle**: waiting longer does not improve the trades you
+take, it only means you take fewer of them.
+
+Two consequences, and the second is the useful one:
+1. The Pine's natural behaviour (wait for the position to be flat, no artificial
+   delay) is correct and is left alone. Nothing about the signals changes.
+2. **Every point total in this repo measured at cooldown 5 is CONSERVATIVE by
+   about 13%** — 301.5 against 354.1 on M1, at an identical per-trade edge. The
+   headline numbers understate the strategy rather than flattering it, which is
+   the direction you want an unexamined assumption to point, but it was luck
+   rather than judgement.
+
+---
+
+## E-147 — RE-RUN UNDER THE CORRECTED TRAIL, AND IT SURVIVES
+
+The Pine cites E-147 as settled proof that partials cost money, and E-147 was
+measured under the E-151 leak, so the citation was not admissible until re-run.
+Re-run:
+
+```
+  M5 exit                    n    win%   points   per trade   maxDD GBP  worst GBP
+    no partial (shipped)   567   57.8%    107.1     +0.1889       24.98      -8.22
+    close 50% at 1.0R      567   60.1%     63.4     +0.1119       28.10      -8.22
+    close 33% at 2.0R      567   58.2%     97.1     +0.1712       25.59      -8.22
+```
+
+**Every variant still banks less, on both clocks, and not one of them reduces
+the drawdown or the worst trade** — the two things a partial is supposed to buy.
+Out of sample the shipped exit is +0.2213/trade against +0.1455 for the best
+partial. E-147 stands, and the Pine may keep quoting it.
