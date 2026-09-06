@@ -1,113 +1,94 @@
-# SESSION STATE — 2026-09-03
+# SESSION STATE — 2026-09-06
 
-Branch: `claude/trading-ea-pine-scripts-xv4m8q` (the JARVIS history was merged
-onto it from `claude/jarvis-ai-operating-system-2xaclm`; that branch is now
-behind and should not be worked on).
+Branch: `claude/trading-ea-pine-scripts-xv4m8q`.
 
-## What this session settled
+## What this session found, in one line
 
-Five things, all measured, four of them negative or narrowing — which is what
-progress looks like here.
+**A measurement bug was making three of the four shipped signals look
+profitable. They are not. The sweep is the strategy, and it survived the
+correction intact.**
 
-### E-092 / P92 — the Pine and the EA were not the same strategy
-The assumption the whole project rests on, unchecked in 180 commits.
+## E-151 — the bug
 
-- **SuperTrend indicator parity is EXACT.** 0 of 3944 bars disagree on GOLD 15m,
-  0 of 13115 on 1h. The EA's 400-bar recompute really does equal
-  `ta.supertrend`. A whole suspected defect class is closed.
-- **The Pine printed 346 BUY/SELL labels where the EA took 165** (1010 vs 466 on
-  1h). Every EA entry was on the chart, so the Pine is a strict superset, and
-  **52-54% of the chart's labels are trades the EA refuses.** All of it the DEMA
-  gate, which the Pine never had. Veer hand-trades this chart.
-- **The live-account defect:** the Pine auto-switched the DEMA to 60 on M1 while
-  the EA was hard-wired to 200. On the one timeframe the EA is *for*, the two ran
-  different filters. DEMA(60) and DEMA(200) pick the same trade only 74% of the
-  time.
-- The EA seeded its EMA from a single close; Pine seeds from an SMA. 2.0% of
-  bars disagreed on the slope SIGN. Fixed → 0.1%.
-- **I nearly overclaimed.** Under the shipped exit the refused flips looked
-  clearly bad. Across six exit stacks they are negative 6/6 on 15m but
-  **positive 4/6 on 1h**, and no t clears 2.2. E-074's "only the DEMA gate has
-  ever paid for itself" was measured under one exit and is downgraded. So the
-  Pine SHOWS the gate rather than adopting it.
+Every give-back trail in this repo computed its stop level from a bar's own
+high, then let the next bar fill at it — **even when that level was on the far
+side of the bar's close.** For a long that is a sell-stop above the market: an
+order that cannot exist. The backtest was paying itself the bar's own
+favourable extreme.
 
-Shipped: **EA 2.22**, **Pine 3.8** (refused flips dimmed, reusing the existing
-mid-range dim and the same two plotshapes — no new chart objects). Residual
-disagreement 3 of 1332 flips.
+The same three lines were copy-pasted into **twelve** files. The tell was that
+"best give-back" ran to the tightest value in every range tested, on every
+signal, on both clocks — *a parameter monotone to the edge of what you tried is
+a leak, not an optimum.*
 
-### E-093 / Block F — the consistency rule is the funded problem
-`prop_sim.py` could not answer this: it scores closed trades, so it never sees
-the floating loss every firm measures the daily limit against — the way funded
-accounts actually die. `funded.py` simulates bar by bar.
+Fixed: one function, `trail_level()` / `trail_apply()` in `engine.py`, used by
+every call site, with a regression test including a grid property check that no
+returned stop is ever on the wrong side of the close.
 
-Isolating the rule over 2000 attempts per firm: **FundingPips 92.1% → 29.7%,
-E8 performance 92.7% → 23.1%.** Bigger than daily loss and max drawdown
-combined. FTMO, FundedNext, E8 Classic and The5ers have no such rule.
-**The E8 trap: challenge 90.8%, funded stage 23.1% — you pass and then cannot
-get paid.**
+## What the correction cost, and what survived
 
-- **Sizing cannot fix it** (it is a ratio; cutting risk made it worse).
-- **A daily profit lock alone cannot** (50-58% against a 40% cap).
-- **Frequency dissolves it.** 2/day 24.0%, 10/day 99.9%. **Veer has been right
-  to demand frequency, and this is the hardest number yet attached to it.**
-- But frequency costs R, and at cost/stop 0.14 **100/day COLLAPSES to 16.5%** —
-  the size per trade gets too small to reach target in time. **Target 10-50/day.**
+| | before | corrected |
+|---|---|---|
+| M1 sweep | +0.1200/trade | **+0.0713** (n=4045, t=14.3) |
+| M1 break+retest | +0.0483 | **−0.0095** |
+| M1 order block detection | +0.0280 | **−0.0089** |
+| M1 order block return | +0.0163 | **−0.0319** |
 
-Shipped: **LiquiditySniper 3.10** — seven firm presets, one input block, and
-three real fixes: the floor is the FIRM's floor not the equity peak (3.05 was
-harsher than any real rule), state persists across restarts (a restart used to
-hand the EA a fresh daily allowance the firm had not given it), and every limit
-is enforced at 80% of its value. Card: `JARVIS/ea/FUNDED_CARD.md`.
+The sweep is 65 standard errors above a time-shifted control **which itself
+loses 193 points** — so the money is in the level, not in the trail. It is
+positive in 6 of 6 instrument/timeframe cells off XAUUSD; the order block is
+negative in 6 of 6.
 
-### E-094 — sideways detection: six detectors, none earns its place
-In-sample, refusing each one's worst quintile "worked" 5 of 6 on 15m. That is
-cherry-picking. **The tell: the detectors do not agree with themselves across
-markets** — `contain`'s worst quintile is Q1 on 15m (POSITIVE, +30 points) and
-Q5 on 1h. Walk-forward, nothing survives on both timeframes. `alternate` —
-Veer's own "up down candles" taken literally — threw away 1201 points on 1h.
+**The three extras are OFF by default in both the Pine and the EA.** They are
+not noise — they beat a random entry — they just do not clear the spread. The
+order blocks still DRAW, because that is what Veer asked for and the structure
+is real.
 
-Same answer E-053 gave: the regime is real, the filter is not. Nothing gains the
-power to refuse a signal; containment joins the spacing ratio in the status line
-as a reading that gates nothing.
+## The exit: asked four ways, unchanged
 
-### E-095 — peak capture: there is nothing to capture on small moves
-**I corrected my own measurement mid-experiment.** The first run modelled only
-the 3.0 ATR trail and said the 1-2R bucket keeps 2-4%. With a 2.0 ATR risk a
-3.0 ATR trail cannot protect anything under 1.5R. The EA also has a give-back
-stop from 1.0R; with the full stack the bucket keeps **80%**. I nearly reported
-a defect that does not exist.
+E-153/154/155/156/157. No exit rescues the three dead signals (8 cells, 8
+rejects). The sweep looked like it wanted a 3-ATR trail (+27% points on M1
+unseen, +47% on M5) — until it was priced: **max drawdown £18 → £60 at 0.01
+lots, which is the whole live account,** and E-081 says the lot size cannot go
+lower. Then the prop rules decided it: **the 25% give-back wins 28 of 28 cells
+against ATR trails and 28 more against wider give-backs.** Its R distribution
+has half the standard deviation, and every prop rule is a variance test.
 
-The sub-1R trades are **not underprotected winners** — they are losses that
-briefly showed a small profit (53 of them banked −829.5 points, mean MFE
-0.10-0.74R). There is no peak there to take.
+**Nothing about the exit changed. It was already right.**
 
-But the full stack exposed the real cost: **arming at 0.6R, 1.0R, 1.5R or 2.0R
-eliminates every trade that reaches 4R, on both timeframes.** E-090 in a
-different hat. 4.0R is the only value that beats OFF on both. **The default is
-NOT changed** — 1.0 is Veer's written instruction and a preference is not a
-defect — but the price is now documented beside the input.
+## The funded-account answer
 
-### E-096 — the £40 squeeze, resolved: the account must be larger
-I threw away my own first answer. Bootstrapping the strategy's own trades said
-£40 at 5.3% risk had a 0.7% ruin chance and a **median 11× outcome**. Nonsense:
-the bootstrap is fed the backtest's +0.181R mean, so it can only confirm it.
+Simulated at 0.25% risk a trade, sweep only:
+- FTMO, FundedNext, E8 Classic, The5ers — **~100%**
+- FundingPips — **86%**
+- Alpha Capital — 48% on M1, **96.5% on M5**
+- E8 performance — 5.8% on M1, **72.2% on M5**
 
-The measured edge is **+0.181R ± 0.101 (n=112); the 95% interval [−0.017,
-+0.380] does not exclude zero.** So: what edge does a given account NEED?
+**M5 is the funded clock.** M1 makes more money and fails the consistency-rule
+firms. 0.50% risk is worse at every single firm.
 
-**At E-089's M1 edge (+0.041R), £40 has a 33.2% chance of halving. £100 has
-1.0%.** This is not about the strategy — £0.787/point at 0.01 lots is a broker
-floor and 2.7 points of stop is a spread floor, so £2.12 of risk is fixed.
-**Only the denominator can move. £100 is the threshold, and the £40 → £100 leg
-is the only phase of the plan with meaningful ruin risk.**
+**SuperTrend is not funded material** (E-158): it fails 3 of 7 firms on
+consistency because its best day is 42.8%–78.4% of its profit. It belongs on
+Veer's own live account, where nobody enforces that.
 
-## The blocker, re-verified this session, not taken on trust
-**There is still no M1 or M5 data in `data/`.** I probed stooq, dukascopy,
-binance and yahoo: the gateway answers **403 to CONNECT** on all four
-(`curl "$HTTPS_PROXY/__agentproxy/status"` shows the rejections). It genuinely
-cannot be fetched from inside a session. `JARVIS/ea/tools/ExportHistory.mq5`
-fixes it in one drag-and-drop from Veer's terminal.
+## The EAs: 23 live-safety defects, none of them syntax
 
-**Four of this session's five findings name M1 as the thing that would settle
-them.** If `GOLD_M1.json` arrives, re-run E-069, E-077, E-080, E-083, E-089,
-E-091 and then E-093's frequency row and E-096's edge row.
+Both files passed the static checker and always did. The pattern was one thing
+twenty-three times: **a trade call whose result is discarded, followed by a log
+line announcing success.** The worst four: a pending-order ticket that three
+ordinary events silently zeroed, after which the EA armed a second order on top
+of a live one; guards that declined new trades but never closed the position
+that breached them; a max drawdown measured from attach equity instead of peak;
+and the give-back close — the EA's *only* exit — sent unchecked. All fixed, all
+in `FAILURE_LOG.md`.
+
+## THE ONE THING THAT HAS NOT CHANGED
+
+**Nothing here has ever been forward tested.** Not one trade. Every number in
+this file is a backtest on 2018 gold that has never met a real spread, a real
+requote, a real fill or a real Sunday gap. The funded pass rates are the best
+available answer to Veer's question and they are not a promise.
+
+**The single blocking item for live or funded money is a demo run that measures
+real stop-fill slippage.** E-155 shows M1 dies at 0.10 points of slippage and
+survives 0.05. Which world we are in is not knowable from here.
