@@ -240,6 +240,7 @@ struct ObZone
 };
 ObZone g_obB, g_obS;
 int    g_armSrc = 0;      // 1 sweep, 2 break+retest, 3 OB detect, 4 OB return
+int    g_armSide = 0;     // E-164: -1 sell setup armed, +1 buy, 0 none
 
 int      g_atr = INVALID_HANDLE;
 datetime g_lastBar = 0;
@@ -825,10 +826,16 @@ void TryArm()
          g_pend = trade.ResultOrder();
          g_pendDir = dir;
          PB_NoteOrder(g_pend, (bid + ask) / 2.0);
-         Log(StringFormat("armed %s limit at %.*f, stop %.*f (%.2f ATR), %.2f lots",
+         // E-164. The setup used to be RESET here, which froze its extreme at
+         // the moment of arming. The research keeps extending the extreme
+         // right up to the bar before the fill - all closed bars, nothing
+         // unknowable - and that is worth +0.0873 a trade against +0.0774
+         // frozen, 255.7 points against 233.8. So the setup stays live and
+         // ReviseArmed() below moves the resting order's stop with it.
+         g_armSide = sellSide ? -1 : 1;
+         Log(StringFormat("armed %s stop at %.*f, stop %.*f (%.2f ATR), %.2f lots",
                           sellSide ? "SELL" : "BUY", dg, lvl, dg, stop,
                           risk / s.atr, lots));
-         if(sellSide) ResetSetup(g_sell); else ResetSetup(g_buy);
          return;
       }
       Log(StringFormat("arm failed: %d %s", trade.ResultRetcode(),
@@ -888,6 +895,53 @@ void TryArm()
    }
 }
 
+// E-164. While our order rests at the level, the sweep can keep running. The
+// invalidation moves with it, so the stop must too - and if it moves so far
+// that the setup breaches the risk cap, the trade is no longer the one that was
+// measured and the order is cancelled rather than taken at a size we refused.
+// Everything here is read off CLOSED bars; nothing about the filling bar is
+// used, which is the look-ahead this same fix removed from the Pine.
+void ReviseArmed()
+{
+   if(g_armSide == 0 || PendingCount() == 0) return;
+   // No struct ternary in MQL5, and the fields are lvl/ext/atr - read them out
+   // explicitly rather than copying a Setup around.
+   bool   sellSide = (g_armSide < 0);
+   bool   live     = sellSide ? g_sell.live  : g_buy.live;
+   int    swept    = sellSide ? g_sell.swept : g_buy.swept;
+   double lvl      = sellSide ? g_sell.lvl   : g_buy.lvl;
+   double ext      = sellSide ? g_sell.ext   : g_buy.ext;
+   double atr      = sellSide ? g_sell.atr   : g_buy.atr;
+   if(!live || swept < 0) { g_armSide = 0; return; }
+   int    dir  = sellSide ? -1 : 1;
+   double want = NormPx(ext - dir * InpStopBufAtr * atr);
+   double risk = MathAbs(lvl - want);
+   if(atr > 0.0 && risk > InpMaxRiskAtr * atr)
+   {
+      Log(StringFormat("cancelling armed order: the sweep kept running and the "
+                       "stop is now %.2f ATR, over the %.2f cap",
+                       risk / atr, InpMaxRiskAtr));
+      KillPending("risk cap breached after arming");
+      if(sellSide) ResetSetup(g_sell); else ResetSetup(g_buy);
+      g_armSide = 0;
+      return;
+   }
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      double have = OrderGetDouble(ORDER_SL);
+      if(MathAbs(have - want) < _Point) continue;
+      double px = OrderGetDouble(ORDER_PRICE_OPEN);
+      if(!trade.OrderModify(tk, px, want, 0.0, ORDER_TIME_GTC, 0))
+         Log(StringFormat("could not move the armed stop to %.*f: %d %s",
+                          (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS), want,
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+   }
+}
+
 void AgePending()
 {
    if(PendingCount() == 0) { g_pend = 0; return; }
@@ -909,7 +963,19 @@ void AgePending()
                                trade.ResultRetcodeDescription()));
       }
    }
-   if(PendingCount() == 0) { g_pend = 0; g_pendDir = 0; }
+   if(PendingCount() == 0)
+   {
+      g_pend = 0;
+      g_pendDir = 0;
+      // E-164: the setup now survives arming, so when its order is cancelled
+      // the setup has to go with it - otherwise the next bar simply re-arms a
+      // setup that has already been declared stale.
+      if(g_armSide != 0)
+      {
+         if(g_armSide < 0) ResetSetup(g_sell); else ResetSetup(g_buy);
+         g_armSide = 0;
+      }
+   }
 }
 
 //==================== THE GIVE-BACK TRAIL ==========================
@@ -1274,6 +1340,7 @@ void OnTick()
       UpdateSetups();
       UpdateBr();
       UpdateOb();
+      ReviseArmed();          // E-164, before ageing so a cancel is not missed
       AgePending();
       if(PosCount() == 0) TryArm();
    }
@@ -1304,6 +1371,9 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       // tripped the daily circuit breaker on trades that never happened.
       if(pid != g_lastPosId) { g_tradesToday++; g_lastPosId = pid; }
       g_pend = 0;
+      g_armSide = 0;
+      ResetSetup(g_sell);
+      ResetSetup(g_buy);
       g_posDir = 0;                       // TrailStop re-seeds from the position
       PB_PromoteOrder((ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER),
                       pid, HistoryDealGetDouble(trans.deal, DEAL_PRICE));

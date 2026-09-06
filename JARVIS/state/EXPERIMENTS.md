@@ -6931,3 +6931,57 @@ Re-run:
 the drawdown or the worst trade** — the two things a partial is supposed to buy.
 Out of sample the shipped exit is +0.2213/trade against +0.1455 for the best
 partial. E-147 stands, and the Pine may keep quoting it.
+
+---
+
+## E-164 — THE SWEEP'S STOP WAS IN THREE DIFFERENT PLACES, AND THE CHART'S WAS CHEATING
+
+P92's lesson was that the chart and the EA were not the same strategy. This is
+the same defect one layer down — on the STOP rather than the signal — and again
+nothing in the repo noticed. A code review did.
+
+The sweep's stop sits `stopBuf` past the sweep's extreme. All three
+implementations extended that extreme differently:
+
+```
+  M1  where the extreme stops        n  refused   win%   points   /trade   worst
+      at the sweep    (the EA)    3020     1762  54.2%    233.8  +0.0774   -0.80
+      at the fill     (research)  2929     2117  55.9%    255.7  +0.0873   -0.80
+      past the fill   (old Pine)  2675     2834  66.4%    368.9  +0.1379   -0.86
+
+  M5  at the sweep    (the EA)     650      434  55.7%    124.0  +0.1908   -1.25
+      at the fill     (research)   640      501  58.0%    134.8  +0.2106   -1.25
+      past the fill   (old Pine)   601      661  67.2%    185.0  +0.3078   -1.25
+```
+
+### The Pine variant was a SECOND look-ahead
+Extending the extreme through the filling bar puts the stop **beyond the low of
+the very bar that filled you** — so that bar can never stop you out. At the
+moment the stop must actually be placed, that bar's final low is not known.
+It is worth **+0.0506 a trade and 10.5 points of win rate** on M1: 66.4% against
+the honest 55.9%.
+
+That is almost exactly the inflation the E-151 trail leak produced (65.1%), from
+a completely different mechanism, in the same file. **Two independent flatterers
+were stacked on the same chart**, and either one alone would have made the
+strategy look like something it is not.
+
+Fixed: the Pine now uses the extreme as it stood at the previous bar's close.
+
+### And the EA was leaving money on the table
+The EA arms a resting stop order and used to RESET the setup at that moment,
+freezing the extreme where it stood. But the sweep can keep running while the
+order rests, and every bar of that is CLOSED data — knowable, not look-ahead.
+Extending it to the bar before the fill is worth **+0.0873 against +0.0774 a
+trade, 255.7 points against 233.8**, about 9%.
+
+So the EA keeps the setup alive while its order rests, and `ReviseArmed()` moves
+the resting order's stop out with the extreme each bar. If the sweep runs far
+enough that the stop would breach the 1.2 ATR risk cap, **the order is cancelled
+rather than taken at a size we already refused** — which is exactly what the
+research does when it declines the setup at fill time. The refusal count is the
+tell that this is not free: 2117 refusals against 1762.
+
+**All three now agree.** `JARVIS/tools/check_parity.py` checks the defaults;
+this one needed a measurement, because the three behaviours were each defensible
+in isolation and only one of them was what the numbers described.

@@ -379,8 +379,17 @@ readyB = posDir == 0 and not na(swB) and bar_index > swB and high >= lvlB
 
 // THE RISK CAP. A stop wider than maxRisk ATR is refused outright - 0.01 lots
 // is the floor (E-081), so a stop too wide to afford cannot be sized down.
-riskS = readyS ? math.abs(lvlS - (extS + stopBuf * atrS)) : na
-riskB = readyB ? math.abs(lvlB - (extB - stopBuf * atrB)) : na
+// PARITY. The research stops extending the sweep's extreme at the bar BEFORE
+// the return fills, and this file was extending it ON the fill bar - so the
+// chart's stop sat further away than the stop every measured number was
+// computed with. A wider stop is not a harmless difference: it is hit less
+// often, which flatters, and it breaches the risk cap more often, which
+// refuses trades the research took. Use the extreme as it stood at the close
+// of the previous bar, which is what was actually knowable.
+extSf = nz(extS[1], extS)
+extBf = nz(extB[1], extB)
+riskS = readyS ? math.abs(lvlS - (extSf + stopBuf * atrS)) : na
+riskB = readyB ? math.abs(lvlB - (extBf - stopBuf * atrB)) : na
 tooWideS = readyS and riskS > maxRisk * atrS
 tooWideB = readyB and riskB > maxRisk * atrB
 
@@ -638,7 +647,7 @@ if anyBuy or anySell
     posEntry := takeSweepB ? lvlB : takeSweepS ? lvlS :
                 takeBrB    ? rTrig : takeBrS   ? sTrig :
                 takeObB    ? obBullTop : takeObS ? obBearBot : close
-    posStop  := takeSweepB ? extB - stopBuf * atrB : takeSweepS ? extS + stopBuf * atrS :
+    posStop  := takeSweepB ? extBf - stopBuf * atrB : takeSweepS ? extSf + stopBuf * atrS :
                 takeBrB    ? rStop : takeBrS ? sStop :
                 takeObB    ? obBullBot - stopBuf * atr :
                 takeObS    ? obBearTop + stopBuf * atr :
