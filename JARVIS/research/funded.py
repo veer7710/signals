@@ -34,7 +34,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
-from engine import Series, atr as watr
+from engine import Series, atr as watr, trail_apply
 
 
 # ----------------------------------------------------------------- the rules
@@ -294,8 +294,13 @@ def build_positions(s: Series, atr_len=7, mult=1.2, dema_len=200, warm=400,
                 i_out, exit_px = j, stop - side * spread / 2.0
                 break
             peak = max(peak, s.h[j]) if side > 0 else min(peak, s.l[j])
-            t = peak - side * trail_atr * a
-            stop = max(stop, t) if side > 0 else min(stop, t)
+            # E-151: a trail derived from THIS bar's extreme cannot be placed
+            # on the far side of THIS bar's close. If it is, exit at the close.
+            ns = trail_apply(stop, peak - side * trail_atr * a, s.c[j], side)
+            if ns is None:
+                i_out, exit_px = j, s.c[j] - side * spread / 2.0
+                break
+            stop = ns
         if i_out is None:
             i_out = min(i + max_bars, n - 1)
             exit_px = s.c[i_out] - side * spread / 2.0

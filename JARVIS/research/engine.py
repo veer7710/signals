@@ -376,7 +376,16 @@ def trail_level(entry, sl, peak, close_k, d, give):
     up = d * (peak - entry)
     if up <= 0:
         return sl
-    c = entry + d * up * (1.0 - give)
+    return trail_apply(sl, entry + d * up * (1.0 - give), close_k, d)
+
+
+def trail_apply(sl, c, close_k, d):
+    """Ratchet sl to the candidate level c, or None if c is unplaceable.
+
+    Any trail - give-back, ATR, chandelier - has to pass through here. The one
+    rule: a stop on the far side of the close cannot be sent to a broker and
+    must never be filled in a backtest.
+    """
     if d * (c - close_k) >= 0:      # the level is behind price: unplaceable
         return None                 # -> the honest exit is this bar's close
     return max(sl, c) if d > 0 else min(sl, c)

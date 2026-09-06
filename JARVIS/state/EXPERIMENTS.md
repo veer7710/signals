@@ -6566,3 +6566,136 @@ measures real fills, **M5 is the robust default and M1 is the aggressive one.**
 **A parameter that is monotone to the edge of the range you tested is a leak
 until proven otherwise.** Extend the range. If it keeps running, look at the
 fill, not the parameter.
+
+---
+
+## E-153 — EACH SIGNAL ITS OWN EXIT, ASKED AGAIN UNDER HONEST FILLS
+
+Veer: *"yes each signal its own"*. E-150 asked it on a broken trail, so it was
+asked again with `engine.trail_level`, and with the exit he has actually been
+requesting for weeks finally on the menu — **a target set by the next opposing
+level**, not by a multiple of risk.
+
+Menu: give-back 0.15–0.80, ATR trail 1–5, fixed 1R–3R, `level` (exit at the
+nearest opposing swing that was ALREADY KNOWN at entry), `level+trail`, and
+`level_cap r` (refuse the trade if the level is nearer than r × risk).
+
+**Protocol, and this is what E-150 got wrong:** the winner is chosen on the
+FIRST half and judged on the SECOND half, which the choice never saw — plus a
+minimum of 100 unseen trades. That minimum is not decoration: the first run of
+this file "adopted" a level target for break+retest on **25** unseen trades.
+Twenty-five trades is a coin landing the same way, not a result.
+
+### Q1: can a different exit rescue the three dead signals? NO.
+Eight cells (break+retest, OB detection, OB return × M1, M5), eight rejects.
+Every winner either failed to beat the shipped exit on unseen data, or beat it
+and still lost money, or won on a sample too small to mean anything. **The
+E-151 verdict stands: they draw, they do not trade.**
+
+### Q2: does the sweep want something else? On points, yes.
+```
+  M1 SWEEP  pick 'atr 3'   unseen  +134.4 pts  +0.0892/tr  28.7% win
+            shipped        unseen  +137.8 pts  +0.0702/tr  53.3% win
+  M5 SWEEP  pick 'atr 3'   unseen   +93.3 pts  +0.3131/tr  26.5% win
+            shipped        unseen   +89.2 pts  +0.2123/tr  55.6% win
+```
+Same rule on both clocks, chosen blind, wins on data it never saw. That is a
+real finding and it went to E-154 to be priced.
+
+**Level-based targets, the honest answer:** they did not win anywhere with a
+usable sample. `level_cap` filters out so many trades (34 of 1008 on M1) that
+whatever it finds cannot be measured. The *idea* — take profit into the
+opposing liquidity — is not disproven; it is untestable at this sample size and
+must not be shipped on 25 trades.
+
+---
+
+## E-154 / E-155 — WHAT THE ATR TRAIL ACTUALLY COSTS
+
+```
+  M1  exit          n    win%   points   /trade      t   maxDD   DD GBP  run
+      give 0.25   4045  53.3%   288.6  +0.0713  14.26     3.0      18   10
+      give 0.4    3957  53.4%   311.0  +0.0786  13.18     3.3      19   10
+      atr 1.5     3702  40.8%   372.8  +0.1007  12.14     5.9      35   17
+      atr 2       3502  35.8%   373.0  +0.1065  10.65     5.1      29   19
+      atr 3       3100  28.0%   324.1  +0.1045   7.91    10.3      60   19
+```
+At 0.01 lots one point is **GBP5.81** (2018 gold scaled ×7.38, E-132). So `atr
+3` on M1 draws down **GBP60 — the entire live account**, and E-081 says the lot
+size cannot go lower to soften it. `give 0.25` draws down GBP18.
+
+The t-statistic tells the same story from the other end: 14.26 → 7.91. The ATR
+trail's extra points come from a few enormous winners (best trade 4.03 → 8.55)
+and it is four losers in five getting there, with a longest losing run of 19.
+
+**The stall exit — Veer's "take our peak and get out" — does nothing.**
+`atr 1.5` and `atr 1.5 stall 40` are identical to one decimal place on every
+column. The trail is already out before a stall counter can fire. Measured, not
+argued: it is not in the shipped code because it changes nothing.
+
+On **M5 the shipped exit is simply the best**, risk-adjusted and outright:
+`give 0.25` is top by points-per-drawdown, and `atr 3`'s extra 4.1 points on
+420 unseen trades cost 2.6× the drawdown. Nothing to change.
+
+---
+
+## E-156 — THE EXIT DECIDED BY THE RULES IT HAS TO LIVE UNDER
+
+Points and drawdown disagreed, so neither got to decide. The constraint that
+actually binds is the prop firm's rule book, so the exits were run through it.
+
+**Pass rate, 400 simulated accounts per cell, risking 0.25% a trade:**
+```
+  M1                                  give 0.25    atr 1.5      atr 3
+  FTMO 2-step phase 1                    100.0%     100.0%      96.8%
+  FundedNext Stellar 2-step phase 1      100.0%     100.0%      96.8%
+  FundingPips 2 Step Pro                  86.2%      73.2%      43.0%
+  E8 Classic phase 1                     100.0%      99.5%      93.5%
+  E8 performance (funded)                  5.8%       1.5%       0.8%
+  Alpha Capital Alpha One                 48.0%      24.2%      12.5%
+  The5ers High Stakes                    100.0%     100.0%      97.5%
+
+  M5                                  give 0.25    atr 1.5      atr 3
+  FTMO 2-step phase 1                    100.0%     100.0%      99.8%
+  FundedNext Stellar 2-step phase 1      100.0%     100.0%      99.2%
+  FundingPips 2 Step Pro                  85.8%      56.5%      20.2%
+  E8 Classic phase 1                     100.0%      99.8%      96.8%
+  E8 performance (funded)                 72.2%      35.5%       6.0%
+  Alpha Capital Alpha One                 96.5%      75.8%      23.2%
+  The5ers High Stakes                    100.0%     100.0%      99.8%
+```
+
+**The give-back wins every single cell — 7 firms × 2 risk levels × 2 clocks,
+28 out of 28.** It is not close: Alpha Capital 48.0% vs 12.5%, FundingPips
+86.2% vs 43.0%.
+
+The reason is in the R distribution. `atr 3` has the higher mean (+0.5965R vs
++0.4089R) and **more than double the standard deviation** (3.820 vs 1.750). Prop
+rules do not pay for mean, they charge for variance: a daily loss limit is a
+variance test, a minimum-profitable-days rule is a variance test, and a
+consistency cap explicitly punishes the one huge day that is exactly how the
+ATR trail makes its money.
+
+### DECISION
+**The shipped exit stays: a 25% give-back.** It was right, and it is now right
+for the reason that matters rather than by luck. Nothing changes in the Pine or
+the EA.
+
+### AND THE ANSWER TO "CAN I RUN THIS ON A FUNDED ACCOUNT"
+Simulated, at 0.25% risk a trade, sweep only:
+- **FTMO, FundedNext, E8 Classic, The5ers: ~100%.** These have no consistency
+  rule; a steady 53%-win book walks them.
+- **FundingPips: 86%.** The 3% daily / 6% max is tighter, the 35% consistency
+  cap bites occasionally.
+- **Alpha Capital: 48% on M1, 96.5% on M5.**
+- **E8 performance: 5.8% on M1, 72.2% on M5.** The 40% consistency cap plus a
+  6% target reached in few days is brutal on M1's trade count.
+
+**So M5 is the funded clock, not M1.** M1 makes more money and fails the
+consistency-rule firms. Raising risk to 0.50% makes every firm worse — for
+FundingPips 86%→75%, Alpha 48%→28%. **0.25% a trade or less.**
+
+**The caveat that does not go away:** these pass rates are computed on a
+backtested R distribution that has never met a real fill, a real requote, or a
+real Sunday gap. They are the best available answer to the question and they
+are not a promise.
