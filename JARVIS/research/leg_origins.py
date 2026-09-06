@@ -367,9 +367,15 @@ def med(v):
 
 
 def quart_split(rows, name, lab_key):
+    """Median label in the feature's top vs bottom quartile.
+
+    The sort key is the FEATURE ONLY. Sorting on the (value, label) tuple --
+    which is what this did first -- breaks ties by the label, so any feature
+    with ties (every binary one) got handed a fake separation: `swept` read
+    5.46 vs 1.59 while its AUC was 0.508."""
     v = [(r["f"][name], r[lab_key]) for r in rows if r["f"][name] == r["f"][name]]
     if len(v) < 40: return float("nan"), float("nan")
-    v.sort()
+    v.sort(key=lambda x: x[0])
     q = len(v) // 4
     return med([x[1] for x in v[-q:]]), med([x[1] for x in v[:q]])
 
@@ -471,48 +477,64 @@ def cmd_dist():
 def cmd_feat(thr=10.0):
     hdr(f"FEATURE SEPARATION — big-leg origin (>= {thr:.0f} ATR) vs the rest")
     print("  Selection sample = FIRST HALF. Reported sample = SECOND HALF (unseen).")
-    print("  'excess' = real AUC minus the mean null AUC on the same feature and")
-    print("  timeframe: features using bars p+1..p+3 overlap the label and score")
-    print("  on a random walk too. Excess is the only honest column.\n")
-    null_auc = {}
+    print("  LABEL A 'full'  = |terminal - origin| / ATR  (top-to-bottom, what Veer means)")
+    print("  LABEL B 'cap'   = terminal - close[p+3] / ATR (what is still there when")
+    print("                    the fractal confirms and the indicator can paint)")
+    print("  'exc' = real AUC minus the mean NULL AUC on the same feature/timeframe.")
+    print("  Features using bars p+1..p+3 overlap label A mechanically and score on a")
+    print("  random walk, so exc is the only honest column. Bonferroni |z| for 114")
+    print("  tests = 3.28.\n")
+    null_auc, null_cap = {}, {}
     for tf in ("M1", "M5", "M15"):
-        accs = {nm: [] for nm in FEATURES}
+        af = {nm: [] for nm in FEATURES}; ac = {nm: [] for nm in FEATURES}
         for seed in (11, 12):
             _, _, _, nr = prep(tf, synthetic=seed)
-            lab = [1 if r["full_atr"] >= thr else 0 for r in nr]
+            lb = [1 if r["full_atr"] >= thr else 0 for r in nr]
+            lc = [1 if r["cap_atr"] >= thr else 0 for r in nr]
             for nm in FEATURES:
-                a, n1, n0 = auc([r["f"][nm] for r in nr], lab)
-                if a == a: accs[nm].append(a)
-        null_auc[tf] = {nm: (sum(v) / len(v) if v else float("nan"))
-                        for nm, v in accs.items()}
+                v = [r["f"][nm] for r in nr]
+                a, _, _ = auc(v, lb)
+                if a == a: af[nm].append(a)
+                a2, _, _ = auc(v, lc)
+                if a2 == a2: ac[nm].append(a2)
+        null_auc[tf] = {nm: (sum(v)/len(v) if v else float("nan")) for nm, v in af.items()}
+        null_cap[tf] = {nm: (sum(v)/len(v) if v else float("nan")) for nm, v in ac.items()}
 
     for tf in ("M1", "M5", "M15"):
-        s, sp, vol, rows = prep(tf)
+        s_, sp, vol, rows = prep(tf)
         half = len(rows) // 2
         A_, B_ = rows[:half], rows[half:]
         labA = [1 if r["full_atr"] >= thr else 0 for r in A_]
         labB = [1 if r["full_atr"] >= thr else 0 for r in B_]
+        capB = [1 if r["cap_atr"] >= thr else 0 for r in B_]
+        dead = sum(1 for r in B_ if r["cap_atr"] <= 0) / len(B_)
+        bigs = [r for r in B_ if r["full_atr"] >= thr]
+        bigdead = (sum(1 for r in bigs if r["cap_atr"] <= 0) / len(bigs)) if bigs else float("nan")
         print(f"\n  --- {tf}: {len(rows)} leg origins "
-              f"({len(A_)} in-sample / {len(B_)} unseen), "
-              f"base rate {sum(labB)/len(labB):.4f} unseen "
-              f"({sum(labB)} big legs)")
+              f"({len(A_)} in-sample / {len(B_)} unseen), unseen base rate "
+              f"{sum(labB)/len(labB):.4f} ({sum(labB)} big legs); cap-label base "
+              f"{sum(capB)/len(capB):.4f} ({sum(capB)})")
+        print(f"      of unseen legs, {dead:.1%} are already OVER by the confirm bar "
+              f"p+3; of the >= {thr:.0f} ATR ones, {bigdead:.1%} are")
+        print(f"      median capturable share of a big leg: "
+              f"{med([r['cap_atr']/r['full_atr'] for r in bigs]):.2f}")
         res = []
         for nm in FEATURES:
             a1, x1, y1 = auc([r["f"][nm] for r in A_], labA)
             a2, x2, y2 = auc([r["f"][nm] for r in B_], labB)
+            a3, x3, y3 = auc([r["f"][nm] for r in B_], capB)
             rho = spearman([r["f"][nm] for r in B_], [r["full_atr"] for r in B_])
             top, bot = quart_split(B_, nm, "full_atr")
-            res.append((abs(a1 - 0.5) if a1 == a1 else -1, nm, a1, a2,
-                        auc_z(a2, x2, y2), a2 - null_auc[tf][nm], rho, top, bot))
+            res.append((abs(a2 - 0.5) if a2 == a2 else -1, nm, a1, a2,
+                        auc_z(a2, x2, y2), a2 - null_auc[tf][nm],
+                        a3, auc_z(a3, x3, y3), a3 - null_cap[tf][nm], rho, top, bot))
         res.sort(reverse=True)
-        print("     feature         AUC_is  AUC_oos      z   excess   rho   "
-              "medleg top-q  bot-q")
-        for _, nm, a1, a2, z, ex, rho, top, bot in res:
-            print(f"     {nm:<14} {a1:7.4f} {a2:7.4f} {z:6.2f} {ex:+7.4f} "
-                  f"{rho:+6.3f}   {top:7.2f} {bot:7.2f}")
-        # session, reported separately as a categorical
-        print("     session (hour of broker day, unseen half): "
-              "median full leg ATR by hour")
+        print("     feature        A_is   A_oos      z     exc | cap_oos      z     exc"
+              " |   rho   topq   botq")
+        for _, nm, a1, a2, z, ex, a3, z3, ex3, rho, top, bot in res:
+            print(f"     {nm:<13} {a1:6.3f} {a2:6.3f} {z:6.2f} {ex:+6.3f} | "
+                  f"{a3:6.3f} {z3:6.2f} {ex3:+6.3f} | {rho:+5.2f} {top:6.2f} {bot:6.2f}")
+        print("     session (hour of broker day, unseen half): median full leg ATR by hour")
         byh = {}
         for r in B_:
             byh.setdefault(r["hour"], []).append(r["full_atr"])
