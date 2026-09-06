@@ -6183,3 +6183,78 @@ Two answers, and the second is the real one:
    Fixed: a cost group charges the spread once and the slippage twice per trade,
    defaulting to a 0.30 spread and 0.02 per side. **The panel's numbers will drop
    and that is the correction, not a regression.**
+
+---
+
+## E-147 — PARTIALS: THEY COST MONEY AND BUY NOTHING
+`JARVIS/research/partials.py`
+
+Veer asked for partials on the chart. E-137 measured whole-position exits — fixed
+targets, ATR trails, give-backs, the next level — and never tested **splitting**
+the position. A chart drawing a partial level nobody has measured is a chart
+telling you to do something unknown.
+
+The intuition is real: banking half converts an open trade into closed profit and
+a free option. The cost is easy to miss — the half banked at 1R is the half that
+would have carried the trade that ran 6R, and this system's entire edge is a
+trail with no target.
+
+**M1 (shipped whole-position: 2579 trades, 309.5 points, max DD £12.68):**
+
+| exit | points | per trade | max DD | worst trade |
+|---|---|---|---|---|
+| **no partial (shipped)** | **309.5** | **+0.1200** | **£12.68** | −£4.63 |
+| close 33% at 2.0R | 273.6 | +0.1061 | £12.68 | −£4.63 |
+| close 50% at 2.0R | 255.1 | +0.0989 | £12.68 | −£4.63 |
+| close 33% at 1.0R | 230.3 | +0.0893 | £12.91 | −£4.63 |
+| close 50% at 1.0R | 189.5 | +0.0735 | £13.04 | −£4.63 |
+| close 50% at 0.5R | 129.1 | +0.0501 | £13.80 | −£4.63 |
+
+**Every variant loses money, on both clocks** (M5: 162.9 → best partial 148.1).
+The ladder is monotone — the later and smaller the partial, the less it costs,
+converging on "don't".
+
+**And the defence of partials fails too.** The honest case for them is a smoother
+path, not a bigger total. It does not appear: max drawdown is flat or *worse*
+(M5 shipped £21.06, partials £21–25), and the worst single trade is identical
+throughout because the stop never changed.
+
+Out of sample, both halves: M1 shipped +0.1238 / +0.1160 against 50%-at-1R's
++0.0769 / +0.0699. M5 the same shape.
+
+Verdict: **REJECTED.** Not on the chart, and the input tooltip says why, so nobody
+re-adds them on a hunch.
+
+---
+
+## AUDIT OF LIQUIDITY_SNIPER_2_0 — THREE DEFECTS FOUND BY READING IT BACK
+
+Veer: *"audit all changes you make... assume there's hidden bugs find and fix"*.
+
+**1. `box.new(na, …)` on a same-bar open-and-stop-out.** The live-drawing block
+fired on `anyBuy or anySell`, but a trade can open and be stopped out on the
+*same bar*, and the exit block resets `posBar` to `na` when it does. The drawing
+then ran with a `na` coordinate. Now gated on `posDir != 0` as well.
+
+**2. The panel booked GROSS points.** Entry to exit, no spread, no slippage —
+while every backtest number quoted for this system is NET. The chart flattered
+itself against its own evidence and there was no way to see it. A cost group now
+charges the spread once and the slippage twice per trade.
+
+**3. "LOCKED +0.0pt" was a lie.** The stop label went green the moment the trail
+reached the entry price, but **entry is not breakeven** — you are still down the
+round trip. The locked figure is now net, and a dotted **BREAKEVEN line** is drawn
+at `entry + dir × (spread + 2 × slippage)`, which turns green and reads
+"locked in" only once the stop is genuinely past it. That is the honest answer to
+"when to move to breakeven".
+
+### AND THE TRADINGVIEW-DELAY PROBLEM, MADE VISIBLE
+> *"trading view is delayed so i may miss a few points"*
+
+What breaks when you enter late is not the profit — it is the **risk**. The stop
+does not move when you chase, so every point of delay widens it, and past some
+price the trade no longer fits the 1.2 ATR cap that keeps the worst trade at
+−£4.63 (E-138). That price is computable: `stop + dir × maxRisk × ATR`. The panel
+now shows it as **"enter by"** with the points of chase remaining, and it goes red
+when there is none left. **Past that price the trade should be skipped, not
+chased.**

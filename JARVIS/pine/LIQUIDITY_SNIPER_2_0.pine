@@ -101,8 +101,8 @@ maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", 
      tooltip = "E-138. Not an optimisation - uncapped, the worst single trade was 57% of a GBP60 account.")
 giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
 maxHold  = input.int(240,  "Time exit (bars)", group = gR)
-tgtR     = input.float(0.0, "Draw a target at N x risk (0 = none)", group = gR, step = 0.5,
-     tooltip = "DRAWN ONLY - the exit is the give-back trail. Every fixed target measured worse (E-137). This is here so you can see where N x risk sits, not so the system aims at it.")
+tgtR     = input.float(0.0, "Draw a reference line at N x risk (0 = none)", group = gR, step = 0.5,
+     tooltip = "DRAWN ONLY. The exit is the give-back trail. Every fixed target measured worse (E-137), and PARTIALS at every level and size were measured too (E-147) - closing 33% or 50% at 0.5R, 1R, 1.5R or 2R all banked LESS than letting it run, and none of them reduced the drawdown or the worst trade either. Partials are not on this chart because they cost money and buy nothing measurable. This line is a ruler, not a target.")
 
 gT = "6 · SESSIONS"
 showSess = input.bool(true, "Show sessions", group = gT)
@@ -577,6 +577,8 @@ var line  pTp    = na
 var label lSl    = na
 var label lTp    = na
 var label lPnl   = na
+var line  pBe    = na
+var label lBe    = na
 
 f_killLive() =>
     if not na(pBox)
@@ -593,9 +595,16 @@ f_killLive() =>
         label.delete(lTp)
     if not na(lPnl)
         label.delete(lPnl)
+    if not na(pBe)
+        line.delete(pBe)
+    if not na(lBe)
+        label.delete(lBe)
     true
 
-if (anyBuy or anySell) and showLive
+// posDir is checked as well as the signal: a trade can open and be stopped
+// out on the SAME bar, and the exit block resets posBar to na when it does.
+// Without this guard that case called box.new(na, ...) with a na coordinate.
+if (anyBuy or anySell) and showLive and posDir != 0
     f_killLive()
     col = posDir > 0 ? cBuy : cSell
     pBox := box.new(posBar, posEntry, bar_index, close,
@@ -611,6 +620,15 @@ if (anyBuy or anySell) and showLive
     lPnl := label.new(bar_index, close, "", style = label.style_label_left,
          color = color.new(chart.bg_color, 100), textcolor = color.new(col, 0),
          size = size.small)
+    // THE REAL BREAKEVEN. Not the entry - the price at which the trade nets
+    // zero after the spread and both sides of slippage. Until the stop is past
+    // this line, "at breakeven" is a story.
+    bePx = posEntry + posDir * (spreadPts + 2.0 * slipPts)
+    pBe := line.new(posBar, bePx, bar_index, bePx,
+         color = color.new(#8FA3B8, 40), width = 1, style = line.style_dotted)
+    lBe := label.new(bar_index, bePx, "", style = label.style_label_left,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(#8FA3B8, 10),
+         size = size.tiny)
     if not na(posTgt)
         pTp := line.new(posBar, posTgt, bar_index, posTgt,
              color = color.new(cBuy, 30), width = 1, style = line.style_dotted)
@@ -627,6 +645,8 @@ if posDir == 0 and not na(pEnt)
     lSl  := na
     lTp  := na
     lPnl := na
+    pBe  := na
+    lBe  := na
 
 if posDir != 0 and showLive and not na(pEnt)
     live = posDir * (close - posEntry) - spreadPts - 2.0 * slipPts
@@ -640,7 +660,10 @@ if posDir != 0 and showLive and not na(pEnt)
     line.set_x2(pSl, bar_index)
     line.set_y1(pSl, posStop)
     line.set_y2(pSl, posStop)
-    locked = posDir * (posStop - posEntry)
+    // NET. A stop at the entry price is not breakeven - you are still down the
+    // round trip. This is the number that decides whether the trade is actually
+    // safe yet, and it is the honest version of "move to breakeven".
+    locked = posDir * (posStop - posEntry) - spreadPts - 2.0 * slipPts
     label.set_xy(lSl, bar_index, posStop)
     label.set_text(lSl, (locked >= 0 ? "LOCKED " : "SL ") + f_num(locked, "0.0")
          + "pt " + f_ccy(locked))
@@ -649,6 +672,16 @@ if posDir != 0 and showLive and not na(pEnt)
     label.set_text(lPnl, (posSrc == 1 ? "SWEEP " : posSrc == 2 ? "B+R " : "OB ")
          + f_num(live, "0.0") + "pt " + f_ccy(live))
     label.set_textcolor(lPnl, color.new(col, 0))
+    if not na(pBe)
+        bePx2 = posEntry + posDir * (spreadPts + 2.0 * slipPts)
+        line.set_x2(pBe, bar_index)
+        line.set_y1(pBe, bePx2)
+        line.set_y2(pBe, bePx2)
+        label.set_xy(lBe, bar_index, bePx2)
+        // green once the stop has passed it: the trade genuinely cannot lose
+        safe = posDir * (posStop - bePx2) >= 0
+        label.set_text(lBe, safe ? "BREAKEVEN · locked in" : "BREAKEVEN")
+        label.set_textcolor(lBe, color.new(safe ? cBuy : #8FA3B8, 10))
     if not na(pTp)
         line.set_x2(pTp, bar_index)
         label.set_xy(lTp, bar_index, posTgt)
@@ -702,7 +735,7 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, 14, border_width = 1,
+    tp := table.new(pos, 3, 15, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 
@@ -747,7 +780,16 @@ if barstate.islast and showPanel
     f_row(10, "worst trade",   f_num(worstPts, "0.0") + "pt", f_ccy(worstPts), cNeg)
     f_row(11, "max drawdown",  f_num(-maxDD, "0.0") + "pt",   f_ccy(-maxDD), cNeg)
     f_row(12, "refused",       str.tostring(nRefused), "stop too wide", cVal)
-    f_row(13, "session",
+    // how late can he be and still have a valid trade? The stop does not move
+    // when he chases, so the cap is what breaks first.
+    chaseTo  = posDir != 0 ? posStop + posDir * maxRisk * atr : na
+    chasePts = posDir != 0 ? posDir * (chaseTo - close) : na
+    f_row(13, "enter by",
+              posDir == 0 ? "-" : str.tostring(chaseTo, format.mintick),
+              posDir == 0 ? "no trade open"
+                          : f_num(chasePts, "0.0") + "pt of chase left",
+              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
+    f_row(14, "session",
               inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",
               posDir == 0 ? str.tostring(lots, "0.00") + " lots"
                           : f_ccy(posDir * (close - posEntry)), cVal)
