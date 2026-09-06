@@ -97,6 +97,12 @@ def synth(n, sigma_tick, ticks, seed, p0=1300.0):
 LIMIT_VIOLATIONS = []
 GAP_THROUGH = [0, 0]        # [fills where the bar opened through E, total fills]
 
+# Default FALSE: when a bar opens THROUGH the limit the real fill is BETTER
+# than E, and we refuse that gift. That makes every number here pessimistic by
+# a bounded amount. `improve` mode flips this to measure how much - a negative
+# verdict has to survive its own conservatism being removed.
+ALLOW_IMPROVEMENT = False
+
 
 # --------------------------------------------------------------- candidates
 def toptick_candidates(s, A, SPC, f, buf, pk=5, sweep_atr=0.10, wick=0.6460,
@@ -150,6 +156,8 @@ def limit_fill(E, o_k, d):
     """
     if d * (o_k - E) < 0:          # short: open ABOVE E / long: open BELOW E
         GAP_THROUGH[0] += 1        # would have been price improvement
+        if ALLOW_IMPROVEMENT:
+            return o_k             # the real, better fill. NEVER the default.
     return E
 
 
@@ -332,6 +340,28 @@ BUFS = [0.10, 0.20, 0.30, 0.50]
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if only == "improve":
+        global ALLOW_IMPROVEMENT
+        for tf in ("M1", "M5"):
+            s, SP, A, cs = H.ctx(tf)
+            SPC = [x * cs for x in SP]
+            print("=" * 110)
+            print(f"  {tf} — does REFUSING gap-through price improvement "
+                  f"explain the negative result?")
+            print("=" * 110)
+            print(HDR)
+            for (f, buf, mw) in ((1.00, 0.10, 1), (1.00, 0.10, 120),
+                                 (1.00, 0.30, 120), (0.00, 0.30, 120)):
+                for allow in (False, True):
+                    ALLOW_IMPROVEMENT = allow
+                    c = toptick_candidates(s, A, SPC, f, buf, maxwait=mw)
+                    r, a, fl = simulate(s, SPC, A, c)
+                    tag = "improved" if allow else "refused "
+                    line(f"{tag} f={f:.2f} b={buf:.2f} w={mw}", r, a, fl)
+            ALLOW_IMPROVEMENT = False
+            print()
+        return
 
     if only == "closest":
         # THE ONLY CELL IN THE WHOLE STUDY THAT LOOKS LIKE ANYTHING:

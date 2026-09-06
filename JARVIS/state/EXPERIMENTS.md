@@ -4716,8 +4716,17 @@ ask** on year branches. Built via `JARVIS/tools/ticks_to_bars.py`:
 carrying its own measured `spread_mean`, `spread_max` and tick count.
 
 Price is scaled 1/100 in the feed (13.48641 × 100 = 1348.64, verified against
-the historical gold price). Both volume columns are identically zero — **no
-volume hypothesis is testable on this feed.**
+the historical gold price).
+
+> **CORRECTION, E-167.** This entry said *"both volume columns are identically
+> zero — no volume hypothesis is testable on this feed"*, and that claim was
+> **wrong**. Column 7 is non-zero on **157,051 of 157,051** M1 bars (median 102)
+> and 31,419 of 31,419 M5 bars (median 518). It is TICK volume, not traded
+> volume, so it is broker-dependent — but it is real data and it is testable.
+> That sentence sat in the do-not-test list for months and blocked every
+> volume idea in the project, including the one behind the LuxAlgo order block
+> Veer rates most highly. **A "not testable" note is a claim like any other and
+> needs checking like any other.**
 
 ```
 GOLD M1 2018        median     p95      max
@@ -7218,3 +7227,72 @@ is one instance; 2955 trades say the mechanical version of it is flat. Those two
 statements are compatible: **he is selecting among these setups and the backtest
 is taking all of them**, which is exactly the gap this whole project keeps
 running into.
+
+---
+
+## E-167 — "AFTER A PULLBACK WE *LOOK FOR* ENTRY" — REJECTED, AND THE NULL IS CLEAN
+
+Veer's correction: *"entry on retest means after a pullback we LOOK FOR entry,
+not always entry."* E-144 measured "enter on every retest resumption" and
+rejected break+retest. That was the wrong rule, so it was asked again.
+
+### The null, run first, and it behaves
+Driftless random walk calibrated so the synthetic median bar range matches the
+real one (M1 0.2186 vs 0.2190), same code path, same costs:
+```
+  M1, 6 seeds: -0.0190 -0.0093 -0.0163 -0.0307 -0.0122 -0.0269
+     mean -0.0191/trade, 0 of 6 positive, spread charged 0.0271
+```
+**A skill-free instrument pays about one spread and loses.** That is what a null
+must do, and it is the first study in this project whose measurement is known
+not to be manufacturing money before its results were read.
+
+### The answer
+**14 confirmations, ~90 filter variants per clock, and nothing separates.**
+```
+  baseline, every retest taken      n     win%   points  per trade      t
+    M1                            2023   43.7%    -20.5    -0.0102  -1.45
+    M5                             369   41.7%    -27.9    -0.0757  -2.36
+  M1 time-shifted controls: -0.0062 / -0.0027 / -0.0167
+```
+The baseline is **not clearly above its own control** — so the thing a filter
+would improve is already indistinguishable from entering at an arbitrary bar
+with the same geometry.
+
+The decisive test is the ceiling: split the WHOLE book at each feature's median,
+using the answer to choose the question — the most favourable test that exists.
+**0 of 14 features clear a Bonferroni-corrected |t| > 2.99 on either clock.**
+Largest anywhere: M1 1.68, M5 2.24 — and the M5 one says a *smaller, less
+violent* break is better, the opposite of the displacement thesis.
+
+Best of 56 quartile cells on M1, unseen: **+0.0057 a trade, t 0.28.** Zero, from
+the largest multiple comparison available. The confirmations stacked the way a
+human reads them — violent break AND shallow tag AND strong close back — give
+−0.0475 in sample and +0.0319 unseen: **the sign flips between halves.**
+
+One positive book exists in the whole study: M5, body and close-strength both
+above median, +0.0761 a trade. **n=96 (under the 100 minimum), t=1.22, cuts
+chosen in sample, and the same rule on M1 is −0.0031.** That is the best of
+about 90 coin flips and it is recorded as UNPROVEN, not as a finding.
+
+### What this does NOT say
+**It does not say Veer is wrong.** It tests 14 mechanical encodings of his rule,
+computed at the retest bar. His "look for entry" may encode the higher
+timeframe's state, the shape of the whole leg, or whether that level had been
+respected before — none of which is in these 14. The rejected claim is narrow:
+*these* confirmations do not separate. The wider claim is not made.
+
+### And the power limit, which matters more than the verdict
+M1 per-trade sd is 0.3147 points. With ~1000 unseen trades this study can only
+resolve a difference of **0.020–0.028 a trade at t=2, against a spread of
+0.0271.** A filter worth less than one spread could exist here and be invisible
+— and would not be worth trading anyway. **M5 is far worse: it resolves 0.128 a
+trade against a 0.067 spread, so the M5 arm is underpowered and its negatives
+are "no information", not evidence of absence.**
+
+### The correction it produced
+The note that this feed's volume columns are identically zero, which has sat in
+the do-not-test list for months, is **wrong**. Volume is present on every bar of
+both files. It is tick volume and therefore broker-dependent, but it is real and
+testable — and it was tested here: break-vs-pullback tick volume was M1's
+strongest feature at t 1.68, which is nothing.
