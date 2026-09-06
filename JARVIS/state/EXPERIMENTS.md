@@ -6699,3 +6699,57 @@ FundingPips 86%→75%, Alpha 48%→28%. **0.25% a trade or less.**
 backtested R distribution that has never met a real fill, a real requote, or a
 real Sunday gap. They are the best available answer to the question and they
 are not a promise.
+
+---
+
+## E-158 — SUPERTREND THROUGH THE SAME RULES, UNDER THE SAME CORRECTED FILLS
+
+Owed since Veer wrote *"all eas must be profitable and supertrend must be safe
+for live accounts it needs to grow my accounts in any price action without me
+worrying its gonna make loss"*. `funded.py`'s SuperTrend trade builder carried
+the E-151 defect too — its ATR trail was placed from a bar's own extreme with no
+check that the level was still on the right side of that bar's close — so it was
+fixed (`trail_apply`) and the whole block re-run.
+
+```
+GOLD 15m, 101 trades, 0.50% risk, $100k
+  FTMO 2-step phase 1                PASS   50 days  end 110,016  worst eq 96,481
+  FundedNext Stellar 2-step phase 1  PASS   46 days  end 109,077  worst eq 96,481
+  FundingPips 2 Step Pro             FAIL   CONSISTENCY: best day 53.0% of profit
+  E8 Classic phase 1                 PASS   46 days  end 109,077
+  E8 performance (funded)            FAIL   CONSISTENCY: best day 78.4%
+  Alpha Capital Alpha One            FAIL   CONSISTENCY: best day 42.8%
+  The5ers High Stakes                PASS   50 days  end 110,016
+
+GOLD 1h, 338 trades
+  FTMO / FundedNext / E8 Classic / The5ers   PASS, but 476-489 DAYS to target
+  FundingPips     FAIL  MAX DRAWDOWN breached on floating equity, day 125
+  Alpha Capital   FAIL  MAX DRAWDOWN breached on floating equity, day 125
+  E8 performance  FAIL  CONSISTENCY: best day 43.9%
+```
+
+**SuperTrend is not a funded-account strategy and this says why.** It fails on
+the same rule every time: **consistency.** Its best single day is 42.8%–78.4% of
+its total profit, against caps of 35% and 40%. That is the arithmetic signature
+of a trend follower — it makes its money on a handful of days — and it is
+exactly the profile prop rules are written to reject. On the 1h clock it also
+breaches max drawdown on floating equity, twice, on day 125.
+
+Put beside E-156, the division is clean and neither strategy is "better":
+
+| | sweep, M5, give-back | SuperTrend |
+|---|---|---|
+| what it is | many small edges | a few large ones |
+| best day as % of profit | small | **42.8%–78.4%** |
+| funded pass rate | ~100% at 4 of 7 firms | fails 3 of 7 on consistency |
+| worst equity | — | −3.5% on 15m, −6.4% on 1h |
+
+**So: the sweep goes on the funded accounts. SuperTrend, if it runs at all, runs
+on Veer's own live account**, where nobody enforces a consistency rule and a
+−6.4% floating drawdown is his decision to accept rather than an instant fail.
+Its worst equity of −3.5% on 15m is the honest answer to "without me worrying
+its gonna make loss": it does make losses, and on this sample the deepest hole
+it dug was 3.5% of the account on 15m and 6.4% on 1h.
+
+**And on the 1h clock it takes 476–489 days to reach a 10% target.** That is not
+a funded-account plan; it is a savings account with drawdowns.
