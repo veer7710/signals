@@ -59,6 +59,9 @@ PINE_ONLY = {
     "dispCut": "matched below", "maxLvlAge": "Pine-side housekeeping",
     "maxOB": "how many zones to DRAW - the EA draws nothing",
     "obRealtime": "draws the forming block - the EA draws nothing",
+    "showLevels": "the SMC level layer - drawing only",
+    "showBreak": "drawing only",
+    "maxLvl": "how many levels to DRAW - the EA draws nothing",
 }
 
 

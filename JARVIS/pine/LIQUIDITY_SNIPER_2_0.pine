@@ -224,6 +224,11 @@ gD = "9 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
 cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
 showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
+showLevels = input.bool(true, "Mark out every swing level", group = gD,
+     tooltip = "The SMC level layer: every confirmed swing drawn as a line and carried forward. A level price CLOSES through is not deleted - it turns dotted and stays, because a broken level is exactly what you watch for the pullback back into it. This is the analysis done for you; the entry is still your call.")
+showBreak = input.bool(true, "Label a level when it breaks", group = gD,
+     tooltip = "A small 'broken' tag the moment price closes through a level. Turn it off if the chart gets busy - the dotted line already tells you.")
+maxLvl    = input.int(6, "Levels to keep per side", group = gD, minval = 1, maxval = 20)
 showSmc   = input.bool(true, "BOS / CHoCH",   group = gD, inline = "s1")
 showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
 showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
@@ -260,6 +265,71 @@ if not na(pl)
     array.push(lvLo, pl)
     if array.size(lvLo) > 300
         array.shift(lvLo)
+
+// ===================== THE LEVELS, MARKED OUT ==============================
+// Veer, repeatedly: "we need clear levels like smc indicator marked out", and
+// "say smc liquidity zone we should have on chart, if price disrespected them
+// and goes above we should look for entry to buy or sell accordingly to
+// direction, probably wait for small pullback or retest and get a sniper entry
+// in".
+//
+// So this draws every confirmed swing as a live level, and when price CLOSES
+// through one it does not delete it - it marks it BROKEN and keeps it, because
+// a broken level is exactly the thing to watch for the pullback. That is the
+// analysis, done for you; the entry is still your call.
+//
+// These are buy-side and sell-side liquidity. They are NOT labelled BSL/SSL on
+// the chart - Veer asked for that to stay internal - they are just lines.
+var array<line> lnHi = array.new_line()
+var array<line> lnLo = array.new_line()
+var array<line> lnBk = array.new_line()
+
+f_trimLn(la, kp) =>
+    while array.size(la) > kp
+        line.delete(array.shift(la))
+
+if showLevels and not na(ph)
+    array.push(lnHi, line.new(bar_index - pvLen, ph, bar_index, ph,
+         color = color.new(cSell, 55), width = 1))
+    f_trimLn(lnHi, maxLvl)
+if showLevels and not na(pl)
+    array.push(lnLo, line.new(bar_index - pvLen, pl, bar_index, pl,
+         color = color.new(cBuy, 55), width = 1))
+    f_trimLn(lnLo, maxLvl)
+
+// live levels follow price to the right; a CLOSE through one breaks it
+if barstate.isconfirmed and array.size(lnHi) > 0
+    for i = array.size(lnHi) - 1 to 0
+        ln = array.get(lnHi, i)
+        line.set_x2(ln, bar_index + 2)
+        if close > line.get_y1(ln)
+            line.set_color(ln, color.new(cSell, 78))
+            line.set_style(ln, line.style_dotted)
+            array.remove(lnHi, i)
+            array.push(lnBk, ln)
+            if showBreak
+                label.new(bar_index, line.get_y1(ln), "broken",
+                     style = label.style_label_down, size = size.tiny,
+                     color = color.new(chart.bg_color, 100),
+                     textcolor = color.new(cSell, 25))
+if barstate.isconfirmed and array.size(lnLo) > 0
+    for i = array.size(lnLo) - 1 to 0
+        ln = array.get(lnLo, i)
+        line.set_x2(ln, bar_index + 2)
+        if close < line.get_y1(ln)
+            line.set_color(ln, color.new(cBuy, 78))
+            line.set_style(ln, line.style_dotted)
+            array.remove(lnLo, i)
+            array.push(lnBk, ln)
+            if showBreak
+                label.new(bar_index, line.get_y1(ln), "broken",
+                     style = label.style_label_up, size = size.tiny,
+                     color = color.new(chart.bg_color, 100),
+                     textcolor = color.new(cBuy, 25))
+if array.size(lnBk) > 0
+    for i = array.size(lnBk) - 1 to 0
+        line.set_x2(array.get(lnBk, i), bar_index + 2)
+f_trimLn(lnBk, maxLvl)
 
 // The nearest opposing level in the trade's favour: for a long, the lowest
 // swing HIGH above entry - the resting sell-side liquidity the move is running

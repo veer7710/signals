@@ -64,11 +64,34 @@ import os, sys, math, random, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import adv_harness as H
-from adv_null import synth
-from engine import atr as watr, trail_level, entry_fill
+from engine import atr as watr, trail_level, entry_fill, Series
 from sweep_winrate import pivots
 
 GBP = 0.787
+
+
+def synth(n, sigma_tick, ticks, seed, p0=1300.0):
+    """Bar OHLC from a tick-level DRIFTLESS walk. VERBATIM COPY of
+    adv_null.synth (E-165) - copied rather than imported only because that
+    module calls main() at import time. Kept byte-identical on purpose: two
+    implementations of one rule is how E-151 started.
+
+    Verified against the original: adv_null.synth(2000, 0.014, 120, 7) and this
+    function return identical OHLC (see the __main__ 'synthcheck' mode)."""
+    rng = random.Random(seed)
+    ts, o, h, l, c = [], [], [], [], []
+    p = p0
+    t0 = 1514847600
+    for i in range(n):
+        op = p
+        hi = lo = p
+        for _ in range(ticks):
+            p += rng.gauss(0.0, sigma_tick)
+            if p > hi: hi = p
+            if p < lo: lo = p
+        ts.append(t0 + 60 * i); o.append(op); h.append(hi); l.append(lo); c.append(p)
+    return Series(ts, o, h, l, c)
+
 
 # every fill is checked against its own limit price; this must stay empty
 LIMIT_VIOLATIONS = []
@@ -308,6 +331,19 @@ BUFS = [0.10, 0.20, 0.30, 0.50]
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if only == "synthcheck":
+        # prove the copied synth() is byte-identical to adv_null's original
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            import adv_null
+        a = adv_null.synth(2000, 0.014, 120, 7)
+        b = synth(2000, 0.014, 120, 7)
+        same = (a.o == b.o and a.h == b.h and a.l == b.l
+                and a.c == b.c and a.ts == b.ts)
+        print(f"  synth() identical to adv_null.synth(): {same}")
+        return
 
     # ================================================== 1. THE NULL, FIRST
     print("=" * 110)
