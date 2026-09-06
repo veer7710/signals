@@ -14,12 +14,41 @@
 //  18,816,940 bid/ask ticks, each bar charged its own spread, each against a
 //  control that keeps the geometry and destroys only the timing.
 //
+//  =========================================================================
+//  E-165, 2026-09-06: THE SWEEP IS DISPROVEN. READ THIS FIRST.
+//
+//  The backtest behind every number in this file was booking the ENTRY at the
+//  level, on bars that had already OPENED past it. The sweep bar is REQUIRED to
+//  be a wick - it pokes through the level and closes back - so on 75% of setups
+//  the next bar opens on the far side and no order could still be resting at
+//  the level. The fill is the open, and it is worse, every time.
+//
+//    M1  as shipped  n=2955  +254.8 pts  +0.0862/trade  t +14.59  win 55.8%
+//        HONEST      n=2955   -30.4 pts  -0.0103/trade  t  -1.85  win 45.7%
+//    M5  as shipped  n= 642  +133.1 pts  +0.2073/trade  t  +6.89  win 57.8%
+//        HONEST      n= 643   -31.2 pts  -0.0485/trade  t  -1.78  win 47.6%
+//
+//  The proof it is the accounting and not the market: the same code extracted
+//  +0.0226 a trade at t = 5 from a DRIFTLESS RANDOM WALK, on every seed tried.
+//  Nothing real does that. With honest fills the random walk pays -0.039 - the
+//  spread - which is exactly what a null should pay.
+//
+//  This is the same defect as E-151 (which killed the other three signals) one
+//  step earlier in the same trade: E-151 fixed the EXIT fill and nobody thought
+//  to look at the ENTRY.
+//
+//  THE SIGNALS ON THIS CHART ARE STILL DRAWN AND STILL CORRECT - a sweep is a
+//  sweep, and the marks do not repaint. What is withdrawn is the claim that
+//  trading them mechanically makes money. THE PANEL'S PROFIT FIGURE IS NOT
+//  EVIDENCE OF AN EDGE. Read this chart, do not obey it.
+//  =========================================================================
+//
 //    1  SWEEP          the level is taken by a WICK and price comes back
-//                      4045 trades  53.3% win  +288.6 pts  +0.0713/trade
-//                      t = 14.3, and 65 standard errors above a time-shifted
-//                      control WHICH ITSELF LOSES 193 POINTS - so the money is
-//                      in the level, not in the exit.
-//                      Positive in 6 of 6 instrument/timeframe cells off XAU.
+//                      WITHDRAWN BY E-165 - see the block above. The figures
+//                      that stood here (+288.6 pts, +0.0713/trade, t 14.3,
+//                      65 control se, 6 of 6 cells) were all computed with the
+//                      impossible entry fill, and every one of them goes with
+//                      it. Corrected: -0.0103 a trade on M1, t -1.85.
 //                      >>> THE RULES ARE UNCHANGED. Veer: "dont change signals
 //                      that already exist they are good". The engine below is
 //                      lifted from 1.0 line for line.

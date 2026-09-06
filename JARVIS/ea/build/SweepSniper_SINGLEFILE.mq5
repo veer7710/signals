@@ -1934,22 +1934,27 @@ int OnInit()
                "stop %.2f ATR past the extreme, RISK CAP %.2f ATR, give back %.0f%%",
                SS_BUILD, InpPivotBars, InpSweepAtr, InpWickCut, InpStopBufAtr,
                InpMaxRiskAtr, InpGiveBack * 100.0);
-   Print("[SS] Measured on the EA-executable variant, under fills that could "
-         "actually be got (E-151): 2596 trades, 23.8/day, 53.5% win, "
-         "+201.1 points, 71.2 control se on a control that itself LOSES, "
-         "walk-forward 5 of 5 (+0.0486 to +0.0984), max drawdown GBP15.72, "
-         "worst trade -GBP4.63.");
-   Print("[SS] E-151: the older, higher figures came from a backtest that "
-         "filled the trail at prices no order could rest at. Three signals "
-         "died with it - break+retest and both order block entries are OFF by "
-         "default and lose money when switched on. The sweep is the strategy.");
-   Print("[SS] E-156: at 0.25% risk a trade the funded pass rate simulates at "
-         "~100% for FTMO, FundedNext, E8 Classic and The5ers, 86% FundingPips, "
-         "48% Alpha Capital on M1 but 96.5% on M5. M5 is the funded clock. "
-         "0.50% risk is worse at EVERY firm.");
-   Print("[SS] THE RISK CAP IS NOT AN OPTIMISATION. Uncapped, the worst single "
-         "trade was 57% of a GBP60 account and the max drawdown 63%. Read E-138 "
-         "before raising InpMaxRiskAtr.");
+   Print("[SS] ================= READ THIS BEFORE RUNNING =================");
+   Print("[SS] E-165: THE SWEEP IS DISPROVEN. The backtest that justified this "
+         "EA was booking entries AT the level on bars that had already OPENED "
+         "past it - 75% of them. No order could have been resting there.");
+   Print("[SS] Corrected, on the subset THIS EA can actually execute: "
+         "-0.0030 points a trade on M1 (t -0.37, indistinguishable from zero) "
+         "and -0.0885 on M5 (t -2.39, negative). The old +201.1 points figure "
+         "was an accounting artefact.");
+   Print("[SS] The proof: the same backtest code extracted +0.0226 a trade at "
+         "t = 5 from a DRIFTLESS RANDOM WALK, on every seed. Nothing real does "
+         "that. With honest fills the random walk pays -0.039, the spread, "
+         "which is what a null should pay.");
+   Print("[SS] This EA REFUSES to arm when price has already passed the level, "
+         "which is correct and always was - it is why its executable subset is "
+         "only 25% of the backtest's trades. That refusal is the reason it was "
+         "never going to make the money the backtest promised.");
+   Print("[SS] DO NOT PUT THIS ON A LIVE OR FUNDED ACCOUNT. There is no "
+         "measured edge to trade. It is left runnable ON DEMO ONLY so it can "
+         "log requested price against actual fill, which is the one "
+         "measurement that could still change this verdict.");
+   Print("[SS] ============================================================");
    if(InpUseDisp)
       Print("[SS] WARNING: InpUseDisp is ON. That filter is evaluated at the FILL "
             "bar and this EA rests a LIMIT, so it will be applied at the ARM bar "

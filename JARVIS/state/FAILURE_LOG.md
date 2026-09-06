@@ -395,3 +395,58 @@ The breakage surfaced only when the test suite imported one of the files, after
 the commit was pushed. `check_trails.py` now compiles every research file before
 doing anything else. **A syntax check that is not the real compiler is not a
 syntax check.**
+
+---
+
+## 2026-09-06 — I FIXED THE EXIT AND NEVER LOOKED AT THE ENTRY
+
+E-151 was found today: a trailing stop filling at a price no order could rest
+at. It killed three of the four shipped signals. I wrote the fix, wrote a
+regression test, wrote a tool to find other copies of it, and recorded the
+standing lesson.
+
+**The identical bug was in the entry, one step earlier in the same trade, and I
+never looked.** An adversarial review found it hours later.
+
+The sweep's entry is a stop order at the level. The sweep bar is *required* to
+be a wick — it pokes through the level and closes back — so on **75% of setups**
+the next bar opens on the far side, no order can still be resting at the level,
+and the real fill is the open. The backtest booked the level. That single line
+is the whole edge:
+
+```
+  M1  as shipped  +254.8 pts  +0.0862/trade  t +14.59
+      honest       -30.4 pts  -0.0103/trade  t  -1.85
+```
+
+### Why I did not find it
+1. **I stopped when the survivor survived.** Three signals died; the fourth got
+   my confidence instead of my scepticism. I spent the next several hours
+   optimising the exit, the risk cap, the sessions and the cooldown *of a
+   strategy that does not exist*, and every one of those experiments was
+   competently run.
+2. **I never ran a null.** A driftless random walk through the same code makes
+   +0.0226 a trade at t = 5. That test takes twenty minutes and would have
+   ended this at any point in the last three months. **A t-statistic of 14 on a
+   simple rule is not a triumph, it is a symptom** — and I quoted that 14.26
+   approvingly, repeatedly, as evidence.
+3. **The EA had been telling me for months.** `SweepSniper.mq5` refuses to arm
+   when price is already past the level, with a comment explaining exactly why a
+   fill there is impossible. I read that comment today, quoted it in a commit
+   message, and did not notice it contradicted the backtest. **The two
+   implementations disagreed about 75% of all trades and nothing compared
+   them** — which is P92's lesson, which I also re-quoted today.
+4. **Two flatterers had already been found in the same file** (E-151's trail,
+   E-164's stop placement) and both times I treated the fix as the end of the
+   investigation rather than as evidence about the density of such bugs.
+
+### The rules that come out of this
+- **Run the null FIRST.** Before any control, any walk-forward, any parameter
+  sweep: put the pipeline on a driftless random walk. If it makes money there,
+  nothing else you measure means anything. This is now step one, not step ten.
+- **A correction is a signal to re-audit the whole trade, not a repair to one
+  line.** Entry, stop, exit, cost. E-151 should have triggered that sweep and
+  did not.
+- **When code and backtest disagree, the disagreement is the finding.** Not a
+  parity chore to tidy up later.
+- **Suspicion should rise with the t-statistic, not fall.**

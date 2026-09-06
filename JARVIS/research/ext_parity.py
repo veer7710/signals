@@ -67,7 +67,11 @@ def book(tf, mode, pk=5, sweep_atr=0.10, wick=0.646, buf=0.30, cap=1.2,
                (max(ext, s.h[j]) if side > 0 else min(ext, s.l[j])))
         sl = use - t * buf * a
         entry = px + t * SP[j] * cs / 2.0
-        risk = abs(entry - sl)
+        # The cap is measured LEVEL to stop, which is the convention every other
+        # file in this repo uses. Measuring it entry-to-stop instead adds half a
+        # spread and refused about 18% more setups - the two files then reported
+        # different trade counts for the same strategy, which is how P92 started.
+        risk = abs(px - sl)
         if risk <= 0:
             continue
         if risk > cap * a:

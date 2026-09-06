@@ -256,7 +256,40 @@ def test_trail_cannot_be_placed_behind_price():
 
 test_entry_bar_not_post_fill()
 test_no_future_in_fvg_snapshot()
+def test_entry_cannot_fill_better_than_the_market():
+    """E-165. A stop order resting at a level cannot fill AT that level once
+    the market has already opened past it. This is the entry-side twin of
+    E-151, it is what killed the last surviving signal, and it stays caught."""
+    from engine import entry_fill
+
+    # SHORT triggered by price falling to 100. The bar opens at 99 - already
+    # past - so the stop fires at 99, a WORSE price. That is the whole point.
+    check("short: a bar opening past the trigger fills at the open",
+          entry_fill(100.0, 99.0, -1) == 99.0)
+    check("short: a bar opening before the trigger fills at the level",
+          entry_fill(100.0, 101.0, -1) == 100.0)
+    check("long: a bar opening past the trigger fills at the open",
+          entry_fill(100.0, 101.0, +1) == 101.0)
+    check("long: a bar opening before the trigger fills at the level",
+          entry_fill(100.0, 99.0, +1) == 100.0)
+    check("a bar opening exactly at the trigger fills at the level",
+          entry_fill(100.0, 100.0, +1) == 100.0
+          and entry_fill(100.0, 100.0, -1) == 100.0)
+
+    # The property that matters, over a grid: a fill is NEVER better than its
+    # own trigger. Every point the old code made came from breaking this.
+    bad = 0
+    for d in (+1, -1):
+        for o in range(90, 111):
+            f = entry_fill(100.0, float(o), d)
+            if d * (f - 100.0) < 0:
+                bad += 1
+    check("no entry fill is ever better than its own trigger", bad == 0,
+          f"{bad} impossible fills")
+
+
 test_trail_cannot_be_placed_behind_price()
+test_entry_cannot_fill_better_than_the_market()
 
 print("\n" + "=" * 66)
 print(f"  {'ALL TESTS PASSED' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")

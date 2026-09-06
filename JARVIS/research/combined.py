@@ -23,7 +23,7 @@ cap, the same 25% give-back, the same cost.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
+from engine import atr as watr, trail_level, entry_fill
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 from orderblock import blocks
@@ -66,8 +66,16 @@ def candidates(s, A, cs, SP, use, pk=5, sweep_atr=0.10, wick=0.6460,
                             ext = max(ext, s.h[k]) if side > 0 else min(ext, s.l[k])
                         if j is not None:
                             sl = ext - t * buf * a
+                            # E-165. The sweep bar is a WICK - it closes back
+                            # through the level - so on ~75% of setups this bar
+                            # OPENS past the level and no stop could still be
+                            # resting there. Book the open, which is what you
+                            # would really get. Booking the level made a random
+                            # walk pay +0.0226 a trade at t = 5.
+                            fill = entry_fill(px, s.o[j], t)
                             if 0 < abs(px - sl) <= cap * a:
-                                out.append((j, SWEEP, t, px + t * SP[j] * cs / 2.0, sl))
+                                out.append((j, SWEEP, t,
+                                            fill + t * SP[j] * cs / 2.0, sl))
             # ---- break + retest: taken by a CLOSE, traded with the break
             if BR in use:
                 d = side

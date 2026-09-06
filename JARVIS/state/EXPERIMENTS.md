@@ -6985,3 +6985,194 @@ tell that this is not free: 2117 refusals against 1762.
 **All three now agree.** `JARVIS/tools/check_parity.py` checks the defaults;
 this one needed a measurement, because the three behaviours were each defensible
 in isolation and only one of them was what the numbers described.
+
+---
+
+## E-165 (ADVERSARIAL AUDIT) — THE SWEEP'S ENTRY BOOKS A PRICE THE MARKET HAD ALREADY LEFT
+
+> Renumbered from E-152, which was already taken by the funded-account
+> simulation. Independently reproduced from scratch before being accepted —
+> see the verification block at the end of this entry.
+
+> **VERDICT: E-151's sweep claim is DISPROVEN.** Under an achievable entry fill
+> the M1 sweep is **−83.3 points, −0.0206 a trade, t = −4.52**; M5 **−51.8,
+> −0.0571, t = −2.60**; M15 **−79.6, −0.2528, t = −4.35**. Negative on every
+> clock, both directions, every parameter setting tested, and negative in 5 of
+> E-146's 6 off-gold cells. Scripts: `JARVIS/research/adv_*.py`.
+
+### The defect — E-151 one layer further up, and E-110/E-134 for the third time
+`combined.candidates()` places the sweep entry AT the level `px` and fills it on
+the first bar whose extreme touches `px`. It never checks that the market is on
+the correct side of `px` when the order is placed.
+
+98% of sweep entries fire on the bar immediately after the sweep bar. The sweep
+bar is required to be a **wick** (body/range ≤ 0.646) — i.e. it pokes through the
+level and closes back. So in **67% of M1 entries (72% M5, 62–88% off gold) the
+market has already closed back past the level before the entry bar even opens**,
+and the backtest fills a long at a price below the market.
+
+```
+$ python3 JARVIS/research/adv_fix2.py
+  M1: 5701 candidates. entry bar == sweep bar + 1: 5573 (98%).
+      already past the level at that bar's open: 3795 (67%)
+
+  cell                                     n    win%    points  per trade      t
+  as shipped, ALL                       4045   53.3%     288.6    +0.0713  14.26
+  as shipped, price really did return    1512   41.8%      -9.5    -0.0063  -0.95
+  as shipped, price NEVER left the level 2848   58.8%     313.6    +0.1101  17.27
+  ONLY REAL RETURNS, achievable fills    1512   41.5%     -10.9    -0.0072  -1.09
+```
+
+**Every point the sweep makes comes from the trades where price never returned
+to the level.** The trades that actually match the description of the strategy —
+price left the level and came back to it — lose money.
+
+```
+$ python3 JARVIS/research/adv_fix.py     # fill at the bar's OPEN when it opens past the level
+  M1   as shipped +288.6 (+0.0713, t +14.26)  ->  -83.3 (-0.0206, t -4.52)
+  M5   as shipped +171.3 (+0.1888, t  +7.67)  ->  -51.8 (-0.0571, t -2.60)
+  M15  as shipped  +57.7 (+0.1819, t  +3.06)  ->  -79.6 (-0.2528, t -4.35)
+```
+
+### Three independent measurements say the same thing
+1. **Size.** The mean impossible price improvement handed to the entry is
+   **+0.0779 pts/trade on M1 and +0.2176 on M5** (`adv_fix2.py`). The claimed
+   edges are +0.0713 and +0.1888. **The leak is larger than the edge.**
+2. **A skill-free null.** The same code on a **driftless random walk** calibrated
+   to the real bar range returns **+0.0346/trade, t ≈ 10–12, 0 of 8 seeds
+   negative** (`adv_null.py`). Optional stopping says a martingale must give
+   exactly zero. Decomposing (`adv_null3.py`): the give-back exit is clean
+   (+0.0018, t 1.50) — **E-151's fix worked** — and the entry fill alone is
+   **+0.0565, t 13.47**.
+3. **The trigger bar overshoots the level by 0.214 pts on M1 (0.87 ATR)** and
+   closes **0.0736 pts beyond it in the trade's favour**, 62% of the time. That
+   number is the edge.
+
+### What this retracts
+- **"It is coming from the level" is false.** Replacing the swing level with
+  **an unrelated old close** gives the same result: M1 +0.0755 vs +0.0713 (gap
+  −1.1 control se); jittering the level ±0.5 ATR gives +0.0711 vs +0.0713 (0.4
+  se) (`adv_control.py`). The E-137/E-151 time-shifted control is not a control
+  for the level — it swaps a level-price fill for a market fill, so it measures
+  the leak, not the level.
+- **"+65 se above control" overstates.** That denominator is the s.e. of the
+  control *mean across seeds*; it shrinks as seeds are added and ignores the
+  real result's own sampling error entirely. The honest figure was always the
+  strategy's own t.
+- **E-146's "positive in 6 of 6" becomes negative in 5 of 6** under an
+  achievable fill; the survivor is GBPUSD at t = +1.2, n = 99 (`adv_multi2.py`).
+  A fake level matches the real one in 4 of those 6 cells (`adv_multi.py`).
+- **E-135d's "pre-registered ICT wick filter" was measuring the leak.** A tighter
+  wick cut means more instant snap-backs, so more impossible fills: shipped
+  +0.0960 at wick 0.30 vs +0.0445 at 1.00. Under achievable fills the whole
+  column is flat and negative, −0.015 to −0.023 (`adv_fix3.py`). Same for
+  `sweep_atr`, `pk` and `give` — **no parameter setting anywhere is positive.**
+- **E-153/E-156/E-159's exit work stands but is now moot for the sweep**: it is
+  choosing the exit for an entry that does not clear its own costs.
+
+### Two smaller defects found in the same pass
+- **`combined.simulate` books stop fills on bars that gapped through the stop.**
+  32 M1 trades exit at a price outside the exit bar's own range, +5.1 points and
+  0.084 pts of impossible improvement each. Fixed the same way (fill at the open).
+- **The spread scaling `cs = 0.11/(median SP / median ATR)` is per-timeframe**, so
+  the same market is charged a **0.027 pt spread on M1, 0.067 on M5 and 0.126 on
+  M15** (`adv_harness.py`). A spread is a property of the market, not of the
+  chart. At today's ×7.38 vol that is 0.20 / 0.50 / 0.93 today-points — M1 is
+  right, M5 and M15 are charged 2.5× and 4.6× too much. Every M1-vs-M5-vs-M15
+  comparison in E-140 is distorted by this.
+
+### Why nobody caught it
+The equity curve should have been the tell. As shipped, M1 was **annualised
+Sharpe 16.4, 88.7% winning days, max drawdown 1.1% of total gain** over 141 days
+(`adv_splits.py` + daily stats). Nothing on earth trades at Sharpe 16. And the
+result was uniformly +0.06 to +0.09 a trade in **every** month, session, weekday,
+volatility tercile and both directions — a constant additive offset, which is the
+signature of a per-trade accounting bias, not of an edge.
+
+### Data facts, recorded because they were assumed rather than checked
+- `GOLD_M1_2018.json` spans **2018-01-01 → 2018-06-19, 145 days**. Not "2018".
+- **`GOLD_M5_2018.json` and `GOLD_M15_2018.json` are exact aggregations of the
+  M1 file** (4995/5000 M5 bars reproduced bar-for-bar). "M1 and M5 both confirm
+  it" is **one sample, not two**, and must never be quoted as replication again.
+- 247 intra-series time gaps, 239 of them ≥ 1 hour, mean price jump 0.77 pts
+  (3× the median ATR) — real weekend/session gap risk the hold logic ignores.
+
+### The one thing that would change the verdict
+A demo or live run on `SweepSniper.mq5` logging, per trade, the **requested entry
+price and the actual fill price**. If real fills average within ~2 cents (2018
+scale, ≈15 cents today) of the level on the 67% of setups where price has already
+left it — which would require the broker to fill orders behind the market — the
+backtest is right and this entry is wrong. Nothing short of measured fills should
+put money on it.
+
+**STATUS: the sweep signal is REJECTED. All four signals in `SweepSniper.mq5`
+and `LIQUIDITY_SNIPER_2_0.pine` now measure negative under achievable fills.
+`InpUseSweep` should default to false until a fill study says otherwise.**
+
+---
+
+## E-165, VERIFIED INDEPENDENTLY — AND THE SWEEP IS DEAD
+
+The adversarial audit above was not taken on trust. It was re-derived from
+scratch, in a separate script, and **the first attempt got the sign backwards** —
+it reported that correcting the entry made the strategy *better*, which was the
+tell that the check itself was wrong. For a SHORT the trigger has already been
+passed when the bar OPENS **below** the level, i.e. `t * (open − level) > 0`.
+With that fixed:
+
+```
+  M1: 2216/2955 = 75% of entries fill on a bar that OPENED past the level
+  M5:  507/642  = 79%
+ M15:  177/229  = 77%
+
+  M1  as shipped (books the level)   n=2955   +254.8 pts  +0.0862/tr  t +14.59  win 55.8%
+      HONEST (fills at the open)     n=2955    -30.4 pts  -0.0103/tr  t  -1.85  win 45.7%
+      ONLY WHAT THE EA WOULD TAKE    n=1110     -3.3 pts  -0.0030/tr  t  -0.37  win 43.6%
+  M5  as shipped                     n= 642   +133.1 pts  +0.2073/tr  t  +6.89  win 57.8%
+      HONEST                         n= 643    -31.2 pts  -0.0485/tr  t  -1.78  win 47.6%
+      ONLY WHAT THE EA WOULD TAKE    n= 216    -19.1 pts  -0.0885/tr  t  -2.39  win 41.2%
+```
+
+### The mechanism, and it is the same bug as E-151 one step earlier
+The sweep bar is **required to be a wick** — it pokes through the level and
+closes back on the other side. So by the time that bar has closed, price is
+already past the level, and the next bar opens past it too. A stop order at the
+level cannot rest there any more; it fills at the open, which is worse. The
+backtest booked the level anyway. **E-151 fixed exactly this defect on the exit
+and I did not think to look at the entry.**
+
+### The null that settles it
+The same pipeline, on a **driftless random walk** with the same bar geometry and
+the same costs — an instrument with zero edge by construction:
+```
+  seed 1  AS SHIPPED  n=1473  +33.3 pts  +0.0226/tr  t +4.98
+          HONEST      n=1475  -57.7 pts  -0.0391/tr  t -9.90
+  seed 2  AS SHIPPED  n=1518  +28.6 pts  +0.0189/tr  t +4.48
+  seed 3  AS SHIPPED  n=1456  +25.6 pts  +0.0176/tr  t +3.89
+```
+**The as-shipped code extracts money from a random walk at t≈4–5 on every
+seed.** That is arithmetically impossible for a real edge. With honest fills the
+null goes to −0.039 to −0.045, which is the spread — exactly what a null should
+pay. **The measurement was the edge.**
+
+### VERDICT: SWEEP — **DISPROVEN**
+Not UNPROVEN, not REJECTED-for-now. The headline figure was an accounting
+artefact, and the corrected figure on the subset the EA can actually execute is
+−0.0030 a trade on M1 (t −0.37, indistinguishable from zero) and −0.0885 on M5
+(t −2.39, negative).
+
+### What this withdraws
+**E-151's headline, and every result in this repo that used the sweep's entry
+fill** — E-134 through E-149, and E-153 through E-164 inclusive. The exit work
+(E-151, E-153 to E-157) remains methodologically sound and its *conclusions
+about exits* still hold; they were simply being applied to a strategy that does
+not exist. E-158 (SuperTrend) does not use this entry and is unaffected.
+
+### The one thing the EA got right, on its own, months ago
+`SweepSniper.mq5` refuses to arm when price is already past the level —
+*"a BUY LIMIT sitting at a level that price is already UNDER fills IMMEDIATELY,
+at the bottom of the sweep — the exact opposite of the trade."* That comment was
+written for E-141 and it is the correct objection. **The EA has been right and
+the backtest has been wrong since the day that comment was written, and nobody
+compared them.** The EA-executable subset is the 25% column above, and it is
+flat.

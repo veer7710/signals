@@ -389,3 +389,33 @@ def trail_apply(sl, c, close_k, d):
     if d * (c - close_k) >= 0:      # the level is behind price: unplaceable
         return None                 # -> the honest exit is this bar's close
     return max(sl, c) if d > 0 else min(sl, c)
+
+
+# ---------------------------------------------------------------------------
+# E-165. THE ENTRY FILL, WITH THE PRICE ACTUALLY AVAILABLE.
+#
+# The exit-side version of this bug (E-151) cost three signals their status.
+# The entry-side version cost the fourth - the sweep, the one thing left
+# standing - and it was in the repo the whole time, one step earlier in the
+# same trade.
+#
+# A stop order resting at `level` only fills AT `level` if the market is still
+# on the far side when the bar opens. The sweep bar is REQUIRED to be a wick:
+# it pokes through the level and closes back. So on 75-79% of setups the next
+# bar opens past the level, no order can be resting there any more, and the
+# fill is the open - which is worse, every time.
+#
+# Booking the level anyway extracts +0.0226 a trade from a DRIFTLESS RANDOM
+# WALK at t = 5. Nothing real does that.
+# ---------------------------------------------------------------------------
+def entry_fill(level, open_k, d):
+    """Where a stop order at `level` actually fills on bar k, or None if the
+    trade is gone.
+
+    d = +1 for a long (triggered by price rising to `level`), -1 for a short.
+    Returns the open when the bar has already opened past the trigger - the
+    price you would really get. Never returns something better than `level`.
+    """
+    if d * (open_k - level) > 0:      # already past: the stop fires at the open
+        return open_k
+    return level
