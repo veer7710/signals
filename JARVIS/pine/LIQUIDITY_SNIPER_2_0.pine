@@ -219,6 +219,24 @@ tgtMode  = input.string("next liquidity level", "Reference line", group = gR,
 tgtR     = input.float(0.0, "  ... or N x risk, if that mode is picked", group = gR, step = 0.5,
      tooltip = "DRAWN ONLY. The exit is the give-back trail. Every fixed target measured worse (E-137), and PARTIALS at every level and size were measured too (E-147) - closing 33% or 50% at 0.5R, 1R, 1.5R or 2R all banked LESS than letting it run, and none of them reduced the drawdown or the worst trade either. Partials are not on this chart because they cost money and buy nothing measurable. This line is a ruler, not a target.")
 
+gH = "5b · HIGHER TIMEFRAME BIAS"
+// E-169 measured the sweep POOLED over both directions and every trend context
+// and got a flat, slightly wrong-way result. A swept LOW in an uptrend and a
+// swept HIGH in an uptrend are OPPOSITE trades, and averaging a trade with its
+// own mirror image produces exactly that near-zero. Veer does not trade both:
+// he takes the sweep that agrees with where price is going.
+//
+// So the chart now says which is which, and the panel keeps the two books
+// apart. THIS IS NOT A PROVEN FILTER - it is the open question, put on the
+// chart so your own live data answers it. Nothing is hidden either way: an
+// against-trend signal still prints, just smaller and dimmer.
+htfOn  = input.bool(true, "Show higher-timeframe bias", group = gH)
+htfTf  = input.timeframe("15", "Bias timeframe", group = gH,
+     tooltip = "The clock that decides 'with trend'. 15 or 60 on an M1 chart is the ICT/SMC convention: read the direction high, take the entry low.")
+htfLen = input.int(50, "Bias EMA length", group = gH, minval = 2)
+htfDim = input.bool(true, "Dim the against-trend signals", group = gH,
+     tooltip = "On: against-trend setups print as small dots instead of full BUY/SELL labels. They are never removed - a signal that has printed is permanent. Off: everything prints the same.")
+
 gT = "6 · SESSIONS"
 showSess = input.bool(true, "Show sessions", group = gT)
 tzSess   = input.string("Etc/UTC", "Timezone", group = gT)
@@ -270,6 +288,19 @@ f_ccy(v) =>
     (v >= 0 ? "+" : "-") + ccy + str.tostring(math.abs(v) * gbpPoint * lots / 0.01, "0.00")
 
 atr = ta.atr(14)
+
+// The bias, read WITHOUT look-ahead: request the PREVIOUS higher-timeframe
+// value with lookahead_off, which is the only idiom that cannot repaint. A
+// bias taken from the forming HTF bar would change under you and every signal
+// on this chart would become a lie.
+htfSrc  = request.security(syminfo.tickerid, htfTf, close[1],
+     lookahead = barmerge.lookahead_off)
+htfEma  = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1],
+     lookahead = barmerge.lookahead_off)
+htfUp   = not na(htfSrc) and not na(htfEma) and htfSrc > htfEma
+htfDn   = not na(htfSrc) and not na(htfEma) and htfSrc < htfEma
+plot(htfOn and not na(htfEma) ? htfEma : na, "HTF bias",
+     color = htfUp ? color.new(cBuy, 55) : color.new(cSell, 55), linewidth = 2)
 ph = ta.pivothigh(high, pvLen, pvLen)
 pl = ta.pivotlow(low,  pvLen, pvLen)
 
@@ -841,6 +872,7 @@ brFillS = useBR and sState == 2 and bar_index > sBar and low <= sTrig
 // for the slot anyway.
 var int   posSrc = 0          // 1 sweep, 2 break+retest, 3 order block
 var float posTgt = na
+var bool  posWith = true
 
 // per-source books, so the panel can show which one is carrying
 var int   nS = 0
@@ -895,6 +927,17 @@ sigDetS   = obDetS
 anySig = sigSweepB or sigSweepS or sigBrB or sigBrS or sigObB or sigObS
      or sigDetB or sigDetS
 
+// WITH the higher-timeframe bias, or against it. Buys agree with an up bias,
+// sells with a down bias. When no bias is available (the HTF has not warmed up)
+// everything counts as with-trend so nothing is ever hidden by missing data.
+biasKnown = htfUp or htfDn
+withB  = not biasKnown or htfUp
+withS  = not biasKnown or htfDn
+sigBuyWith    = (sigSweepB or sigBrB or sigObB or sigDetB) and withB
+sigBuyAgainst = (sigSweepB or sigBrB or sigObB or sigDetB) and not withB
+sigSellWith    = (sigSweepS or sigBrS or sigObS or sigDetS) and withS
+sigSellAgainst = (sigSweepS or sigBrS or sigObS or sigDetS) and not withS
+
 takeSweepB = sigSweepB and posDir == 0
 takeSweepS = sigSweepS and posDir == 0
 takeBrB    = sigBrB and posDir == 0 and not takeSweepB and not takeSweepS
@@ -913,8 +956,25 @@ anySell = takeSweepS or takeBrS or takeObS or takeDetS
 
 // how many setups the chart showed you that the panel could not book
 var int nMissed = 0
+// The open question of E-169, kept as two separate books so Veer's own live
+// data answers it: does the sweep that agrees with the higher-timeframe bias
+// behave differently from the one that fights it? Pooling the two is what
+// produced a flat result in the research, and pooling them here would hide the
+// same thing on the chart.
+var int   nWith    = 0
+var int   nAgainst = 0
+var float pWith    = 0.0
+var float pAgainst = 0.0
+var int   wWith    = 0
+var int   wAgainst = 0
 if newDay
     nMissed := 0
+    nWith := 0
+    nAgainst := 0
+    pWith := 0.0
+    pAgainst := 0.0
+    wWith := 0
+    wAgainst := 0
 if anySig and posDir != 0 and barstate.isconfirmed
     nMissed += 1
 
@@ -947,6 +1007,7 @@ if anyBuy or anySell
     isBr      = takeBrB or takeBrS
     isObRet   = takeObB or takeObS
     posStop  := isSweep ? stopSweep : isBr ? stopBr : isObRet ? stopObRet : stopObDet
+    posWith  := anyBuy ? withB : withS
     posInit  := posStop
     posPeak  := posEntry
     posBar   := bar_index
@@ -1032,6 +1093,14 @@ if posDir != 0 and barstate.isconfirmed
         else
             nShort   += 1
             ptsShort += pts
+        if posWith
+            nWith += 1
+            pWith += pts
+            wWith += pts > 0 ? 1 : 0
+        else
+            nAgainst += 1
+            pAgainst += pts
+            wAgainst += pts > 0 ? 1 : 0
         if posSrc == 1
             nS += 1
             pS += pts
@@ -1189,10 +1258,18 @@ plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side level",
 plot(showLvl and posDir == 0 and not na(lvlB) ? lvlB : na, "Buy-side level",
      color = color.new(cBuy, 45), style = plot.style_linebr, linewidth = 1)
 
-plotshape(sigSweepB, "BUY  sweep",  shape.labelup,   location.belowbar,
+// WITH the bias: the full label. AGAINST it: a small dot, still permanent.
+// Nothing is deleted - Veer: "make sure like signals dont disappear".
+plotshape(sigSweepB and (not htfDim or withB), "BUY  sweep",
+     shape.labelup, location.belowbar,
      color = cBuy,  text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(sigSweepS, "SELL sweep",  shape.labeldown, location.abovebar,
+plotshape(sigSweepS and (not htfDim or withS), "SELL sweep",
+     shape.labeldown, location.abovebar,
      color = cSell, text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(htfDim and sigSweepB and not withB, "buy sweep (against bias)",
+     shape.circle, location.belowbar, color = color.new(cBuy, 55), size = size.tiny)
+plotshape(htfDim and sigSweepS and not withS, "sell sweep (against bias)",
+     shape.circle, location.abovebar, color = color.new(cSell, 55), size = size.tiny)
 plotshape(sigBrB, "BUY  break+retest",  shape.triangleup,   location.belowbar,
      color = cBuy,  size = size.small)
 plotshape(sigBrS, "SELL break+retest",  shape.triangledown, location.abovebar,
@@ -1238,7 +1315,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 9 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (htfOn ? 3 : 0) + (panelBig ? 9 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1318,6 +1395,19 @@ if barstate.islast and showPanel
              posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
     r += 1
+    if htfOn
+        f_sep(r, "── with the " + htfTf + " bias, or against it ──")
+        r += 1
+        f_row(r, "with trend", f_num(pWith, "0.0") + "pt",
+                 str.tostring(nWith) + " tr  " +
+                 (nWith > 0 ? str.tostring(100.0 * wWith / nWith, "0") + "%W" : "-"),
+                 pWith >= 0 ? cPos : cNeg)
+        r += 1
+        f_row(r, "against trend", f_num(pAgainst, "0.0") + "pt",
+                 str.tostring(nAgainst) + " tr  " +
+                 (nAgainst > 0 ? str.tostring(100.0 * wAgainst / nAgainst, "0") + "%W" : "-"),
+                 pAgainst >= 0 ? cPos : cNeg)
+        r += 1
     f_sep(r, "signals are real · the edge is NOT proven (E-165)")
     r += 1
 
