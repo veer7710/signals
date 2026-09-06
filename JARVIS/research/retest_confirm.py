@@ -498,6 +498,37 @@ def run_tf(tf):
         hdr(f"stacked confirmation — {lbl}")
         line("ALLOWED", a); line("REFUSED", r)
 
+    # ---------------- TEST F: THE CEILING. Is there ANY separation to find?
+    print("\n" + "=" * (W + 62))
+    print("  TEST F — THE CEILING. Forget out-of-sample: split the WHOLE book at")
+    print("  each feature's own median and ask whether the two sides differ AT ALL.")
+    print("  This is the most favourable test that exists (it uses the answer to")
+    print("  choose the question). If nothing clears a Bonferroni-corrected bar")
+    print("  HERE, there is no separation to find and no filter can work.")
+    print("=" * (W + 62))
+    sd_all = summ(book)["sd"]
+    print(f"  per-trade sd of the book {sd_all:.4f} pts. With n={len(A2)} unseen trades")
+    print(f"  this study can only resolve a per-trade difference of about "
+          f"{2*sd_all/math.sqrt(len(A2)/2):.4f} pts at t=2 - the spread is "
+          f"{statistics.median(SPC):.4f}. POWER MATTERS: read the limitation.")
+    print(f"  {'feature, whole book split at its median':<{W}}{'n hi':>6}{'per hi':>10}"
+          f"{'n lo':>6}{'per lo':>10}{'Welch t':>10}")
+    bonf = 0
+    for f in FEATS:
+        v = sorted(x["f"][f] for x in book)
+        thr = v[len(v) // 2]
+        hi, lo = split(book, f, thr, True)
+        zh, zl = summ(hi), summ(lo)
+        if zh is None or zl is None:
+            continue
+        vh = zh["sd"] ** 2 / zh["n"]; vl = zl["sd"] ** 2 / zl["n"]
+        tw = (zh["per"] - zl["per"]) / math.sqrt(vh + vl) if (vh + vl) > 0 else 0.0
+        if abs(tw) > 2.99:
+            bonf += 1
+        print(f"  {FLABEL[f]:<{W}}{zh['n']:>6}{zh['per']:>+10.4f}{zl['n']:>6}"
+              f"{zl['per']:>+10.4f}{tw:>10.2f}" + ("   *BONF" if abs(tw) > 2.99 else ""))
+    print(f"  features clearing |t| > 2.99 (Bonferroni 0.05/{len(FEATS)}) IN SAMPLE: {bonf}")
+
     # ---------------- TEST E: hours picked in sample
     print("\n" + "=" * (W + 62))
     print("  TEST E — hours that paid in the first half, applied to the second.")
@@ -510,6 +541,25 @@ def run_tf(tf):
     hdr("hours chosen on the first half")
     line("SECOND HALF, ALLOWED (unseen)", a)
     line("SECOND HALF, REFUSED (unseen)", r)
+
+    # ---------------- TEST G: filtering at the CANDIDATE level frees slots.
+    # Everything above labelled an ALREADY-SCHEDULED book. A real filter is
+    # applied before the scheduler, so refusing one setup can let a later one
+    # take the slot. That can only be measured by re-running the whole book.
+    print("\n" + "=" * (W + 62))
+    print("  TEST G — the same filters applied BEFORE the one-position scheduler,")
+    print("  re-simulated over the whole series (refusing a setup frees the slot")
+    print("  for a later one, which no subset-labelling test can see).")
+    print("=" * (W + 62))
+    hdr("re-scheduled books")
+    line("UNFILTERED (baseline)", book)
+    def resched(lbl, pred):
+        line(lbl, simulate(s, SPC, [c for c in cand if pred(c)]))
+    resched("clspos > first-half median", lambda c: c["f"]["clspos"] > md["clspos"])
+    resched("disp   < first-half median", lambda c: c["f"]["disp"] < md["disp"])
+    resched("room   < first-half median", lambda c: c["f"]["room"] < md["room"])
+    resched("stacked (disp hi, depth lo, close hi)", stack)
+    resched("body > med AND clspos > med", lambda c: c["f"]["body"] > md["body"] and c["f"]["clspos"] > md["clspos"])
     return book, A1, A2, ladders
 
 

@@ -249,7 +249,8 @@ def line(lbl, r, armed=None, filled=None, w=30):
 
 
 # --------------------------------------------------------------- STEP 1: NULL
-def run_null(seeds=(1, 2, 3), nbars=200000, f=1.0, buf=0.30, charge=True):
+def run_null(seeds=(1, 2, 3), nbars=200000, f=1.0, buf=0.30, charge=True,
+             maxwait=120):
     s0, SP0, A0, cs0 = H.ctx("M1")
     rr = sorted(s0.h[i] - s0.l[i] for i in range(len(s0)))
     med_rng = rr[len(rr) // 2]
@@ -265,7 +266,7 @@ def run_null(seeds=(1, 2, 3), nbars=200000, f=1.0, buf=0.30, charge=True):
         ss = synth(nbars, sig, ticks, 900 + sd)
         AA = watr(ss, 14)
         SPC = [med_sp if charge else 0.0] * len(ss)
-        c = toptick_candidates(ss, AA, SPC, f, buf)
+        c = toptick_candidates(ss, AA, SPC, f, buf, maxwait=maxwait)
         r, a, fl = simulate(ss, SPC, AA, c)
         res.append((sd, r, a, fl))
     return res, med_rng, med_sp, sig
@@ -331,6 +332,166 @@ BUFS = [0.10, 0.20, 0.30, 0.50]
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
+
+    if only == "closest":
+        # THE ONLY CELL IN THE WHOLE STUDY THAT LOOKS LIKE ANYTHING:
+        #   M1, f=1.00 (the true top tick), buf=0.10 ATR, limit rests ONE bar.
+        #   GROSS +0.0103/trade t=3.64 - and NET -0.0168/trade t=-5.94.
+        # If it is real, gross must (a) be ~0 on the null, (b) beat a matched
+        # random control, (c) hold in the unseen half. Attacked here.
+        F, BUF, MW = 1.00, 0.10, 1
+        # (a) the null, gross, at exactly this setting
+        res, med_rng, med_sp, sig = run_null(seeds=(1, 2, 3), f=F, buf=BUF,
+                                             charge=False, maxwait=MW)
+        print("=" * 110)
+        print(f"  CLOSEST CELL: M1 f={F:.2f} buf={BUF:.2f}A wait={MW} bar")
+        print("=" * 110)
+        print("  (a) the NULL at this exact setting, ZERO cost (must be ~0):")
+        print(HDR)
+        allr = []
+        for (sd, r, a, fl) in res:
+            allr += r
+        line("null pooled, gross", allr, sum(x[2] for x in res),
+             sum(x[3] for x in res))
+
+        s, SP, A, cs = H.ctx("M1")
+        SPC = [x * cs for x in SP]
+        ZERO = [0.0] * len(s)
+        mid = len(s) // 2
+        c0 = toptick_candidates(s, A, ZERO, F, BUF, maxwait=MW)
+        r0, a0, f0 = simulate(s, ZERO, A, c0)
+        cN = toptick_candidates(s, A, SPC, F, BUF, maxwait=MW)
+        rN, aN, fN = simulate(s, SPC, A, cN)
+        print("\n  (b) real vs matched random-geometry control, GROSS:")
+        print(HDR)
+        line("REAL gross", r0, a0, f0)
+        pers, allc = [], []
+        for sd in range(12):
+            rc, ac, fc = random_control(s, ZERO, A, c0, 8000 + sd)
+            z = summ(rc)
+            if z:
+                pers.append(z["per"])
+                allc += rc
+        line("random ctrl x12, gross", allc)
+        cm = sum(pers) / len(pers)
+        csd = (sum((x - cm) ** 2 for x in pers) / (len(pers) - 1)) ** 0.5
+        zr = summ(r0)
+        own_se = zr["sd"] / zr["n"] ** 0.5
+        print(f"    control mean {cm:+.4f} sd {csd:.4f} across seeds; "
+              f"REAL - CONTROL = {zr['per']-cm:+.4f}")
+        print(f"    in units of the REAL result's OWN standard error "
+              f"({own_se:.4f}): {(zr['per']-cm)/own_se:.2f}")
+
+        print("\n  (c) first half chose nothing here - both halves shown, "
+              "gross and net:")
+        print(HDR)
+        for lbl, rr in (("gross", r0), ("net  ", rN)):
+            line(f"{lbl} 1st half", [x for x in rr if x["j"] < mid])
+            line(f"{lbl} 2nd half", [x for x in rr if x["j"] >= mid])
+        print("\n  (d) what the gross edge has to pay for:")
+        zg = summ(r0)
+        msp = statistics.median(SPC)
+        print(f"    gross edge          {zg['per']:+.4f} pts/trade")
+        print(f"    round-turn spread   {msp:+.4f} pts/trade (median charged)")
+        print(f"    edge / cost         {100.0*zg['per']/msp:.1f}%  "
+              f"-> it covers {100.0*zg['per']/msp:.0f}% of its own cost")
+        print()
+        return
+
+    if only == "wait":
+        # How long the limit is allowed to rest. A "top tick" trade is an
+        # IMMEDIATE retest; 120 bars is a long leash and may be diluting it.
+        # Shown gross AND net so a cost-eaten edge would be visible.
+        for tf in ("M1", "M5"):
+            s, SP, A, cs = H.ctx(tf)
+            SPC = [x * cs for x in SP]
+            ZERO = [0.0] * len(s)
+            print("=" * 110)
+            print(f"  {tf} — how long may the limit rest? f=1.00 (true top tick)")
+            print("=" * 110)
+            print(HDR)
+            for mw in (1, 3, 5, 10, 20, 60, 120):
+                for buf in (0.10, 0.30):
+                    c = toptick_candidates(s, A, SPC, 1.00, buf, maxwait=mw)
+                    r, a, fl = simulate(s, SPC, A, c)
+                    line(f"NET   wait{mw:>4} buf={buf:.2f}", r, a, fl)
+                    c0 = toptick_candidates(s, A, ZERO, 1.00, buf, maxwait=mw)
+                    r0, a0, f0 = simulate(s, ZERO, A, c0)
+                    line(f"GROSS wait{mw:>4} buf={buf:.2f}", r0, a0, f0)
+                print()
+        return
+
+    if only == "riskcheck":
+        # Does the TIGHT STOP actually bound the loss? That is the whole
+        # premise of the top-tick entry. Measured in R, not in words.
+        for tf in ("M1", "M5"):
+            s, SP, A, cs = H.ctx(tf)
+            SPC = [x * cs for x in SP]
+            msp = statistics.median(SPC)
+            print("=" * 100)
+            print(f"  {tf} — IS THE RISK REALLY SMALL? median charged spread "
+                  f"{msp:.5f} pts (round turn)")
+            print("=" * 100)
+            print(f"  {'cell':<22}{'n':>6}{'mean risk':>11}{'spread/risk':>13}"
+                  f"{'worst pts':>11}{'worst R':>10}{'>1R losses':>12}"
+                  f"{'>3R losses':>12}")
+            for f in (1.00, 0.75, 0.50, 0.00):
+                for buf in (0.10, 0.30):
+                    c = toptick_candidates(s, A, SPC, f, buf)
+                    r, a, fl = simulate(s, SPC, A, c)
+                    if not r:
+                        continue
+                    rs = [x["risk"] for x in r]
+                    mr = sum(rs) / len(rs)
+                    Rs = [x["pts"] / x["risk"] for x in r if x["risk"] > 0]
+                    w = min(Rs)
+                    o1 = sum(1 for x in Rs if x < -1.0)
+                    o3 = sum(1 for x in Rs if x < -3.0)
+                    print(f"  f={f:.2f} buf={buf:.2f}A     {len(r):>6}{mr:>11.4f}"
+                          f"{msp/mr:>12.1%}{min(x['pts'] for x in r):>11.2f}"
+                          f"{w:>10.1f}{o1:>7} {100.0*o1/len(Rs):>4.1f}%"
+                          f"{o3:>7} {100.0*o3/len(Rs):>4.1f}%")
+            print()
+        return
+
+    if only == "gross":
+        # DIAGNOSTIC. Zero cost on REAL data. This is NOT tradeable and is not
+        # a result - it separates "the entry has no edge" from "the entry has
+        # an edge that the spread eats". Reported as gross, always labelled.
+        for tf in ("M1", "M5"):
+            s, SP, A, cs = H.ctx(tf)
+            SPC = [x * cs for x in SP]
+            ZERO = [0.0] * len(s)
+            print("=" * 110)
+            print(f"  {tf} — GROSS (zero cost). NOT TRADEABLE. Diagnostic only.")
+            print(f"  median charged spread on this series: "
+                  f"{statistics.median(SPC):.5f} pts")
+            print("=" * 110)
+            print(HDR)
+            for f in OFFSETS:
+                for buf in (0.10, 0.30):
+                    c = toptick_candidates(s, A, ZERO, f, buf)
+                    r, a, fl = simulate(s, ZERO, A, c)
+                    line(f"GROSS f={f:.2f} buf={buf:.2f}A", r, a, fl)
+            # matched gross control at the best-looking cell
+            print()
+            for f, buf in ((1.00, 0.10), (1.00, 0.30)):
+                c = toptick_candidates(s, A, ZERO, f, buf)
+                allc = []
+                for sd in range(12):
+                    rc, ac, fc = random_control(s, ZERO, A, c, 7000 + sd)
+                    allc += rc
+                line(f"GROSS ctrl x12 f={f:.2f} buf={buf:.2f}", allc)
+            # exit sensitivity, net cost, at the M1 pick
+            print()
+            print(f"  {tf} — give-back sensitivity, NET cost, f=1.00 buf=0.10:")
+            print(HDR)
+            c = toptick_candidates(s, A, SPC, 1.00, 0.10)
+            for g in (0.15, 0.25, 0.50, 0.80):
+                r, a, fl = simulate(s, SPC, A, c, give=g)
+                line(f"give {g:.2f} (net)", r, a, fl)
+            print()
+        return
 
     if only == "synthcheck":
         # prove the copied synth() is byte-identical to adv_null's original
