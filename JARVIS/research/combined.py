@@ -106,7 +106,13 @@ def candidates(s, A, cs, SP, use, pk=5, sweep_atr=0.10, wick=0.6460,
                                 if (s.c[k] < px - tol * a) if d > 0 else (s.c[k] > px + tol * a):
                                     break
                             if j is not None:
-                                out.append((j, BR, d, trig + d * SP[j] * cs / 2.0, sl))
+                                # E-165. A STOP order at `trig`: if the bar has
+                                # already opened past it, nothing can be resting
+                                # there and the fill is the open. Same bug as
+                                # the sweep's, and this branch was missed when
+                                # the sweep's was fixed.
+                                bf = entry_fill(trig, s.o[j], d)
+                                out.append((j, BR, d, bf + d * SP[j] * cs / 2.0, sl))
 
     if OBD in use or OBR in use:
         for (kb, top, bot, d) in blocks(s, obLen, 0.0, True):
@@ -128,6 +134,12 @@ def candidates(s, A, cs, SP, use, pk=5, sweep_atr=0.10, wick=0.6460,
                             j = k
                             break
                     if j is not None:
+                        # E-165 does NOT apply here, and the difference matters.
+                        # This is a LIMIT (price returns INTO the block), not a
+                        # stop. A limit that gaps through fills BETTER, not
+                        # worse, and the order really was resting there. Booking
+                        # the level is therefore conservative, not optimistic -
+                        # the opposite failure mode, and the safe one.
                         out.append((j, OBR, d, lvl + d * SP[j] * cs / 2.0, sl))
     # bar first, then priority - exactly how the chart resolves a tie
     out.sort(key=lambda x: (x[0], x[1]))
