@@ -746,4 +746,7 @@ CMDS["trendctrl"] = cmd_trendctrl
 
 if __name__ == "__main__":
     c = sys.argv[1] if len(sys.argv) > 1 else "facts"
-    CMDS[c](*sys.argv[2:])
+    a = [x.split(",") if x in ("all",) or "," in x or x in CTX else x
+         for x in sys.argv[2:]]
+    a = [[x] if isinstance(x, str) and x in CTX else x for x in a]
+    CMDS[c](*a)
