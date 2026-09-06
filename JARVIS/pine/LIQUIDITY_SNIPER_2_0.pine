@@ -150,7 +150,10 @@ maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", 
      tooltip = "E-138. Not an optimisation - uncapped, the worst single trade was 57% of a GBP60 account.")
 giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
 maxHold  = input.int(240,  "Time exit (bars)", group = gR)
-tgtR     = input.float(0.0, "Draw a reference line at N x risk (0 = none)", group = gR, step = 0.5,
+tgtMode  = input.string("next liquidity level", "Reference line", group = gR,
+     options = ["none", "next liquidity level", "N x risk"],
+     tooltip = "WHERE THE MOVE IS RUNNING TO, drawn, never traded. 'Next liquidity level' is the nearest confirmed swing on the other side - for a long, the lowest swing high above your entry - which is the resting liquidity the move is actually aiming at. This is the answer to 'tp based of levels and analysis' as far as the evidence goes: E-153 tried to TRADE it and could not, because capping entries on it leaves 34 trades out of 1008 and that is not a sample. So you get it as a ruler to read the trade by. The EXIT is still the give-back trail, which is the only exit with evidence behind it (E-156: it beats every alternative at 28 out of 28 prop-firm cells).")
+tgtR     = input.float(0.0, "  ... or N x risk, if that mode is picked", group = gR, step = 0.5,
      tooltip = "DRAWN ONLY. The exit is the give-back trail. Every fixed target measured worse (E-137), and PARTIALS at every level and size were measured too (E-147) - closing 33% or 50% at 0.5R, 1R, 1.5R or 2R all banked LESS than letting it run, and none of them reduced the drawdown or the worst trade either. Partials are not on this chart because they cost money and buy nothing measurable. This line is a ruler, not a target.")
 
 gT = "6 · SESSIONS"
@@ -200,6 +203,36 @@ f_ccy(v) =>
 atr = ta.atr(14)
 ph = ta.pivothigh(high, pvLen, pvLen)
 pl = ta.pivotlow(low,  pvLen, pvLen)
+
+// Confirmed swing levels, kept so the chart can show where the move is heading
+// INTO rather than at some multiple of the stop. A pivot enters these arrays
+// only on the bar it is confirmed, which is pvLen bars after it formed, so
+// nothing here is knowable earlier than it was.
+var array<float> lvHi = array.new_float()
+var array<float> lvLo = array.new_float()
+if not na(ph)
+    array.push(lvHi, ph)
+    if array.size(lvHi) > 300
+        array.shift(lvHi)
+if not na(pl)
+    array.push(lvLo, pl)
+    if array.size(lvLo) > 300
+        array.shift(lvLo)
+
+// The nearest opposing level in the trade's favour: for a long, the lowest
+// swing HIGH above entry - the resting sell-side liquidity the move is running
+// at. E-153 tried to TRADE this and could not: capping the entry on it leaves
+// 34 trades of 1008, which is not a sample. So it is DRAWN and not traded, and
+// the label says so.
+f_nextLevel(d, px) =>
+    float best = na
+    arr = d > 0 ? lvHi : lvLo
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            lv = array.get(arr, i)
+            if d * (lv - px) > 0 and (na(best) or d * (lv - best) < 0)
+                best := lv
+    best
 
 // ---------------------------------------------------------------- sessions --
 // E-161/E-162 measured these properly for the first time. The London/New York
@@ -598,7 +631,9 @@ if anyBuy or anySell
     posInit  := posStop
     posPeak  := posEntry
     posBar   := bar_index
-    posTgt   := tgtR > 0 ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
+    posTgt   := tgtMode == "next liquidity level" ? f_nextLevel(posDir, posEntry) :
+                tgtMode == "N x risk" and tgtR > 0
+                     ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
     // consume the setup that fired, so it cannot fire twice
     if takeSweepB
         lvlB := na
@@ -809,7 +844,8 @@ if posDir != 0 and showLive and not na(pEnt)
     if not na(pTp)
         line.set_x2(pTp, bar_index)
         label.set_xy(lTp, bar_index, posTgt)
-        label.set_text(lTp, "TP " + f_num(posDir * (posTgt - posEntry), "0.0")
+        label.set_text(lTp, (tgtMode == "next liquidity level" ? "LIQUIDITY " : "RULER ")
+             + f_num(posDir * (posTgt - posEntry), "0.0")
              + "pt " + f_ccy(posDir * (posTgt - posEntry)))
 
 // ---------------------------------------------------------------- drawing --
