@@ -23,17 +23,19 @@
 //
 //    2  BREAK+RETEST   the level is DISRESPECTED - a bar CLOSES through it -
 //                      then price comes back, holds, and resumes
-//                      2013 trades  64.3% win  +97.3 pts  73.8 control se
-//                      in-sample +0.0465  ->  out of sample +0.0502
-//                      This is the class of entry he pointed at as missed,
-//                      and it is real. It trades WITH the break, where the
-//                      sweep fades it - opposites, separated by whether the
-//                      level was taken by a wick or by a close.
+//                      OFF BY DEFAULT (E-151). The +97.3 pts once claimed
+//                      here came from a broken trail. Under fills that could
+//                      actually happen: -0.0095 a trade on M1, -0.0671 on M5,
+//                      and negative in 5 of 6 off-XAU cells. It trades WITH
+//                      the break, where the sweep fades it - a real and
+//                      opposite idea that does not clear the spread.
 //
 //    3  ORDER BLOCK    price returns to the last opposing candle before a run
-//                      6026 trades  60.4% win  +98.1 pts  56.8 control se
-//                      in-sample +0.0173  ->  out of sample +0.0152
-//                      Weakest per trade of the three and still clearly real.
+//                      OFF BY DEFAULT (E-151), same story: -0.0089 a trade at
+//                      detection and -0.0319 on the return, negative in 6 of 6
+//                      off-XAU cells. It is NOT noise - it beats a random
+//                      entry (-0.048) - the structure is real, the margin is
+//                      not. It stays on the chart as DRAWING.
 //
 //  They share ONE position at a time, first come first served, and the panel
 //  keeps a SEPARATE BOOK for each so you can see which is carrying you.
@@ -60,32 +62,62 @@
 //     REFUSE the setup outright if that stop is wider than 1.2 ATR. Uncapped,
 //     one trade took 57% of a GBP60 account. Capped: worst -GBP4.63.
 //     exit gives back 25% of the best excursion. No fixed target - every
-//     fixed target measured worse (E-137).
+//     fixed target measured worse (E-137). The give-back value barely matters
+//     once the fill model is honest (E-151); what matters is that there is
+//     no fixed target.
 //
-//  2018 H1, one instrument, never forward tested. SUPPORTED, not proven.
+//  THE SWEEP, measured under fills that could actually be got (E-151):
+//     M1  +288.6 pts  n=4039  +0.0715/trade  t=14.3
+//     M5  +171.4 pts  n=898   +0.1908/trade  t=7.7
+//     65 standard errors above a time-shifted control which itself LOSES 193
+//     points - so the money is in the level, not in the trail.
+//     Positive in 6 of 6 instrument/timeframe cells off XAUUSD 2018.
+//
+//  NEVER FORWARD TESTED. SUPPORTED, not proven. Nothing here has met a
+//  real spread, a real fill or a real Sunday gap.
 // ===========================================================================
 indicator("LIQUIDITY SNIPER 2.0", overlay = true, max_labels_count = 500,
      max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
 
 // ------------------------------------------------------------------ inputs --
 gX = "1 · WHICH SIGNALS"
-// E-149 simulated all four sharing ONE position, which is what actually runs.
-// More signals = more total points and a THINNER per-trade edge, and every
-// extra trade pays the round trip again. Measured, total points by slippage:
-//                       0.00     0.02     0.05     0.10
-//   M1 sweep alone     449.3    369.2    249.0     48.7
-//   M1 all four        556.1    370.0     91.0   -374.0    <- crosses at 0.02
-//   M5 sweep alone     258.1    240.1    213.2    168.3
-//   M5 all four        322.6    282.9    223.3    123.9    <- crosses at ~0.07
-// SO: on M5, run all four. ON M1, IF YOUR FILLS SLIP MORE THAN ABOUT 0.02
-// POINTS, TURN THE EXTRAS OFF - 85 trades a day pays 85 round trips a day.
-// Measure it on demo and let the "cost paid" row in the panel decide.
+// E-151 SUPERSEDES E-149. E-149 measured all four signals sharing one position
+// and concluded "on M5 run all four". That conclusion was built on a broken
+// exit model and is WITHDRAWN.
+//
+// The break: the give-back trail was computed from a bar's own high, then the
+// next bar was allowed to fill at it. For a long that is a sell-stop ABOVE the
+// market - an order that cannot be placed - so the backtest was quietly paying
+// itself the previous bar's high. The tell was that "best give-back" ran to the
+// tightest value in every range tested, on all four signals and both clocks.
+// A parameter that is monotone to the edge of what you tried is not an
+// optimum, it is a leak. Clamp the trail to the bar's close and it reverses:
+//
+//   ACHIEVABLE FILLS, g=0.25       n      points    per trade    win%
+//     M1 SWEEP                   4045     +288.6     +0.0713    53.3%
+//     M1 break+retest            2023      -19.3     -0.0095    43.7%
+//     M1 order block detect      2675      -23.7     -0.0089    42.1%
+//     M1 order block return      6142     -195.9     -0.0319    40.8%
+//     M5 SWEEP                    907     +171.3     +0.1888    55.6%
+//     M5 break+retest             369      -24.8     -0.0671    41.7%
+//     M5 order block detect       607      -18.1     -0.0299    44.6%
+//     M5 order block return      1273      -80.5     -0.0632    45.8%
+//
+// The sweep is the only one that survives, and it survives hard: t = 14.3, and
+// 65 standard errors above a time-shifted control which itself LOSES 193
+// points. The control losing is the important half - it says the trail is not
+// what makes the money, the level is.
+//
+// The other three are not noise either: at -0.009 and -0.032 a trade they beat
+// a random entry (-0.048), so the structure is real. It just does not clear the
+// spread. So they are OFF by default and they still DRAW: you see the blocks
+// and the breaks behind the trade without paying for them.
 useSweep = input.bool(true, "SWEEP  — wick takes the level, price returns", group = gX,
-     tooltip = "The strongest of the four by every measure: 107.3 control se, and positive on all six instrument/timeframe cells it was pointed at without re-fitting (E-146). If you only run one, run this.")
-useBR    = input.bool(true, "BREAK + RETEST — close through, then holds",   group = gX,
-     tooltip = "73.8 control se. Trades WITH the break where the sweep fades it - the wick filter separates them.")
-useOB    = input.bool(true, "ORDER BLOCK — the block, and the return to it", group = gX,
-     tooltip = "The weakest of the three and still clearly real (56.8 control se). On M1 it is the first thing to switch off if your fills slip.")
+     tooltip = "The only one of the three that survives an achievable-fill model (E-151): +0.0715/trade on M1 over 4039 trades, t=14.3, and 65 standard errors above a time-shifted control that itself LOSES 193 points. The trail does not make the money - the level does.")
+useBR    = input.bool(false, "BREAK + RETEST — close through, then holds",   group = gX,
+     tooltip = "OFF by default. E-151: its edge only existed while the backtest was booking trail fills at prices no order could have been resting at. Under achievable fills it is -0.0095/trade on M1 and -0.0671 on M5. Better than a random entry, but not enough to pay the spread. The signals still DRAW - switch it on to watch it, not to trade it.")
+useOB    = input.bool(false, "ORDER BLOCK — the block, and the return to it", group = gX,
+     tooltip = "OFF by default. E-151: same story as break+retest. Under achievable fills, detection is -0.0089/trade and the return is -0.0319 on M1. The order block finds real structure - it is genuinely better than a random entry - but the move it catches does not pay the spread on its own. The blocks still DRAW so you can see them behind the sweep.")
 
 gS = "2 · THE SWEEP  (measured; leave alone unless testing)"
 pvLen    = input.int(5,    "Swing needs this many bars either side", group = gS, minval = 1)
@@ -603,7 +635,17 @@ if posDir != 0 and barstate.isconfirmed
         runUp = posDir * (posPeak - posEntry)
         if runUp > 0
             cand = posEntry + posDir * runUp * (1.0 - giveBack)
-            posStop := posDir > 0 ? math.max(posStop, cand) : math.min(posStop, cand)
+            // E-151. The level is derived from THIS bar's extreme, so it can
+            // only exist once this bar has closed. If price has already left it
+            // behind, no stop could have been resting there and the panel must
+            // not book a fill at it - the honest exit is the close. Without
+            // this the panel pays you the previous bar's high, and the tighter
+            // the give-back the more often it does: unclamped, the "best"
+            // give-back ran to the edge of every range tested, which is what a
+            // measurement artefact looks like, not an edge.
+            passed = posDir > 0 ? cand >= close : cand <= close
+            posStop := passed ? close : (posDir > 0 ? math.max(posStop, cand)
+                                                    : math.min(posStop, cand))
 
 // ======================= THE LIVE POSITION, DRAWN ==========================
 // One set of objects, created on the fill and moved each bar, deleted on the

@@ -5591,6 +5591,13 @@ sweep at 1.5–3R is **SUPPORTED** and remains the strongest candidate here.
 ---
 
 ## E-137 — THE FILTERED SWEEP WITH THE EXIT THAT BANKS THE MOST
+
+> **CORRECTED BY E-151.** The exit comparison here ran on a trail that could
+> fill at prices no order could rest at, so every number below overstates.
+> The give-back winner survives the correction; the magnitude does not
+> (M1 +0.1200 -> +0.0715 a trade). The 5% boundary optimum noted here as
+> suspicious was the leak itself.
+
 `JARVIS/research/sweep_system.py`
 
 > *"we don't want certain rr we just wanna be profitable"* — so every exit was
@@ -5810,6 +5817,11 @@ displacement filter **off by default so the chart and the EA cannot disagree.**
 ---
 
 ## E-140 — THE UNITS, AND THE PER-TRADE SIZE PROBLEM
+
+> **CORRECTED BY E-151 and re-run.** Corrected: M1 +0.0775, M5 +0.1889,
+> M15 +0.1939 a trade, out of sample holding on all three. M1 is still the
+> biggest earner and is now clearly the first to die to slippage.
+
 `JARVIS/research/sweep_tf.py`
 
 > *"0.1840 is that points if so that's a joke, i hit 30 to 80 points trading
@@ -5899,6 +5911,11 @@ side, so a limit is right there.
 ---
 
 ## E-142 — THE ORDER BLOCK FINDER, MEASURED
+
+> **WITHDRAWN BY E-151.** The edge measured here came from the trail leak.
+> Under achievable fills the order block is NEGATIVE on both clocks and in
+> all six off-XAU cells. It draws; it does not trade.
+
 `JARVIS/research/orderblock.py`
 
 > *"this orderblock script i just sent u is so perfect... possibly best
@@ -6022,6 +6039,10 @@ M1 and M5. The inverse is **SUPPORTED**.
 ---
 
 ## E-144 — BREAK AND RETEST, THE ENTRY HE SAID WE WERE MISSING
+
+> **WITHDRAWN BY E-151.** Negative under achievable fills (-0.0095 M1,
+> -0.0671 M5). Better than a random entry, not better than the spread.
+
 `JARVIS/research/break_retest.py`
 
 > *"say smc liquidity zone we should have on chart, if price disrespected them
@@ -6114,6 +6135,10 @@ mechanical encoding of it does not separate, which is a different claim.
 ---
 
 ## E-146 — DOES ANY OF THIS SURVIVE OFF XAUUSD 2018?
+
+> **RE-RUN UNDER E-151.** The sweep's answer STRENGTHENS: positive in 6 of 6
+> cells. The other two signals go negative in 6 of 6 and 5 of 6.
+
 `JARVIS/research/multi_market.py`
 
 Two questions answered at once, and they are the ones that decide whether this
@@ -6262,6 +6287,10 @@ chased.**
 ---
 
 ## E-148 — IS THE ORDER BLOCK'S "TOP TICK" REAL, OR DRAWN IN HINDSIGHT?
+
+> **SUPERSEDED BY E-151.** Moot: the order block does not clear the spread
+> at all, so how good its top tick is no longer decides anything.
+
 `JARVIS/research/ob_hindsight.py`
 
 Veer sent five XAUUSD M1 screenshots: *"it catches top tick entrys and some that
@@ -6331,6 +6360,10 @@ XAU M1 numbers, not a distraction from them. XAU M1 remains the shipping target.
 ---
 
 ## E-149 — THE COMBINED BOOK, AND THE DILUTION IT EXPOSES
+
+> **WITHDRAWN BY E-151.** "On M5 run all four" is wrong. Three of the four
+> signals were only positive because of the trail leak. Run the sweep.
+
 `JARVIS/research/combined.py`
 
 Every signal here had been measured **on its own, with the whole market to
@@ -6388,3 +6421,148 @@ being a thing you have to be told.
 than about 0.02 points, turn the extras off and run the sweep.** The demo run
 measures which world you are in; the `cost paid` row and the `fill vs signal`
 row are how you read it.
+
+---
+
+## E-150 — DOES EACH SIGNAL WANT ITS OWN EXIT?  → REJECTED (and it found E-151)
+
+Veer: *"perfect everything all signals each to their own analysis and execution
+tp"*. Fair, and it had never been tested: all four signals inherited ONE exit —
+a 25% give-back — because that is what won on the SWEEP in E-137. Nobody ever
+asked the other three.
+
+`JARVIS/research/per_signal_exit.py` holds the entry, the stop and the risk cap
+fixed and lets each signal pick its own exit from a menu (give-back 0.15 / 0.25 /
+0.40 / 0.60, ATR trail 1 / 2 / 3, fixed 1.5R / 2R / 3R).
+
+**First answer, which was wrong:** give-back 0.15 beat the shipped 0.25 on all
+four signals on both clocks, and held on the second half of the data. Eight
+cells out of eight. Tempting.
+
+Two things stopped it being shipped:
+
+1. **The "out of sample" test was not out of sample.** The winner was chosen on
+   the WHOLE sample and then "validated" on the second half — a half that had
+   helped choose it. Fixed: pick on the first half, judge on the second.
+2. **0.15 was the smallest value in the menu.** An optimum at the edge of the
+   range tested is the shape of a fitted result, which is exactly why E-137's
+   5% winner was never shipped. So the range was extended downward.
+
+Extended, it was **monotone to the edge on all eight cells** — tighter always
+better, no interior optimum anywhere. That is not an edge. That is a leak, and
+finding it is E-151.
+
+**VERDICT: REJECTED.** No signal gets its own exit; the give-back stays at 0.25.
+Under the corrected fill model the best give-back is 0.6 on M1 and 0.05 on M5 —
+which is to say it does not matter and the differences were noise all along.
+
+---
+
+## E-151 — THE TRAIL WAS BOOKING FILLS AT PRICES NO ORDER COULD REST AT
+
+**This is the most expensive bug found so far and it invalidated a shipped
+default.**
+
+### The defect
+Every give-back trail in this repo was written inline, three lines at a time, in
+**twelve separate files**:
+
+```python
+peak = max(peak, s.h[k]) if d > 0 else min(peak, s.l[k])
+up   = d * (peak - entry)
+if up > 0:
+    c  = entry + d * up * (1.0 - give)
+    sl = max(sl, c) if d > 0 else min(sl, c)     # <-- no side check
+```
+
+The level `c` is derived from bar *k*'s own high, so it cannot be placed until
+bar *k* has closed. If the bar closed **below** `c` (long), then `c` is above the
+market and **a sell-stop above the market does not exist**. The next bar's low
+then "hits" it and the trade books an exit at a price that was never available —
+in effect the bar's own favourable extreme. Same defect as E-110, one layer up.
+
+The tell was in E-150: tighter give-back always won, in every cell, to the edge
+of every range tried. A tighter trail sits closer to the peak, so it is behind
+price more often, so it steals more. The parameter was measuring the leak.
+
+### The fix
+One function, `trail_level()` in `engine.py`, used by all twelve call sites.
+If the level is behind price it returns `None`, meaning **exit at this bar's
+close** — the fill you would actually get. Guarded by
+`test_trail_cannot_be_placed_behind_price()` in `test_engine.py`, including a
+grid property test: no returned stop is ever on the wrong side of the close.
+
+### What it cost — XAUUSD, give-back 0.25, achievable fills
+```
+                          n      points   per trade    win%
+  M1 SWEEP              4045     +288.6     +0.0713   53.3%
+  M1 break+retest       2023      -19.3     -0.0095   43.7%
+  M1 order block detect 2675      -23.7     -0.0089   42.1%
+  M1 order block return 6142     -195.9     -0.0319   40.8%
+  M5 SWEEP               907     +171.3     +0.1888   55.6%
+  M5 break+retest        369      -24.8     -0.0671   41.7%
+  M5 order block detect  607      -18.1     -0.0299   44.6%
+  M5 order block return 1273      -80.5     -0.0632   45.8%
+```
+
+**Three of the four shipped signals were never profitable.** They were live in
+the EA and on by default in the Pine.
+
+### The sweep survives, and survives hard
+```
+M1  +288.6 pts  n=4039  +0.0715/trade  t=14.26
+    time-shifted controls: -203.4 -187.2 -190.1 -184.1 -201.9 -188.7
+    control mean -192.6 (sd 7.4)  ->  real is +65.2 se above control
+M5  +171.4 pts  n=898   +0.1908/trade  t=7.71   ->  +11.4 se above control
+```
+The half that matters is that **the control LOSES 193 points.** The give-back
+trail applied to arbitrary entries is a losing exit. So the sweep's +289 is not
+coming from the exit — it is coming from the level.
+
+### It replicates off XAUUSD (E-146 re-run corrected)
+```
+                    SWEEP       BREAK+RETEST    ORDER BLOCK
+  GOLD 15m        +0.4265         -0.2285         -0.0858
+  GOLD 1h         +0.2186         -0.0842         -0.1602
+  US500 15m       +0.2857         -0.1980         -0.0912
+  US500 1h        +0.3198         -0.0733         -0.1635
+  EURUSD 15m      +0.1862         -0.0848         -0.1430
+  GBPUSD 15m      +0.5448         +0.2284         -0.2694
+```
+**Sweep positive in 6 of 6. Order block negative in 6 of 6** (and on GBPUSD it is
+1.6 se BELOW its own random control). Break+retest negative in 5 of 6.
+
+So E-146's headline — *"the sweep generalises"* — stands, and stands better than
+before, because the two signals that used to travel with it no longer do.
+
+### On the order block, plainly
+It is **not** a scam and it is **not** noise. At −0.009 and −0.032 a trade it
+beats a random entry (−0.048), so the structure it draws is real. It just does
+not clear the spread on its own. It stays on the chart as **drawing only**.
+
+### Timeframe, corrected (E-140 re-run)
+```
+   TF      n   /day   win%   pts    per trade   |  slip 0.02   0.05   0.10   0.20
+   M1   2596   23.8  53.5%  201.1    +0.0775    |     149.1    71.3  -58.5  -318.1
+   M5    567    5.2  57.8%  107.1    +0.1889    |      95.8    78.8   50.4    -6.3
+  M15    204    1.9  54.9%   39.6    +0.1939    |      35.5    29.4   19.2    -1.2
+```
+Out of sample holds on all three (M1 +0.0785 → +0.0764, M5 +0.1589 → +0.2213,
+M15 +0.1462 → +0.2466). **M1 makes the most money and is the first to die to
+slippage — it is negative by 0.10. M5 still pays at 0.10.** Until a demo run
+measures real fills, **M5 is the robust default and M1 is the aggressive one.**
+
+### What shipped
+- `engine.py` gains `trail_level()`; all 12 call sites use it; regression test added.
+- `SweepSniper.mq5`: `InpUseBR`, `InpUseObDetect`, `InpUseObReturn` → **false**.
+- `SweepSniper.mq5` **live bug fixed**: the EA trails on ticks, so it could send
+  a `PositionModify` to a level price had already passed. The broker rejects it,
+  the OLD looser stop stays, and nothing says so — on a fast move against the
+  position, which is precisely when it matters. It now closes at market instead.
+- `LIQUIDITY_SNIPER_2_0.pine`: `useBR`, `useOB` → **false**; the panel's trail
+  clamped, so what the panel shows is a fill that could have happened.
+
+### Standing lesson
+**A parameter that is monotone to the edge of the range you tested is a leak
+until proven otherwise.** Extend the range. If it keeps running, look at the
+fill, not the parameter.

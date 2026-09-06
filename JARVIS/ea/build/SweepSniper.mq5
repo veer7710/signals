@@ -144,10 +144,10 @@ input group "=== WHICH SIGNALS (E-149: read this before turning them all on) ===
 // ON M5 RUN ALL FOUR. ON M1, IF YOUR FILLS SLIP MORE THAN ~0.02 POINTS, TURN
 // THE EXTRAS OFF. 85 trades a day pays 85 round trips a day. The profit box's
 // "fill vs signal" row is how you measure which world you are in.
-input bool   InpUseSweep     = true;    // 107.3 control se - the strongest
-input bool   InpUseBR        = true;    // break + retest, 73.8 control se
-input bool   InpUseObDetect  = true;    // order block at detection, market entry
-input bool   InpUseObReturn  = true;    // order block on the return, limit entry
+input bool   InpUseSweep     = true;    // the only one positive under E-151 fills
+input bool   InpUseBR        = false;   // E-151: -0.0095/trade under achievable fills
+input bool   InpUseObDetect  = false;   // E-151: -0.0089/trade under achievable fills
+input bool   InpUseObReturn  = false;   // E-151: -0.0319/trade under achievable fills
 
 input group "=== BREAK + RETEST ==="
 input double InpBrAtr        = 0.10;    // a CLOSE this far through the level is a break
@@ -814,7 +814,21 @@ void TrailStop()
          double cand = NormalizeDouble(entry + dir * runUp * (1.0 - InpGiveBack), dg);
          bool better = (dir > 0) ? (cand > sl) : (cand < sl);
          double md = MinStopDist();
-         bool room = (md <= 0.0) || (MathAbs(px - cand) >= md);
+
+         // E-151. A ratcheted level price has ALREADY passed cannot be sent as
+         // a stop: for a long, a stop above the bid is rejected, and a rejected
+         // modify leaves the OLD, looser stop sitting there - the trail simply
+         // stops working and nothing says so. On a fast move against us that is
+         // exactly when it matters. If the level is gone, exit at market.
+         bool passed = (dir > 0) ? (px <= cand) : (px >= cand);
+         if(better && passed)
+         {
+            trade.PositionClose(tk);
+            Log("trail level already passed - market exit");
+            continue;
+         }
+
+         bool room = (md <= 0.0) || (dir * (px - cand) >= md);
          if(better && room)
             trade.PositionModify(tk, cand, 0.0);
       }

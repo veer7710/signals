@@ -32,7 +32,7 @@ of correctness.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, trail_level
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 
@@ -120,10 +120,12 @@ def run(variant, cost_frac=0.11, pk=5, sweep_atr=0.10, buf=0.30,
             if k == e_bar:
                 continue
             peak = max(peak, s.h[k]) if tside > 0 else min(peak, s.l[k])
-            up = tside * (peak - entry)
-            if up > 0:
-                c = entry + tside * up * (1.0 - give)
-                sl = max(sl, c) if tside > 0 else min(sl, c)
+            # E-151: one trail, in engine.py. None = exit at this close.
+            nsl = trail_level(entry, sl, peak, s.c[k], tside, give)
+            if nsl is None:
+                px_out, kk = s.c[k], k
+                break
+            sl = nsl
         if px_out is None:
             kk = min(e_bar + hold, len(s) - 1)
             px_out = s.c[kk]

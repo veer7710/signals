@@ -351,3 +351,32 @@ def monte_carlo(trades, trials=20000, risk_pct=0.005, seed=11):
         "p_dd_over_50pct": ruin50 / trials,
         "p_losing_overall": sum(1 for e in ends if e < 1.0) / trials,
     }
+
+
+# ---------------------------------------------------------------------------
+# E-151. THE GIVE-BACK TRAIL, WITH THE FILL THAT IS ACTUALLY AVAILABLE.
+#
+# Every give-back trail in this repo used to be written inline, three lines at
+# a time, in twelve different files - and all twelve had the same defect. The
+# trail level is derived from the CURRENT bar's extreme, so it cannot exist
+# until that bar has closed. If price has already gone past it by then, no
+# order could have been resting there, and filling at it books the bar's own
+# favourable extreme. The tell was that the "best" give-back ran to the
+# tightest value in every range tested, on every signal, on every clock: a
+# parameter monotone to the edge of what you tried is a leak, not an optimum.
+#
+# This is the only give-back trail. Import it. Do not write another one.
+# ---------------------------------------------------------------------------
+def trail_level(entry, sl, peak, close_k, d, give):
+    """New stop after bar k closes, or None meaning EXIT AT close_k NOW.
+
+    entry/sl/peak in price, d = +1 long / -1 short, give = fraction of the
+    best excursion handed back.
+    """
+    up = d * (peak - entry)
+    if up <= 0:
+        return sl
+    c = entry + d * up * (1.0 - give)
+    if d * (c - close_k) >= 0:      # the level is behind price: unplaceable
+        return None                 # -> the honest exit is this bar's close
+    return max(sl, c) if d > 0 else min(sl, c)

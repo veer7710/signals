@@ -204,8 +204,59 @@ def test_no_future_in_fvg_snapshot():
           f"{bad} entries flagged by a future bar")
 
 
+def test_trail_cannot_be_placed_behind_price():
+    """E-151. The trail is derived from a bar's own extreme, so it only exists
+    once that bar has closed. A level price has already passed cannot hold an
+    order, and booking a fill there pays you the bar's favourable extreme.
+    This is the bug that made every give-back look better the tighter it got
+    and put three losing signals into the shipped default. It stays caught."""
+    from engine import trail_level
+
+    # LONG. Entry 100, peak 110, close 101. A 5% give-back wants the stop at
+    # 109.5 - which is 8.5 above the market. No such sell-stop exists.
+    out = trail_level(100.0, 99.0, 110.0, 101.0, +1, 0.05)
+    check("long: an unplaceable trail exits at the close, not the peak",
+          out is None)
+
+    # Same long, but price has held up near the peak, so a 50% give-back
+    # lands at 105 with the market at 108 - a stop that can exist.
+    out = trail_level(100.0, 99.0, 110.0, 108.0, +1, 0.50)
+    check("long: a reachable trail is returned as a stop", out == 105.0)
+
+    # It must never loosen an existing stop.
+    out = trail_level(100.0, 104.0, 110.0, 108.0, +1, 0.60)
+    check("long: the trail ratchets and never loosens", out == 104.0)
+
+    # SHORT, mirrored. Entry 100, peak 90, close 99 -> level 90.5, below market.
+    out = trail_level(100.0, 101.0, 90.0, 99.0, -1, 0.05)
+    check("short: an unplaceable trail exits at the close, not the peak",
+          out is None)
+    out = trail_level(100.0, 101.0, 90.0, 92.0, -1, 0.50)
+    check("short: a reachable trail is returned as a stop", out == 95.0)
+
+    # No excursion yet: nothing to give back, stop untouched.
+    out = trail_level(100.0, 99.0, 100.0, 100.0, +1, 0.25)
+    check("no run-up means no trail", out == 99.0)
+
+    # The property that actually matters, over a grid: whatever comes back as
+    # a stop must be on the correct side of the close.
+    bad = 0
+    for d in (+1, -1):
+        for peak in range(101, 121):
+            for close_k in range(95, 121):
+                for g in (0.05, 0.15, 0.25, 0.5, 0.9):
+                    pk = 100.0 + d * (peak - 100.0)
+                    ck = 100.0 + d * (close_k - 100.0)
+                    r = trail_level(100.0, 100.0 - d * 1.0, pk, ck, d, g)
+                    if r is not None and d * (r - ck) >= 0:
+                        bad += 1
+    check("no returned stop is ever on the wrong side of the close", bad == 0,
+          f"{bad} placements behind price")
+
+
 test_entry_bar_not_post_fill()
 test_no_future_in_fvg_snapshot()
+test_trail_cannot_be_placed_behind_price()
 
 print("\n" + "=" * 66)
 print(f"  {'ALL TESTS PASSED' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")

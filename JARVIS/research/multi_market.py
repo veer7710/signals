@@ -35,7 +35,7 @@ problem.
 from __future__ import annotations
 import os, sys, json, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import Series, atr as watr
+from engine import Series, atr as watr, trail_level
 
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "data")
 
@@ -68,10 +68,11 @@ def exit_run(s, j, d, entry, sl, give, hold):
         if k == j:
             continue
         peak = max(peak, s.h[k]) if d > 0 else min(peak, s.l[k])
-        up = d * (peak - entry)
-        if up > 0:
-            c = entry + d * up * (1.0 - give)
-            sl = max(sl, c) if d > 0 else min(sl, c)
+        # E-151: one trail, in engine.py. None = exit at this close.
+        nsl = trail_level(entry, sl, peak, s.c[k], d, give)
+        if nsl is None:
+            return s.c[k], k
+        sl = nsl
     kk = min(j + hold, len(s) - 1)
     return s.c[kk], kk
 

@@ -28,7 +28,7 @@ one that kills most of these.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, trail_level
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 from orderblock import blocks
@@ -103,10 +103,12 @@ def run(tf="M1", periods=3, usewicks=True, buf=0.30, give=0.25,
             if k == j:
                 continue
             peak = max(peak, s.h[k]) if d > 0 else min(peak, s.l[k])
-            up = d * (peak - entry)
-            if up > 0:
-                c = entry + d * up * (1.0 - give)
-                sl = max(sl, c) if d > 0 else min(sl, c)
+            # E-151: one trail, in engine.py. None = exit at this close.
+            nsl = trail_level(entry, sl, peak, s.c[k], d, give)
+            if nsl is None:
+                px_out, kk = s.c[k], k
+                break
+            sl = nsl
         if px_out is None:
             kk = min(j + hold, len(s) - 1)
             px_out = s.c[kk]
