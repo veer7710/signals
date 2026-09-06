@@ -95,10 +95,11 @@ gE = "2 · RISK / EXIT"
 stopAtr  = input.float(2.0, "Initial stop (ATR)", group = gE, step = 0.5)
 useTrail = input.bool(true, "ATR trail", group = gE)
 trailAtr = input.float(3.0, "Trail distance (ATR)", group = gE, step = 0.5,
-     tooltip = "Wide on purpose. Every tighter trail tested lost, on every market tested.")
+     tooltip = "Wide on purpose, and inherited from the EA - it has NOT been optimised on this system, so there is no number here to quote. What has been measured, on the sweep system rather than this one (E-154), is the shape of the trade-off: a 3 ATR trail there banked the most points and drew down 3.4x as deep as a give-back, which at 0.01 lots was the whole of a GBP 60 account. Widen it in the knowledge that the drawdown widens faster than the profit."
 useSt    = input.bool(false, "Trail on the SuperTrend band instead", group = gE,
      tooltip = "E-125 measured the band against a fixed give-back on the liquidity system and it won 39.6 points to 11.0, with E-126's out-of-sample result exceeding in-sample. That was measured on M15 zones, NOT on this flip system, so it is a switch to test with the panel rather than a default to trust.")
-maxStall = input.int(25,    "Close a stalled trade after N bars", group = gE)
+maxStall = input.int(25,    "Close a stalled trade after N bars", group = gE,
+     tooltip = "The bar count resets every time the trade makes a new best price. On the SWEEP system a stall exit measured as doing nothing at all - the trail was always out first (E-154) - and it has never been measured on this one. The panel's 'stall / flip' row tells you how often it actually fires here.")
 maxHold  = input.int(50,    "Absolute ceiling (bars)", group = gE)
 tpR      = input.float(0.0, "Hard take profit (R). 0 = none", group = gE, step = 0.5,
      tooltip = "0 by default: this system has no take profit. E-117 measured a fixed target LOSING where riding and protecting the peak won.")
@@ -345,8 +346,11 @@ if posDir != 0 and barstate.isconfirmed and bar_index > posBar
     // a bar that touches both the stop and the target is scored as the LOSS
     if hitStop or hitTp or stalled or aged or flipOut or trailOut
         // A stop does not fill at its price when the bar OPENS past it - it
-        // fills at the open, which is worse. On M1 that is about 15% of exits
-        // and booking the stop price for them flatters the book.
+        // fills at the open, which is worse. On the sweep system's M1 exits
+        // that was about 15% of them; it has not been counted for this one.
+        // The rule is right either way - it is arithmetic, not a strategy
+        // claim - and booking the stop price for a gapped bar flatters the
+        // book by exactly the size of the gap.
         gapPx   = posDir > 0 ? (open <= posStop ? open : posStop) :
                  (open >= posStop ? open : posStop)
         // The take profit is a LIMIT order: it fills at its price or better,
@@ -510,8 +514,8 @@ if posDir != 0 and showLive and not na(pEntry)
 // ---------------------------------------------------------------- drawing --
 // The band is drawn as TWO series, one per direction, so it breaks at a flip
 // instead of drawing a vertical line straight through the candles.
-stUp = showBand and bull ? stLine : na
-stDn = showBand and not bull ? stLine : na
+stUp = (showBand and bull) ? stLine : na
+stDn = (showBand and not bull) ? stLine : na
 plot(stUp, "SuperTrend up",   color = color.new(cBuy, 30),  linewidth = 2,
      style = plot.style_linebr)
 plot(stDn, "SuperTrend down", color = color.new(cSell, 30), linewidth = 2,
@@ -561,11 +565,11 @@ if barstate.islast and showPanel
     // The panel is exactly as tall as the rows it will actually draw. A
     // hard-coded row count silently drops the last rows the day a block is
     // added, and that is what the 5.0 panel did.
-    // title + measured over + if traded + trades + win rate + avg trade   6
-    // separator + SYSTEM + FLIP & HOLD + exit adds                          4
-    // cost paid + open                                                      2
-    // the footer separator                                                  1
-    // the full block: 2 separators, 3 endings, 4 risk, gate, session        11
+    //   title, measured over, if traded, trades, win rate, avg trade      6
+    //   separator, SYSTEM, FLIP & HOLD, exit adds                         4
+    //   cost paid, open                                                   2
+    //   the footer separator                                              1
+    //   full panel: 2 separators, 3 endings, 4 risk, gate, session       11
     nRows = 6 + 4 + 2 + 1 + (panelBig ? 11 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
@@ -635,11 +639,12 @@ if barstate.islast and showPanel
     f_row(row, "cost paid", "-" + str.tostring(costPaid, "0.0") + "pt",
              f_ccy(-costPaid), cNeg)
     row += 1
-    f_row(row, "open", posDir == 0 ? "-" : f_num(posDir * (close - posEntry) - cost, "0.0") + "pt",
-             posDir == 0 ? str.tostring(lots, "0.00") + " lots"
-                         : f_ccy(posDir * (close - posEntry) - cost),
-             posDir == 0 ? cVal :
-                 (posDir * (close - posEntry) - cost >= 0 ? cPos : cNeg))
+    // the live trade, net of the round trip it will have to pay to close
+    openPts = posDir == 0 ? 0.0 : posDir * (close - posEntry) - cost
+    f_row(row, "open",
+             posDir == 0 ? "-" : f_num(openPts, "0.0") + "pt",
+             posDir == 0 ? str.tostring(lots, "0.00") + " lots" : f_ccy(openPts),
+             posDir == 0 ? cVal : (openPts >= 0 ? cPos : cNeg))
     row += 1
     f_sep(row, "the flip is an EXIT, not an entry · E-114 / E-125")
     row += 1
@@ -683,7 +688,7 @@ plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
 plot(posDir != 0 ? posDir * (close - posEntry) - cost : na, "Open points (net)",
      display = display.status_line)
 plot(bull ? 1 : -1, "SuperTrend (1 bull)", display = display.status_line)
-plot(dema, "DEMA", display = display.status_line)
+plot(dema, "DEMA value", display = display.status_line)
 plot(atr,  "ATR(14)", display = display.status_line)
 
 alertcondition(takeBuy,   "ST BUY",   "SuperTrend Sniper BUY")

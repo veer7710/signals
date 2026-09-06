@@ -60,6 +60,8 @@ PINE_ONLY = {
     "maxOB": "how many zones to DRAW - the EA draws nothing",
     "obRealtime": "draws the forming block - the EA draws nothing",
     "showLevels": "the SMC level layer - drawing only",
+    "obRule": "which block rule to DRAW - the EA draws nothing",
+    "volLen": "volume pivot length, drawing only",
     "showBreak": "drawing only",
     "maxLvl": "how many levels to DRAW - the EA draws nothing",
 }

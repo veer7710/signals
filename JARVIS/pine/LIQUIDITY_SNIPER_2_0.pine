@@ -2,10 +2,23 @@
 // IF LINE 1 ABOVE SHOWS ONE SLASH, YOUR PASTE DROPPED A CHARACTER.
 // It must read exactly:  //@version=6
 // ---------------------------------------------------------------------------
-//  The ORDER BLOCK rule is from "Order Block Finder" by wugamlo, licensed
-//  under the Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
+//  The "3 candles" ORDER BLOCK rule is from "Order Block Finder" by wugamlo,
+//  licensed under the Mozilla Public License 2.0 - https://mozilla.org/MPL/2.0/
 //  MPL-2.0 permits commercial use, modification and redistribution provided
 //  this notice is kept.
+//
+//  The "volume pivot" ORDER BLOCK rule is adapted from "Order Block Detector"
+//  by LuxAlgo, licensed CC BY-NC-SA 4.0 -
+//  https://creativecommons.org/licenses/by-nc-sa/4.0/
+//  Attribution: LuxAlgo. If this script is ever PUBLISHED, the NonCommercial
+//  and ShareAlike terms apply to it; private use is not distribution.
+//
+//  ONE DELIBERATE DEPARTURE FROM THE ORIGINAL: LuxAlgo's version deletes a
+//  block once price mitigates it and only draws on the last bar, so scrolling
+//  back you see ONLY the blocks that survived. That makes the rule look far
+//  more accurate than it is. Here every block that formed is kept and a
+//  mitigated one is faded, not erased. Veer: "make sure like signals dont
+//  disappear some indictors do that to scam u".
 // ---------------------------------------------------------------------------
 // ===========================================================================
 //  LIQUIDITY SNIPER 2.0
@@ -180,6 +193,11 @@ obMode   = input.string("both", "Order block entry", group = gO,
      options = ["at detection", "on the return", "both"],
      tooltip = "BOTH is kept as the default so the two entries stay visible together, but under E-151 NEITHER of them makes money: at detection is -0.0089 a trade on M1 and on the return -0.0319, and the order block is negative in 6 of 6 cells off XAUUSD. The figures this tooltip used to quote (+0.0280 and +0.0163) came from the trail leak. This setting only does anything when ORDER BLOCK is switched on, which it is not by default, and switching it on costs money.")
 maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
+obRule   = input.string("both", "How a block is found", group = gO,
+     options = ["3 candles (wugamlo)", "volume pivot (LuxAlgo)", "both"],
+     tooltip = "TWO DIFFERENT IDEAS about which candle becomes the block. '3 candles' takes a candle followed by a clean run the other way - it is the wugamlo rule and it is what everything in this repo was measured on. 'Volume pivot' takes the candle where PARTICIPATION peaked, which is the LuxAlgo idea and a genuinely different question. Neither has been shown to make money as a mechanical entry (E-151), and both are real structure worth seeing. Volume pivot needs your feed to actually carry volume - the panel says if it does not.")
+volLen   = input.int(5,  "Volume pivot length", group = gO, minval = 1,
+     tooltip = "How many bars either side the volume peak must beat. Like every pivot this only CONFIRMS this many bars later - that is the rule, not a flaw in the code, and it is why no order block of any kind is truly real-time.")
 obRealtime = input.bool(true, "Show the block AS IT FORMS (dashed)", group = gO,
      tooltip = "The wugamlo rule needs a full run of candles after the block candle, so a CONFIRMED block is always that many bars late - that is the rule itself, not this code. This draws the block that is one candle short of confirming, dashed and fainter, one bar earlier. It is redrawn every bar and WILL disappear if the next candle breaks the pattern: that is a maybe that did not happen, and it is drawn to look like a maybe. Solid boxes have confirmed and are permanent. No BUY/SELL signal is affected by this in any way.")
 keepDead = input.bool(false,"Keep dead zones on the chart", group = gO,
@@ -604,10 +622,38 @@ for i = 1 to obLen
 // to be drawn OR traded, and only the ENTRY is gated on useOB. Before this the
 // tooltip promised the blocks would still draw and they did not.
 obDetect = showZones or useOB
-newObBull = obDetect and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
+useCandleOb = obRule == "3 candles (wugamlo)" or obRule == "both"
+newObBull = obDetect and useCandleOb and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
      and barstate.isconfirmed
-newObBear = obDetect and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
+newObBear = obDetect and useCandleOb and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
      and barstate.isconfirmed
+
+// ---- VOLUME PIVOT BLOCKS (LuxAlgo rule) -----------------------------------
+// A block is the candle where PARTICIPATION peaked, not one picked by the shape
+// of the candles after it. `os` tracks which leg we are in: 1 after a swing low
+// was taken out, 0 after a swing high was. On a volume pivot, the block is the
+// half-candle on the side that is about to be traded away from.
+useVolOb = obDetect and (obRule == "volume pivot (LuxAlgo)" or obRule == "both")
+volOk    = not na(volume) and volume > 0
+vUpper = ta.highest(volLen)
+vLower = ta.lowest(volLen)
+var int osLeg = 0
+osLeg := high[volLen] > vUpper ? 0 : low[volLen] < vLower ? 1 : nz(osLeg[1], 0)
+phv = ta.pivothigh(volume, volLen, volLen)
+newVolBull = useVolOb and volOk and not na(phv) and osLeg == 1 and barstate.isconfirmed
+newVolBear = useVolOb and volOk and not na(phv) and osLeg == 0 and barstate.isconfirmed
+if newVolBull and showZones
+    array.push(obBullBx, box.new(bar_index - volLen, math.avg(high[volLen], low[volLen]),
+         bar_index + 10, low[volLen],
+         border_color = color.new(cBuy, 55), border_width = 1,
+         bgcolor = color.new(cBuy, 88)))
+    f_trim(obBullBx, maxOB)
+if newVolBear and showZones
+    array.push(obBearBx, box.new(bar_index - volLen, high[volLen],
+         bar_index + 10, math.avg(high[volLen], low[volLen]),
+         border_color = color.new(cSell, 55), border_width = 1,
+         bgcolor = color.new(cSell, 88)))
+    f_trim(obBearBx, maxOB)
 
 // ---- REAL TIME: the block AS IT FORMS -------------------------------------
 // Veer: "real time orderblock if thats possible idk". It is, with one honest
@@ -1153,7 +1199,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 7 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 8 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1244,6 +1290,12 @@ if barstate.islast and showPanel
         f_row(r, "max drawdown", f_num(-maxDD, "0.0") + "pt", f_ccy(-maxDD), cNeg)
         r += 1
         f_row(r, "refused", str.tostring(nRefused), "stop too wide", cVal)
+        r += 1
+        // Volume-pivot blocks silently do nothing on a feed without volume,
+        // and "no blocks" looks identical to "no setups". Say which it is.
+        f_row(r, "volume feed", volOk ? "present" : "MISSING",
+                 volOk ? "volume blocks work" : "volume blocks cannot fire",
+                 volOk ? cVal : cNeg)
         r += 1
         // CLAUDE.md requires a long/short split on every claim. These four
         // counters were being accumulated on every trade and displayed
