@@ -5,52 +5,52 @@
 //|   winrate. i wanted u using ict smc perfect and automate so i     |
 //|   dont have to do analysis"                                       |
 //|                                                                  |
-//|  THE RULES. Every one was measured before it was allowed in, on   |
-//|  157,051 real M1 bars built from 18,816,940 bid/ask ticks with    |
-//|  each bar charged its OWN measured spread.                        |
-//|                                                                  |
-//|   1 LEVEL       a confirmed swing pivot, 5 bars either side.      |
-//|                 Resting liquidity - the stops above a high or     |
-//|                 below a low.                                       |
-//|   2 SWEEP       price runs THROUGH it by 0.10 ATR. The stop run.  |
-//|   3 THE WICK    the sweep bar's body must be at most 64.6% of its |
-//|                 range. THIS IS THE FAKEOUT FILTER. A sweep that   |
-//|                 CLOSES with a big body is a real breakout and     |
-//|                 fading it is how you lose; a sweep that is mostly |
-//|                 WICK is a rejection. The DIRECTION of this rule   |
-//|                 comes from ICT, not from the data - the data only |
-//|                 supplied the cut, from the first half of the      |
-//|                 sample, tested once on the second (E-135d).       |
-//|   4 DISPLACEMENT  MEASURED, AND THEN SWITCHED OFF. It was the     |
-//|                 second half of the tested filter and it is worth   |
-//|                 real money - but it is evaluated at the FILL bar,  |
-//|                 and an EA holding a resting limit cannot know      |
-//|                 which bar will fill it. E-139 tested all four ways |
-//|                 of getting round that and every one was worse than |
-//|                 simply dropping it:                                 |
-//|                   A wick+disp, limit at level  349.7 NOT EA-ABLE   |
-//|                   B wick only, limit at level  310.7 <- SHIPPED    |
-//|                   C wick+disp, market next bar  81.4 (dead at      |
-//|                                                 0.05 slippage)     |
-//|                   D limit, then bail out       228.4               |
-//|                 A rule an EA can execute beats a better rule it    |
-//|                 cannot. This is the P92 lesson - a 52% signal gap  |
-//|                 between a Pine and an EA sat unnoticed for 180     |
-//|                 commits because nobody checked.                     |
-//|   5 ENTRY       a STOP order resting AT the level - price coming  |
-//|                 BACK to it. Not a limit: after the sweep price is |
-//|                 on the far side, so a limit would fill instantly  |
-//|                 at the bottom of the sweep. And not the sweep's   |
-//|                 close either - E-130 measured that and it cost 97 |
-//|                 of 97.1 points on System A.                        |
-//|   6 STOP        beyond the SWEEP EXTREME + 0.30 ATR. Where the    |
-//|                 setup is genuinely wrong, not a fixed distance.    |
-//|   7 RISK CAP    REFUSE the setup if that stop is wider than 2.0   |
-//|                 ATR. Read the audit below before touching this.    |
-//|   8 EXIT        give back 25%: the stop ratchets to entry + 75%   |
-//|                 of the best excursion. No fixed target - every    |
-//|                 fixed target banked less (E-137).                  |
-//|                                                                  |
+//|  FOUR SIGNALS, and this file now matches LIQUIDITY_SNIPER_2_0.pine        |
+//|  one for one. Until build 2.00 the chart had four and the EA had ONE -    |
+//|  which is the P92 defect exactly: a 52% signal gap between a chart and    |
+//|  its EA that sat unnoticed for 180 commits.                               |
+//|                                                                          |
+//|  1 SWEEP        a confirmed swing level is taken by a WICK (the sweep     |
+//|                 bar's body <= 64.6% of its range - THE FAKEOUT FILTER),   |
+//|                 then price comes BACK to it. A STOP order at the level.   |
+//|                 2579 trades, 65.1% win, 107.3 control se, OOS +0.0991.    |
+//|                 Positive on all six instrument/clock cells it was pointed |
+//|                 at with NO re-fitting - gold, US500, EURUSD, GBPUSD, on   |
+//|                 current data (E-146). The strongest thing here.           |
+//|                                                                          |
+//|  2 BREAK+RETEST the level is DISRESPECTED by a CLOSE, price returns,      |
+//|                 holds, and resumes. A STOP order at the retest bar's      |
+//|                 extreme. The OPPOSITE of the sweep - and both are true    |
+//|                 because the wick filter separates a rejection from a real |
+//|                 break. 2013 trades, 64.3% win, 73.8 control se, and its   |
+//|                 out-of-sample BEAT its in-sample (E-144).                 |
+//|                                                                          |
+//|  3 OB DETECTION a down candle followed by InpObLen up candles is a        |
+//|                 bullish block (wugamlo, MPL-2.0). MARKET on the           |
+//|                 confirming bar. E-148: nearly DOUBLE the return entry     |
+//|                 per trade on M1, 2.4x on M5, OOS better than IS.          |
+//|                 The marker every chart draws sits four bars back on the   |
+//|                 block candle and THAT PRICE WAS NOT KNOWABLE THEN - this  |
+//|                 is the honest version of catching the birth of the move.  |
+//|                                                                          |
+//|  4 OB RETURN    a LIMIT at the block's near edge when price comes back.   |
+//|                 Weakest of the four and still clearly real (56.8 se), and |
+//|                 it fires four times as often as detection.                |
+//|                                                                          |
+//|  ONE POSITION AT A TIME, strongest first. E-149 simulated exactly that    |
+//|  and found NO cannibalisation - the sweep's per-trade inside the combined |
+//|  book is the same as its standalone figure, so the others fill idle time. |
+//|  But it DOES dilute: see the note above InpUseSweep before running all    |
+//|  four on M1.                                                              |
+//|                                                                          |
+//|  RISK, identical for all four: the stop sits beyond the setup's own       |
+//|  invalidation + 0.30 ATR, and a setup whose stop is wider than 1.2 ATR is |
+//|  REFUSED, not resized - 0.01 lots is the floor (E-081) so it cannot be    |
+//|  sized down. Uncapped, one trade took 57% of a GBP60 account (E-138).     |
+//|  Exit: give back 25% of the best excursion. No take profit - every fixed  |
+//|  target measured worse (E-137) and every PARTIAL measured worse still,    |
+//|  without reducing the drawdown or the worst trade (E-147).                |
+//|                                                                          |
 //|  MEASURED — these are VARIANT B's numbers, the one that ships,     |
 //|  not variant A's. Quoting A's validation for B would be quoting    |
 //|  numbers for a system that is not the one running (E-139b).        |
@@ -103,7 +103,7 @@
 //|  SUPPORTED, in the vocabulary of EXPERIMENTS.md. DEMO FIRST.      |
 //+------------------------------------------------------------------+
 #property copyright "JARVIS"
-#property version   "1.00"
+#property version   "2.00"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -112,7 +112,7 @@ CTrade trade;
 #include "ProfitBox.mqh"
 #include "TimeframeGuard.mqh"
 
-#define SS_BUILD "1.00"
+#define SS_BUILD "2.00"
 
 input group "=== SAFETY ==="
 input bool   InpDemoOnly     = true;    // refuse to start on a live account
@@ -127,6 +127,36 @@ input bool   InpUseDisp      = false;   // OFF. E-139: an EA cannot execute this
 input double InpDispCutNote  = 0.0;     // (unused; kept so the group reads in order)
 input double InpDispCut      = -1.4909; // only used if InpUseDisp is switched on
 input int    InpSetupLife    = 120;     // give up on a setup after N bars
+
+input group "=== WHICH SIGNALS (E-149: read this before turning them all on) ==="
+// The Pine had four signals and this EA had one. That is the P92 defect exactly
+// - a 52% signal gap between a chart and its EA that sat unnoticed for 180
+// commits - so all four are here now and the chart and this file agree.
+//
+// E-149 simulated all four sharing ONE position, which is what actually runs.
+// More signals = more total points and a THINNER per-trade edge, and every
+// extra trade pays the round trip again. Total points by exit slippage:
+//                       0.00     0.02     0.05     0.10
+//   M1 sweep alone     449.3    369.2    249.0     48.7
+//   M1 all four        556.1    370.0     91.0   -374.0   <- crosses at 0.02
+//   M5 sweep alone     258.1    240.1    213.2    168.3
+//   M5 all four        322.6    282.9    223.3    123.9   <- crosses at ~0.07
+// ON M5 RUN ALL FOUR. ON M1, IF YOUR FILLS SLIP MORE THAN ~0.02 POINTS, TURN
+// THE EXTRAS OFF. 85 trades a day pays 85 round trips a day. The profit box's
+// "fill vs signal" row is how you measure which world you are in.
+input bool   InpUseSweep     = true;    // 107.3 control se - the strongest
+input bool   InpUseBR        = true;    // break + retest, 73.8 control se
+input bool   InpUseObDetect  = true;    // order block at detection, market entry
+input bool   InpUseObReturn  = true;    // order block on the return, limit entry
+
+input group "=== BREAK + RETEST ==="
+input double InpBrAtr        = 0.10;    // a CLOSE this far through the level is a break
+input double InpBrTol        = 0.20;    // the retest must come this close (ATR)
+input int    InpBrWait       = 60;      // bars allowed for break, retest, resume
+
+input group "=== ORDER BLOCKS (wugamlo rule, MPL-2.0) ==="
+input int    InpObLen        = 3;       // candles after the OB candle. 3 beat 5 everywhere
+input double InpObThrPct     = 0.0;     // minimum % move to qualify
 
 input group "=== RISK — read E-138 before changing anything here ==="
 input double InpStopBufAtr   = 0.30;    // stop this far beyond the sweep extreme
@@ -168,6 +198,33 @@ struct Setup
    double   disp;       // the sweep bar's body / range
 };
 Setup g_sell, g_buy;
+
+// ---- BREAK + RETEST. Its own level tracking, kept separate from the sweep's
+// so the two can never disturb each other: the sweep consumes its level on a
+// fill and this must not inherit that.
+struct BrSetup
+{
+   bool     live;
+   double   lvl;
+   double   atr;
+   int      state;      // 0 watching, 1 broken, 2 retested and armed
+   int      bar;
+   double   trig;
+   double   stop;
+};
+BrSetup g_brUp, g_brDn;   // brUp: a swing HIGH broken upward -> BUY the retest
+
+// ---- ORDER BLOCKS. The last opposing candle before a run.
+struct ObZone
+{
+   bool     live;
+   double   top;
+   double   bot;
+   double   atr;
+   int      born;
+};
+ObZone g_obB, g_obS;
+int    g_armSrc = 0;      // 1 sweep, 2 break+retest, 3 OB detect, 4 OB return
 
 int      g_atr = INVALID_HANDLE;
 datetime g_lastBar = 0;
@@ -350,6 +407,223 @@ bool DispOk(int dir, double a)
    return (gap / a) >= InpDispCut;
 }
 
+//==================== BREAK + RETEST ===============================
+// The level is DISRESPECTED by a CLOSE, price comes back, holds, then resumes.
+// The opposite of the sweep, which fades a level taken by a WICK - and the wick
+// filter is exactly what separates the two cases.
+void ResetBr(BrSetup &b)
+{
+   b.live = false; b.lvl = 0.0; b.atr = 0.0; b.state = 0;
+   b.bar = 0; b.trig = 0.0; b.stop = 0.0;
+}
+
+void UpdateBr()
+{
+   if(!InpUseBR) return;
+   double a = ATR();
+   if(a <= 0.0) return;
+   int bar = BarNo();
+   double c1 = iClose(_Symbol, _Period, 1);
+   double h1 = iHigh(_Symbol, _Period, 1);
+   double l1 = iLow(_Symbol, _Period, 1);
+   double px;
+
+   // a fresh pivot only replaces a setup that is not mid-sequence
+   if(ConfirmedPivot(InpPivotBars, true, px) && g_brUp.state == 0)
+   {
+      g_brUp.live = true; g_brUp.lvl = px; g_brUp.atr = a;
+   }
+   if(ConfirmedPivot(InpPivotBars, false, px) && g_brDn.state == 0)
+   {
+      g_brDn.live = true; g_brDn.lvl = px; g_brDn.atr = a;
+   }
+
+   // ---- upside
+   if(g_brUp.live)
+   {
+      if(g_brUp.state == 0 && c1 > g_brUp.lvl + InpBrAtr * g_brUp.atr)
+      {
+         g_brUp.state = 1; g_brUp.bar = bar;
+      }
+      else if(g_brUp.state == 1)
+      {
+         if(bar - g_brUp.bar > InpBrWait || c1 < g_brUp.lvl - InpBrTol * g_brUp.atr)
+            ResetBr(g_brUp);
+         else if(l1 <= g_brUp.lvl + InpBrTol * g_brUp.atr && c1 > g_brUp.lvl)
+         {
+            g_brUp.state = 2;
+            g_brUp.trig  = h1;
+            g_brUp.stop  = l1 - InpStopBufAtr * g_brUp.atr;
+            g_brUp.bar   = bar;
+         }
+      }
+      else if(g_brUp.state == 2)
+      {
+         if(bar - g_brUp.bar > InpBrWait || c1 < g_brUp.lvl - InpBrTol * g_brUp.atr)
+            ResetBr(g_brUp);
+      }
+   }
+   // ---- downside
+   if(g_brDn.live)
+   {
+      if(g_brDn.state == 0 && c1 < g_brDn.lvl - InpBrAtr * g_brDn.atr)
+      {
+         g_brDn.state = 1; g_brDn.bar = bar;
+      }
+      else if(g_brDn.state == 1)
+      {
+         if(bar - g_brDn.bar > InpBrWait || c1 > g_brDn.lvl + InpBrTol * g_brDn.atr)
+            ResetBr(g_brDn);
+         else if(h1 >= g_brDn.lvl - InpBrTol * g_brDn.atr && c1 < g_brDn.lvl)
+         {
+            g_brDn.state = 2;
+            g_brDn.trig  = l1;
+            g_brDn.stop  = h1 + InpStopBufAtr * g_brDn.atr;
+            g_brDn.bar   = bar;
+         }
+      }
+      else if(g_brDn.state == 2)
+      {
+         if(bar - g_brDn.bar > InpBrWait || c1 > g_brDn.lvl + InpBrTol * g_brDn.atr)
+            ResetBr(g_brDn);
+      }
+   }
+}
+
+//==================== ORDER BLOCKS =================================
+// wugamlo's rule, MPL-2.0 (notice in the header). A DOWN candle followed by
+// InpObLen consecutive UP candles clearing InpObThrPct is a bullish block; the
+// zone is that candle's high..low. Mirror for bearish.
+//
+// E-148: the marker every chart draws sits on the block candle, obp bars BACK,
+// and that price was not knowable when the block formed. Entering AT DETECTION
+// - market, on the confirming bar - measured nearly double the return entry per
+// trade on M1 and 2.4x on M5, with out-of-sample better than in-sample. Both
+// are offered because the return fires far more often.
+bool NewObBlock(int dir, double &top, double &bot)
+{
+   int obp = InpObLen + 1;
+   if(Bars(_Symbol, _Period) < obp + 5) return false;
+   double c0 = iClose(_Symbol, _Period, obp);
+   double o0 = iOpen(_Symbol, _Period, obp);
+   if(c0 == 0.0) return false;
+   double move = MathAbs(c0 - iClose(_Symbol, _Period, 1)) / c0 * 100.0;
+   if(move < InpObThrPct) return false;
+   int run = 0;
+   for(int k = 1; k <= InpObLen; k++)
+   {
+      double ck = iClose(_Symbol, _Period, k);
+      double ok = iOpen(_Symbol, _Period, k);
+      if(dir > 0 ? (ck > ok) : (ck < ok)) run++;
+   }
+   if(run != InpObLen) return false;
+   if(dir > 0 ? !(c0 < o0) : !(c0 > o0)) return false;
+   top = iHigh(_Symbol, _Period, obp);
+   bot = iLow(_Symbol, _Period, obp);
+   return true;
+}
+
+void UpdateOb()
+{
+   if(!InpUseObDetect && !InpUseObReturn) return;
+   double a = ATR();
+   if(a <= 0.0) return;
+   int bar = BarNo();
+   double top, bot;
+   if(NewObBlock(1, top, bot))
+   {
+      g_obB.live = true; g_obB.top = top; g_obB.bot = bot;
+      g_obB.atr = a; g_obB.born = bar;
+   }
+   if(NewObBlock(-1, top, bot))
+   {
+      g_obS.live = true; g_obS.top = top; g_obS.bot = bot;
+      g_obS.atr = a; g_obS.born = bar;
+   }
+   // a zone price has traded through is no longer a zone
+   double l1 = iLow(_Symbol, _Period, 1);
+   double h1 = iHigh(_Symbol, _Period, 1);
+   if(g_obB.live && (l1 < g_obB.bot || bar - g_obB.born > InpSetupLife))
+      g_obB.live = false;
+   if(g_obS.live && (h1 > g_obS.top || bar - g_obS.born > InpSetupLife))
+      g_obS.live = false;
+}
+
+//==================== ONE PLACER FOR EVERY SIGNAL ==================
+// Every source goes through here so the risk cap, the lot rule, the minimum
+// stop distance and the arm-price note can never be applied to one signal and
+// forgotten on another. The OB risk cap was missed exactly that way in the Pine
+// and it had to be caught in an audit.
+bool Place(int dir, int otype, double price, double stop, double atrRef,
+           string tag, int src)
+{
+   int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   price = NormalizeDouble(price, dg);
+   stop  = NormalizeDouble(stop, dg);
+   double risk = MathAbs(price - stop);
+   if(risk <= 0.0) return false;
+
+   if(risk > InpMaxRiskAtr * atrRef)
+   {
+      g_refusedToday++;
+      Log(StringFormat("REFUSED %s: stop is %.2f ATR, cap %.2f",
+                       tag, risk / atrRef, InpMaxRiskAtr));
+      return false;
+   }
+   double md = MinStopDist();
+   if(md > 0.0 && risk < md) return false;
+
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double now = (dir > 0) ? ask : bid;
+
+   // a pending order must sit the broker's minimum distance from the market,
+   // and on the correct SIDE of it for its type, or it is rejected - or worse,
+   // silently converted into something that is not the trade that was measured.
+   if(otype != 0)
+   {
+      double away = (otype == 1) ? dir * (price - now)    // stop: beyond price
+                                 : dir * (now - price);   // limit: behind price
+      if(away <= 0.0 || (md > 0.0 && away < md)) return false;
+   }
+
+   double lots = LotFor(risk);
+   if(lots <= 0.0) return false;
+
+   bool ok = false;
+   if(otype == 0)
+      ok = (dir > 0) ? trade.Buy(lots, _Symbol, 0.0, stop, 0.0, tag)
+                     : trade.Sell(lots, _Symbol, 0.0, stop, 0.0, tag);
+   else if(otype == 1)
+      ok = (dir > 0) ? trade.BuyStop(lots, price, _Symbol, stop, 0.0,
+                                     ORDER_TIME_GTC, 0, tag)
+                     : trade.SellStop(lots, price, _Symbol, stop, 0.0,
+                                      ORDER_TIME_GTC, 0, tag);
+   else
+      ok = (dir > 0) ? trade.BuyLimit(lots, price, _Symbol, stop, 0.0,
+                                      ORDER_TIME_GTC, 0, tag)
+                     : trade.SellLimit(lots, price, _Symbol, stop, 0.0,
+                                       ORDER_TIME_GTC, 0, tag);
+   if(!ok)
+   {
+      Log(StringFormat("%s failed: %d %s", tag, trade.ResultRetcode(),
+                       trade.ResultRetcodeDescription()));
+      return false;
+   }
+   g_armSrc = src;
+   if(otype != 0)
+   {
+      g_pend    = trade.ResultOrder();
+      g_pendBar = BarNo();
+      g_pendDir = dir;
+      PB_NoteOrder(g_pend, (bid + ask) / 2.0);
+   }
+   Log(StringFormat("%s %s at %.*f, stop %.*f (%.2f ATR), %.2f lots",
+                    tag, dir > 0 ? "BUY" : "SELL", dg, price, dg, stop,
+                    risk / atrRef, lots));
+   return true;
+}
+
 void TryArm()
 {
    if(g_lockDay || g_lockPerm) return;
@@ -363,7 +637,12 @@ void TryArm()
    int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    int bar = BarNo();
 
-   for(int pass = 0; pass < 2; pass++)
+   // PRIORITY IS THE MEASURED RANKING, not a preference: sweep (107.3 control
+   // se) > break+retest (73.8) > order block (56.8). E-149 confirmed it holds
+   // under competition - the sweep's per-trade INSIDE the combined book is the
+   // same as its standalone figure, so the others fill idle time rather than
+   // stealing good trades.
+   for(int pass = 0; pass < 2 && InpUseSweep; pass++)
    {
       bool sellSide = (pass == 0);
       Setup s = sellSide ? g_sell : g_buy;
@@ -442,6 +721,58 @@ void TryArm()
       }
       Log(StringFormat("arm failed: %d %s", trade.ResultRetcode(),
                        trade.ResultRetcodeDescription()));
+   }
+   if(OrderAlive(g_pend) || PosCount() > 0) return;
+
+   // ---- 2. BREAK + RETEST, a stop order at the retest bar's extreme --------
+   if(InpUseBR)
+   {
+      if(g_brUp.state == 2 && bar > g_brUp.bar)
+         if(Place(1, 1, g_brUp.trig, g_brUp.stop, g_brUp.atr, "SS b+r", 2))
+         {
+            ResetBr(g_brUp);
+            return;
+         }
+      if(g_brDn.state == 2 && bar > g_brDn.bar)
+         if(Place(-1, 1, g_brDn.trig, g_brDn.stop, g_brDn.atr, "SS b+r", 2))
+         {
+            ResetBr(g_brDn);
+            return;
+         }
+   }
+
+   // ---- 3. ORDER BLOCK AT DETECTION, market on the confirming bar ---------
+   // E-148: nearly double the return entry per trade on M1, and its
+   // out-of-sample beat its in-sample. This is the honest version of "catch
+   // the birth of the move" - the marker the eye loves is drawn four bars back
+   // at a price that was not knowable then.
+   if(InpUseObDetect)
+   {
+      if(g_obB.live && g_obB.born == bar)
+         if(Place(1, 0, ask, g_obB.bot - InpStopBufAtr * g_obB.atr,
+                  g_obB.atr, "SS ob-new", 3))
+            return;
+      if(g_obS.live && g_obS.born == bar)
+         if(Place(-1, 0, bid, g_obS.top + InpStopBufAtr * g_obS.atr,
+                  g_obS.atr, "SS ob-new", 3))
+            return;
+   }
+
+   // ---- 4. ORDER BLOCK ON THE RETURN, a LIMIT at the near edge -------------
+   // A limit is correct HERE and a stop was correct above: after the run the
+   // block sits BEHIND price, so price falls back to a bullish block and rises
+   // back to a bearish one. Getting this backwards is the bug that was found in
+   // the sweep entry, and it is worth stating once per order type.
+   if(InpUseObReturn)
+   {
+      if(g_obB.live && bar > g_obB.born)
+         if(Place(1, 2, g_obB.top, g_obB.bot - InpStopBufAtr * g_obB.atr,
+                  g_obB.atr, "SS ob-ret", 4))
+            return;
+      if(g_obS.live && bar > g_obS.born)
+         if(Place(-1, 2, g_obS.bot, g_obS.top + InpStopBufAtr * g_obS.atr,
+                  g_obS.atr, "SS ob-ret", 4))
+            return;
    }
 }
 
@@ -543,6 +874,11 @@ int OnInit()
 
    ResetSetup(g_sell);
    ResetSetup(g_buy);
+   ResetBr(g_brUp);
+   ResetBr(g_brDn);
+   g_obB.live = false;
+   g_obS.live = false;
+   g_armSrc = 0;
 
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    g_dayStartEq = eq; g_peakEq = eq;
@@ -602,6 +938,8 @@ void OnTick()
    {
       g_lastBar = b;
       UpdateSetups();
+      UpdateBr();
+      UpdateOb();
       AgePending();
       if(PosCount() == 0) TryArm();
    }
