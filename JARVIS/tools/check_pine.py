@@ -175,6 +175,40 @@ def check_var_offset(src):
     return out
 
 
+
+def check_continuations(src):
+    """Pine continuation lines must NOT be indented by a multiple of four.
+
+    Four spaces means a local BLOCK in Pine, so a continuation line indented 16
+    spaces is read as the start of a block and the compiler reports
+    "end of line without line continuation" on the line ABOVE it. The identifier
+    scan cannot see this - the names are all fine, the layout is not - and this
+    file shipped to the user with exactly this error while this checker said
+    CLEAN.
+    """
+    out = []
+    lines = src if isinstance(src, list) else src.splitlines()
+    # a line that clearly cannot stand alone: ends with an operator, a ternary
+    # arm, a comma, or an open bracket
+    unfinished = re.compile(r"(\?|:|,|\+|-|\*|/|and|or|=|\()\s*$")
+    for i in range(len(lines) - 1):
+        cur, nxt = lines[i], lines[i + 1]
+        code = cur.split("//")[0].rstrip()
+        if not code.strip() or not unfinished.search(code):
+            continue
+        if code.rstrip().endswith("=>"):        # a function body, not a continuation
+            continue
+        if not nxt.strip() or nxt.lstrip().startswith("//"):
+            continue
+        ind_cur = len(code) - len(code.lstrip())
+        ind_nxt = len(nxt) - len(nxt.lstrip())
+        if ind_nxt <= ind_cur:
+            continue
+        if ind_nxt % 4 == 0:
+            out.append((i + 2, ind_nxt, nxt.strip()[:60]))
+    return out
+
+
 def check_order(src, declared):
     """Pine is single-pass: a name must appear textually BEFORE it is used.
     The existence check alone passes a file that reads a variable declared
@@ -516,6 +550,12 @@ def check(path):
     problems += check_tables(src)
     problems += check_draw_in_ternary(src)
     problems += check_global_only(src)
+    for ln, ind, ctx in check_continuations(src):
+        problems.append((ln, f"CONTINUATION indented {ind} spaces - a multiple of "
+                             f"4 means a BLOCK in Pine, so the compiler reports "
+                             f"'end of line without line continuation' on the "
+                             f"line above. Use an indent that is not a multiple "
+                             f"of 4, or split the statement up.", ctx))
 
     print("=" * 74)
     print(f"  PINE STATIC CHECK — {path.split('/')[-1]}")

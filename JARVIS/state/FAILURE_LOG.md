@@ -450,3 +450,35 @@ is the whole edge:
 - **When code and backtest disagree, the disagreement is the finding.** Not a
   parity chore to tidy up later.
 - **Suspicion should rise with the t-statistic, not fall.**
+
+---
+
+## 2026-09-06 — I SHIPPED A PINE FILE THAT DOES NOT COMPILE, AND MY CHECKER SAID CLEAN
+
+Veer pasted a screenshot of the Pine Editor: *"Syntax error at input 'end of
+line without line continuation' (CE10156)"* on the `posStop` assignment.
+
+**Pine treats an indent that is a multiple of four as a local BLOCK.** So a
+multi-line ternary whose continuation lines are indented 16 spaces is not a
+continuation at all — the compiler reads a block where an expression should be,
+and reports the error on the line *above*. `check_pine.py` validated every
+identifier, the declaration order, global scope and drawing calls, and said
+**CLEAN**, because none of the names were wrong. The layout was.
+
+This is the third time today the same shape of mistake has bitten:
+- `ast.parse` accepted Python that `compile()` rejects (`from __future__` after a
+  docstring) — nine files broken, found by the test suite after a push.
+- `check_mq5.py` does not validate struct members, so `s.level` for `s.lvl` sat
+  in a patch until I read it back by eye.
+- and now this.
+
+**A checker that is not the real compiler will always have a blind spot, and the
+blind spot is never in the thing it checks — it is in the thing nobody thought
+to check.** The only reliable move is to assume one exists and look for it
+deliberately.
+
+`check_pine.py` now flags any continuation line indented by a multiple of four.
+It found **three** in the shipped file, not one: the `bgcolor` session tint, the
+`posStop` ternary, and the `posTgt` ternary. Two of them were pre-existing and
+had never compiled. Both big ternaries are now built from single-line pieces,
+which is more readable anyway and cannot fail this way at all.

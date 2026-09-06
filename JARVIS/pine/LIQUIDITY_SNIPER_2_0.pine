@@ -326,8 +326,8 @@ inA = showSess and inASess
 inL = showSess and inLSess
 inN = showSess and inNSess
 sessOk = not sessFilter or (inLSess and inNSess)
-bgcolor(inN ? color.new(#F5A623, 95) : inL ? color.new(#4A90D9, 96) :
-        inA ? color.new(#7B68EE, 97) : na, title = "Sessions")
+sessTint = inN ? color.new(#F5A623, 95) : inL ? color.new(#4A90D9, 96) : inA ? color.new(#7B68EE, 97) : na
+bgcolor(sessTint, title = "Sessions")
 
 // ---------------------------------------------------------- setup state ----
 // One live setup per side. A swing HIGH is sell-side liquidity: the sweep runs
@@ -779,17 +779,24 @@ if anyBuy or anySell
              takeBrB    ? rTrig : takeBrS   ? sTrig :
              takeObB    ? obBullTop : takeObS ? obBearBot : close
     posEntry := f_fill(trigPx, open, anyBuy ? 1 : -1)
-    posStop  := takeSweepB ? extBf - stopBuf * atrB : takeSweepS ? extSf + stopBuf * atrS :
-                takeBrB    ? rStop : takeBrS ? sStop :
-                takeObB    ? obBullBot - stopBuf * atr :
-                takeObS    ? obBearTop + stopBuf * atr :
-                takeDetB   ? low[obp] - stopBuf * atr : high[obp] + stopBuf * atr
+    // Built in pieces on single lines. A multi-line ternary indented by a
+    // multiple of four is read by Pine as a BLOCK, not a continuation, and the
+    // compiler then reports "end of line without line continuation" on the
+    // line ABOVE - which is what this file shipped with. check_pine.py now
+    // catches that; it did not before.
+    stopSweep = takeSweepB ? extBf - stopBuf * atrB : extSf + stopBuf * atrS
+    stopBr    = takeBrB ? rStop : sStop
+    stopObRet = takeObB ? obBullBot - stopBuf * atr : obBearTop + stopBuf * atr
+    stopObDet = takeDetB ? low[obp] - stopBuf * atr : high[obp] + stopBuf * atr
+    isSweep   = takeSweepB or takeSweepS
+    isBr      = takeBrB or takeBrS
+    isObRet   = takeObB or takeObS
+    posStop  := isSweep ? stopSweep : isBr ? stopBr : isObRet ? stopObRet : stopObDet
     posInit  := posStop
     posPeak  := posEntry
     posBar   := bar_index
-    posTgt   := tgtMode == "next liquidity level" ? f_nextLevel(posDir, posEntry) :
-                tgtMode == "N x risk" and tgtR > 0
-                     ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
+    tgtRuler = tgtMode == "N x risk" and tgtR > 0 ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
+    posTgt  := tgtMode == "next liquidity level" ? f_nextLevel(posDir, posEntry) : tgtRuler
     // consume the setup that fired, so it cannot fire twice
     if takeSweepB
         lvlB := na
