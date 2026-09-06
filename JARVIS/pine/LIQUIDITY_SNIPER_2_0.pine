@@ -115,7 +115,7 @@
 //  NEVER FORWARD TESTED. SUPPORTED, not proven. Nothing here has met a
 //  real spread, a real fill or a real Sunday gap.
 // ===========================================================================
-indicator("LIQUIDITY SNIPER 2.0", overlay = true, max_labels_count = 500,
+indicator("LIQUIDITY SNIPER 2.1", overlay = true, max_labels_count = 500,
      max_lines_count = 500, max_boxes_count = 500, max_bars_back = 1000)
 
 // ------------------------------------------------------------------ inputs --
@@ -225,7 +225,8 @@ showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
 showSmc   = input.bool(true, "BOS / CHoCH",   group = gD, inline = "s1")
 showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
 showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
-showHist  = input.bool(true, "Finished trades", group = gD, inline = "s2")
+showHist  = input.bool(false, "Finished trades", group = gD, inline = "s2",
+     tooltip = "OFF by default. On M1 this is a P&L label on every closed trade - thousands of them, capped at the last 500 by TradingView - and it is the single biggest source of clutter on the chart. It is also the most misleading thing here now that E-165 has shown the edge is not proven. Switch it on to study the history, not to read the market.")
 showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
 showRefused = input.bool(false, "Mark refused setups", group = gD,
      tooltip = "OFF by default because it is chart noise. A refused setup is one where the stop would have been wider than the risk cap allows, so the trade was declined - there is nothing to act on and there are a lot of them. The count is still in the full panel under 'refused'.")
@@ -263,6 +264,14 @@ if not na(pl)
 // at. E-153 tried to TRADE this and could not: capping the entry on it leaves
 // 34 trades of 1008, which is not a sample. So it is DRAWN and not traded, and
 // the label says so.
+// E-165. Where an order resting at `trig` actually fills on this bar. If the
+// bar has already OPENED past the trigger, no order can still be sitting there
+// and the fill is the open - which is always the worse price. This mirrors
+// engine.entry_fill() in the research exactly, and it is the single line that
+// separates an honest panel from a salesman.
+f_fill(trig, op, d) =>
+    d * (op - trig) > 0 ? op : trig
+
 f_nextLevel(d, px) =>
     float best = na
     arr = d > 0 ? lvHi : lvLo
@@ -673,9 +682,18 @@ anySell = takeSweepS or takeBrS or takeObS or takeDetS
 if anyBuy or anySell
     posDir   := anyBuy ? 1 : -1
     posSrc   := (takeSweepB or takeSweepS) ? 1 : (takeBrB or takeBrS) ? 2 : 3
-    posEntry := takeSweepB ? lvlB : takeSweepS ? lvlS :
-                takeBrB    ? rTrig : takeBrS   ? sTrig :
-                takeObB    ? obBullTop : takeObS ? obBearBot : close
+    // E-165. THE FILL, NOT THE LEVEL. A stop order resting at a level only
+    // fills AT that level if this bar has not already opened past it. The
+    // sweep bar is a WICK - it closes back through the level - so on 75% of
+    // setups this bar opens on the far side, nothing can still be resting
+    // there, and the real fill is the OPEN. Booking the level instead is what
+    // made this strategy look profitable when it is not: it extracted +0.0226
+    // a trade at t = 5 from a DRIFTLESS RANDOM WALK. f_fill never returns a
+    // price better than the trigger.
+    trigPx = takeSweepB ? lvlB : takeSweepS ? lvlS :
+             takeBrB    ? rTrig : takeBrS   ? sTrig :
+             takeObB    ? obBullTop : takeObS ? obBearBot : close
+    posEntry := f_fill(trigPx, open, anyBuy ? 1 : -1)
     posStop  := takeSweepB ? extBf - stopBuf * atrB : takeSweepS ? extSf + stopBuf * atrS :
                 takeBrB    ? rStop : takeBrS ? sStop :
                 takeObB    ? obBullBot - stopBuf * atr :
@@ -973,7 +991,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 2 + (panelBig ? 7 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 7 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1002,7 +1020,11 @@ if barstate.islast and showPanel
              nTrades > 0 ? str.format("{0,date,dd MMM}", firstT) : "-",
              "to " + str.format("{0,date,dd MMM}", time), cVal)
     r += 1
-    f_row(r, "profit", f_num(sumPts, "0.0") + "pt", f_ccy(sumPts),
+    // Labelled "if traded", not "profit". With the E-165 fill correction this
+    // number is what the signals would REALLY have paid on the bars loaded -
+    // and on XAUUSD that is around zero. It is a measurement, not a promise,
+    // and it must never again read like a sales figure.
+    f_row(r, "if traded", f_num(sumPts, "0.0") + "pt", f_ccy(sumPts),
              sumPts >= 0 ? cPos : cNeg)
     r += 1
     f_row(r, "trades", str.tostring(nTrades),
@@ -1048,6 +1070,8 @@ if barstate.islast and showPanel
              posDir == 0 ? "-" : str.tostring(chaseTo, format.mintick),
              posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
+    r += 1
+    f_sep(r, "signals are real · the edge is NOT proven (E-165)")
     r += 1
 
     if panelBig
