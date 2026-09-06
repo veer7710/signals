@@ -7296,3 +7296,77 @@ the do-not-test list for months, is **wrong**. Volume is present on every bar of
 both files. It is tick volume and therefore broker-dependent, but it is real and
 testable — and it was tested here: break-vs-pullback tick volume was M1's
 strongest feature at t 1.68, which is nothing.
+
+---
+
+## E-168 — THE TOP TICK: DISPROVEN AS AN ENTRY, BUT THE EFFECT IS REAL
+
+Veer's own idea, and the best one on the table: instead of entering AT the swept
+level (which E-165 killed, because the wick has already closed back through it
+and nothing can rest there), rest a LIMIT up at the sweep EXTREME. A sell limit
+above the market is on the correct side, it is genuinely fillable, and the stop
+sits right against the extreme — so risk per trade collapses. *"Top tick entries
+till bottom, this will improve winrate and profit."*
+
+### The null is clean
+Driftless random walk, zero cost, pooled over 3 seeds: **−0.0015 a trade,
+t −1.35 = zero.** Cost charged: −0.0285 against a 0.02709 spread. **0 of 29,525
+fills were ever better than their own limit price.** Contrast E-165's broken
+entry, which made +0.0226 at t 5 on the same generator. This measurement is
+trustworthy.
+
+### And every one of 84 parameter cells loses money
+```
+  M1 cell               n   fill%  win%   points   per tr      t   mean risk  spread/risk
+  f=1.00 buf=0.10A   3562   89.5% 11.3%    -90.8  -0.0255 -10.96      0.042       65.1%
+  f=0.75 buf=0.10A   3553   91.5% 19.6%   -104.6  -0.0294  -9.60      0.078       40%
+  f=0.00 buf=0.30A   2686   93.7% 29.0%    -84.2  -0.0314  -7.28      0.187       14.5%
+```
+Out of sample: −0.0310 → **−0.0198 on 1751 unseen trades, t −5.98**. Walk-forward
+**0 of 6 folds positive** on both clocks. Both directions negative.
+
+**Fill rate is NOT the problem** — 89.5% of orders fill even at the true top
+tick. Veer's worry (*"price doesn't always hit level... sometimes it's a point
+below"*) turns out not to be what kills it.
+
+### What kills it is the tighter stop — the hypothesis's own selling point
+1. **The round-turn spread is 65% of the stop distance.** Cost does not shrink
+   when the stop does. Making risk smaller makes cost-to-risk *worse* until it
+   is unpayable. **The stated benefit is mechanically the cause of the failure.**
+2. **The tight stop does not bound the loss.** Worst trade on a 0.042-point stop
+   is −2.08 points = **−78R**, and 0.6% of trades lose more than 3R. Gaps go
+   straight through it. **"Tighter stop = smaller drawdown" is FALSE here** —
+   max drawdown at the top tick (91.5 pts) is WORSE than at the level (84.2).
+
+### The part that is real, and it is worth knowing
+Shortening how long the limit may rest improves gross performance monotonically,
+and at **one bar** — an immediate retest of the sweep extreme:
+```
+  M1, true top tick, stop 0.10 ATR, limit rests ONE bar
+    null at this exact setting, gross           -0.0012   t -1.33
+    REAL gross                    n=2039        +0.0103   t +3.64
+    matched control x12, gross                  -0.0028
+    real - control = +0.0131 = 4.63 own standard errors
+    1st half +0.0107 (t 2.46)   2nd half +0.0099 (t 2.79)
+    longs +0.0087   shorts +0.0117   positive in all 6 months
+    NET 1st half -0.0156   NET 2nd half -0.0181
+```
+**An immediate one-bar retest of the sweep extreme is a genuinely non-random
+price.** Stable across halves, both directions and all six months, 4.6 se above
+a matched control, exactly zero on the null at that same setting.
+
+**And it is +0.0103 a trade against a 0.0271 spread — it covers 38% of its own
+cost.** Break-even needs a round-turn spread 24% tighter than we are charged.
+This is the order block's position from E-151 all over again: **real structure
+that does not clear the spread.**
+
+### VERDICT: DISPROVEN as a tradeable entry. The micro-effect: SUPPORTED.
+The one thing that would change it is a measured round-turn cost on XAUUSD M1
+below 0.0206 points on 2018 scale (~0.15 today-points). No offset, no buffer and
+no resting time makes it pay at the spreads assumed here.
+
+**Caveat the agent raised against itself:** `wait=1` is the edge of its range and
+cannot be extended, which is exactly the E-151 leak signature. The defence is
+that the null AND the matched control were both run at that exact setting and
+both are clean. It could still be a bid-ask bounce artefact of the vendor's bar
+construction; there was no tick data to check.
