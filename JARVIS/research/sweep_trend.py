@@ -335,8 +335,9 @@ def cmd_facts():
         print("=" * 100)
         print(f"  {ctxname}: {CTX[ctxname][2]}")
         print("=" * 100)
-        print(f"  {'exec':<6}{'ctx':<6}{'sweeps':>8}{'up%':>8}{'neut%':>8}"
-              f"{'down%':>8}{'lows':>8}{'highs':>8}{'WITH':>8}{'AGST':>8}")
+        print(f"  {'levels':<8}{'exec':<6}{'ctx':<6}{'sweeps':>8}{'up%':>8}"
+              f"{'neut%':>8}{'down%':>8}{'lows':>8}{'highs':>8}{'WITH':>8}"
+              f"{'AGST':>8}")
         for (htf, ltf) in GRIDCELLS:
             key = (htf, ltf)
             if key not in cache:
@@ -356,7 +357,7 @@ def cmd_facts():
             lo_ = sum(1 for x in oo if x[3] > 0)
             wi = sum(1 for x in oo if lab[x[0]] != 0 and lab[x[0]] == x[3])
             ag = sum(1 for x in oo if lab[x[0]] != 0 and lab[x[0]] == -x[3])
-            print(f"  {ltf:<6}{CTXOF[ltf]:<6}{n:>8}{100*up/n:>8.1f}"
+            print(f"  {htf:<8}{ltf:<6}{CTXOF[ltf]:<6}{n:>8}{100*up/n:>8.1f}"
                   f"{100*ne/n:>8.1f}{100*dn/n:>8.1f}{lo_:>8}{n-lo_:>8}"
                   f"{wi:>8}{ag:>8}")
         print()
