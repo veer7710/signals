@@ -202,12 +202,47 @@ ph = ta.pivothigh(high, pvLen, pvLen)
 pl = ta.pivotlow(low,  pvLen, pvLen)
 
 // ---------------------------------------------------------------- sessions --
-// Context only. Deliberately not a filter: this data feed is missing the 00:00
-// UTC hour every day, so any session rule measured on it would be measuring
-// the gap rather than the session.
-inA = showSess and not na(time(timeframe.period, sessA, tzSess))
-inL = showSess and not na(time(timeframe.period, sessL, tzSess))
-inN = showSess and not na(time(timeframe.period, sessN, tzSess))
+// E-161/E-162 measured these properly for the first time. The London/New York
+// OVERLAP is the best session on both clocks and it holds out of sample:
+//
+//   M1 per trade   1st half   unseen        M5 per trade   1st half   unseen
+//     Asia          +0.0594  +0.0439          Asia          +0.0439  +0.1322
+//     London        +0.0632  +0.0686          London        +0.0771  +0.1608
+//     OVERLAP       +0.0977  +0.1088          OVERLAP       +0.3600  +0.4687
+//     New York      +0.0700  +0.0721          New York      +0.1895  +0.1226
+//     all           +0.0724  +0.0702          all           +0.1686  +0.2123
+//
+// And under slippage, total points, which is what decides it:
+//
+//   M1 session      0.00    0.02    0.05    0.10   |  M5      0.00    0.05    0.10
+//     Asia          54.5    33.6     2.3   -49.9   |         22.0     9.2    -3.5
+//     OVERLAP       79.5    64.1    40.9    +2.4   |         77.1    67.7    58.3
+//     all          288.6   207.7    86.3  -115.9   |        171.3   125.9    80.6
+//
+// So the filter is OFF by default and it is not a close call either way: at the
+// slippage you probably have (0.02-0.05) taking every session banks MORE money,
+// and only past about 0.10 does the overlap alone win. It is here as a DIAL for
+// after the demo run tells you which world you are in. E-074: per-trade quality
+// and money are not the same thing, and the overlap wins the first, not always
+// the second.
+//
+// CAVEAT, and it was already in this file: this feed is missing the 00:00 UTC
+// hour every day, so the "Asia" figures above cover 01:00-07:00, not 00:00.
+// The overlap window is unaffected.
+sessFilter = input.bool(false, "Trade the London/New York overlap only",
+     group = gT,
+     tooltip = "OFF by default. The overlap is the best session per trade on both clocks and it holds out of sample, but taking every session still banks more TOTAL money at realistic slippage. Switch this on only if your demo run shows fills slipping about 0.10 points or worse - at that point the overlap is the only M1 session still making money.")
+
+// Detection is separate from drawing: hiding the session shading must not
+// silently switch a trading filter off. That exact coupling was a live bug in
+// the order block code.
+inASess = not na(time(timeframe.period, sessA, tzSess))
+inLSess = not na(time(timeframe.period, sessL, tzSess))
+inNSess = not na(time(timeframe.period, sessN, tzSess))
+inA = showSess and inASess
+inL = showSess and inLSess
+inN = showSess and inNSess
+sessOk = not sessFilter or (inLSess and inNSess)
 bgcolor(inN ? color.new(#F5A623, 95) : inL ? color.new(#4A90D9, 96) :
         inA ? color.new(#7B68EE, 97) : na, title = "Sessions")
 
@@ -532,8 +567,8 @@ var int   wS = 0
 var int   wB = 0
 var int   wO = 0
 
-takeSweepB = useSweep and fillB and posDir == 0
-takeSweepS = useSweep and fillS and posDir == 0
+takeSweepB = useSweep and sessOk and fillB and posDir == 0
+takeSweepS = useSweep and sessOk and fillS and posDir == 0
 takeBrB    = brFillB and posDir == 0 and not takeSweepB and not takeSweepS
 takeBrS    = brFillS and posDir == 0 and not takeSweepB and not takeSweepS
 takeObB    = obFillB and posDir == 0 and not takeSweepB and not takeSweepS

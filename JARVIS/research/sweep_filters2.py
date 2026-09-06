@@ -106,7 +106,7 @@ def build(tf, give=0.25, cooldown=5, hold=240):
             "rpos": (entry - lo) / (hi - lo) if hi > lo else 0.5,
             "age": float(age),
             "room": room,
-            "hour": float((s.ts[j] // 3600000) % 24),
+            "hour": float((s.ts[j] // 3600) % 24),   # E-161: these are SECONDS, not millis
         })
         busy = kk + cooldown
     _M[tf] = (out, len(s))

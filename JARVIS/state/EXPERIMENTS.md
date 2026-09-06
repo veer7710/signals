@@ -6822,3 +6822,60 @@ and then re-filtered, so the one-position-at-a-time scheduler hands the slot to
 different trades than a run generated at each cap would. The rows are internally
 consistent with each other, which is what the comparison needs, but the absolute
 figures differ slightly from E-155's (884 trades vs 907 at the same 1.2 cap).
+
+---
+
+## E-161 / E-162 — THE SESSION FINALLY MEASURED, AND WHY IT IS A DIAL NOT A DEFAULT
+
+The Pine carried this comment for months: *"Context only. Deliberately not a
+filter: this data feed is missing the 00:00 UTC hour every day, so any session
+rule measured on it would be measuring the gap rather than the session."* That
+is a fair objection to a rule covering midnight. It is not a reason never to
+look, and nobody had.
+
+**A false start worth recording:** the first run put 2083 of 2083 first-half
+trades into a single four-hour bucket, which is impossible. The timestamps in
+this feed are in **seconds** and the code divided by 3,600,000 as if they were
+milliseconds. Every hour was garbage. Caught because the answer was absurd, not
+because anything failed — the same way E-134's inverted fill was caught. Before
+that, the same feature had been read off a `Series` field name that does not
+exist, and reported as "flat". **"Flat" and "not measured" look identical in a
+table.**
+
+### Per trade, chosen on the first half, judged on the second
+```
+  M1              1st half   unseen  |  M5              1st half   unseen
+    Asia           +0.0594  +0.0439  |    Asia           +0.0439  +0.1322
+    London         +0.0632  +0.0686  |    London         +0.0771  +0.1608
+    OVERLAP 12-16  +0.0977  +0.1088  |    OVERLAP 12-16  +0.3600  +0.4687
+    New York       +0.0700  +0.0721  |    New York       +0.1895  +0.1226
+    all            +0.0724  +0.0702  |    all            +0.1686  +0.2123
+```
+**The London/New York overlap is the best session on both clocks and it holds
+out of sample** — on M5 it is more than double the all-session figure. This is
+the first session result in this repo that survives its own out-of-sample test.
+
+### And then the money, which decides it
+```
+  total points     0.00    0.02    0.05    0.10   |  M5      0.00    0.05    0.10
+  M1 Asia          54.5    33.6     2.3   -49.9   |         22.0     9.2    -3.5
+  M1 OVERLAP       79.5    64.1    40.9    +2.4   |         77.1    67.7    58.3
+  M1 all          288.6   207.7    86.3  -115.9   |        171.3   125.9    80.6
+```
+At the slippage we probably have — 0.02 to 0.05 — **taking every session banks
+far more money** (86.3 vs 40.9 on M1 at 0.05; 125.9 vs 67.7 on M5). Only past
+about 0.10 does the overlap alone win, and there it wins completely: it is the
+**only M1 session still positive**, and on M5 it keeps 58.3 of its 77.1 points
+while Asia goes negative.
+
+**VERDICT: a documented dial, default OFF, in both the Pine (`sessFilter`) and
+the EA (`InpOverlapOnly`), with the table above in the tooltip.** E-074 again:
+the overlap wins per-trade quality and loses total money, and which of those
+matters is decided by a slippage number **only a demo run can supply.** This is
+the second parameter this session that turned out to be a question the backtest
+cannot answer.
+
+**A coupling bug fixed on the way:** `inA/inL/inN` were computed as
+`showSess and ...`, so hiding the session shading would have silently switched
+off any filter built on them. Detection is now separate from drawing — the same
+defect, and the same fix, as the order-block one earlier today.

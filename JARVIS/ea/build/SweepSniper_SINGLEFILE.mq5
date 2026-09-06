@@ -837,6 +837,20 @@ input double InpFixedLots    = 0.01;    // E-081: 0.01 is GBP0.787/point and is 
 input double InpRiskPct      = 0.50;    // used only when InpUseFixedLots = false
 input double InpMaxSpreadPts = 0.60;    // refuse to arm when the spread is wider
 
+input group "=== SESSION (E-161/E-162) ==="
+// OFF by default. The London/New York overlap is the best session PER TRADE on
+// both clocks and it holds out of sample - but at the slippage you probably
+// have (0.02-0.05) taking every session banks MORE TOTAL money, and only past
+// about 0.10 does the overlap alone win. Measured, total points:
+//   M1 session      0.00    0.02    0.05    0.10   |  M5      0.00    0.05    0.10
+//     Asia          54.5    33.6     2.3   -49.9   |         22.0     9.2    -3.5
+//     OVERLAP       79.5    64.1    40.9    +2.4   |         77.1    67.7    58.3
+//     all          288.6   207.7    86.3  -115.9   |        171.3   125.9    80.6
+// This is a DIAL for after the demo run measures your fills, not a default.
+input bool   InpOverlapOnly  = false;   // trade the London/NY overlap only
+input int    InpOverlapFrom  = 12;      // server-time hour, inclusive
+input int    InpOverlapTo    = 16;      // server-time hour, exclusive
+
 input group "=== GUARDS ==="
 input double InpMaxDayLossPct = 3.0;
 input double InpMaxDDPct      = 6.0;
@@ -1395,6 +1409,7 @@ void TryArm()
    if(g_lockDay || g_lockPerm) return;
    if(PosCount() > 0 || OrderAlive(g_pend)) return;
    if(g_tradesToday >= InpMaxTradesDay) return;
+   if(!InOverlap()) return;                     // E-161, off by default
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -1720,6 +1735,15 @@ void LoadGuards()
             "will not trade. Clear it by deleting the global variable "
             + GKey("lockPerm"));
    if(g_lockDay) Print("[SS] RESTORED: locked out for the rest of today.");
+}
+
+// E-161. Server time, like every other clock in this EA - see F16, TimeCurrent()
+// is NOT UTC. Check the offset against your broker before switching this on.
+bool InOverlap()
+{
+   if(!InpOverlapOnly) return true;
+   MqlDateTime t; TimeToStruct(TimeCurrent(), t);
+   return (t.hour >= InpOverlapFrom && t.hour < InpOverlapTo);
 }
 
 void CheckGuards()
