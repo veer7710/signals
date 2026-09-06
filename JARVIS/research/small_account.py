@@ -1,5 +1,4 @@
-"""
-!! E-151 WARNING — THE NUMBERS IN THIS FILE ARE NOT TO BE QUOTED. !!
+"""!! E-151 WARNING — THE NUMBERS IN THIS FILE ARE NOT TO BE QUOTED. !!
 
 This file computes its trailing stop inline, from a bar's own extreme, and then
 fills at that level without checking it is still on the reachable side of that
@@ -15,8 +14,8 @@ implementation is `engine.trail_level` / `engine.trail_apply`, and
 This script has not been re-run since the fix. Its conclusions are SUSPENDED,
 not withdrawn: they may well survive, but nobody has checked. Import the engine
 functions and re-run it before citing anything here.
-"""
-"""
+
+----------------------------------------------------------------------
 E-096 — THE 40 POUND SQUEEZE. Resolve it or state it plainly.
 
 The handover calls this "unresolved and the central problem of goal 1":

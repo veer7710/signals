@@ -1,5 +1,4 @@
-"""
-!! E-151 WARNING — THE NUMBERS IN THIS FILE ARE NOT TO BE QUOTED. !!
+"""!! E-151 WARNING — THE NUMBERS IN THIS FILE ARE NOT TO BE QUOTED. !!
 
 This file computes its trailing stop inline, from a bar's own extreme, and then
 fills at that level without checking it is still on the reachable side of that
@@ -15,8 +14,8 @@ implementation is `engine.trail_level` / `engine.trail_apply`, and
 This script has not been re-run since the fix. Its conclusions are SUSPENDED,
 not withdrawn: they may well survive, but nobody has checked. Import the engine
 functions and re-run it before citing anything here.
-"""
-"""
+
+----------------------------------------------------------------------
 E-101 — THE HYBRID. Market on the flip, PLUS a level-limit re-entry in the run.
 
 This is Veer's own design, tested as he described it rather than as a choice

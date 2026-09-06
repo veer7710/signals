@@ -30,8 +30,36 @@ RATCHET = re.compile(r"^\s*\w+\s*=\s*max\(\w+,\s*\w+\)\s*if\s+\w+\s*>\s*0\s*"
 SAFE = re.compile(r"trail_level|trail_apply")
 
 
+def compile_sweep():
+    """Every research file must actually COMPILE.
+
+    ast.parse() is not enough: it accepts `from __future__ import annotations`
+    after another statement, which the compiler rejects. A batch edit that
+    prepended a docstring to eleven files passed an ast.parse sweep and broke
+    nine of them, and only running the test suite found it.
+    """
+    bad = []
+    for fn in sorted(os.listdir(ROOT)):
+        if not fn.endswith(".py"):
+            continue
+        path = os.path.join(ROOT, fn)
+        try:
+            compile(open(path).read(), path, "exec")
+        except SyntaxError as e:
+            bad.append((fn, e.lineno, e.msg))
+    if bad:
+        print("=" * 74)
+        print("  FILES THAT DO NOT COMPILE")
+        print("=" * 74)
+        for fn, ln, msg in bad:
+            print(f"  {fn}:{ln}  {msg}")
+        print()
+    return len(bad)
+
+
 def main():
     strict = "--strict" in sys.argv
+    n_broken = compile_sweep()
     bad = []
     for fn in sorted(os.listdir(ROOT)):
         if not fn.endswith(".py") or fn == "engine.py":
@@ -52,7 +80,7 @@ def main():
     if not bad:
         print("  CLEAN — every trailing stop in JARVIS/research goes through "
               "engine.trail_level / trail_apply.")
-        return 0
+        return 1 if n_broken else 0
 
     print("=" * 74)
     print("  HAND-ROLLED TRAILING STOPS (E-151 defect class)")
@@ -67,7 +95,7 @@ def main():
     print("  Fix by importing engine.trail_level / engine.trail_apply. If the")
     print("  file is a dead exploratory script, put an E-151 banner at the top")
     print("  saying its numbers are not to be quoted.")
-    return 1 if (strict and n_unmarked) else 0
+    return 1 if (n_broken or (strict and n_unmarked)) else 0
 
 
 if __name__ == "__main__":
