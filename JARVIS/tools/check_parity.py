@@ -58,6 +58,7 @@ PINE_ONLY = {
     "slipPts": "cost model, panel only", "obMode": "EA has two switches",
     "dispCut": "matched below", "maxLvlAge": "Pine-side housekeeping",
     "maxOB": "how many zones to DRAW - the EA draws nothing",
+    "obRealtime": "draws the forming block - the EA draws nothing",
 }
 
 
