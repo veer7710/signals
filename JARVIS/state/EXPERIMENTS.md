@@ -6753,3 +6753,72 @@ it dug was 3.5% of the account on 15m and 6.4% on 1h.
 
 **And on the 1h clock it takes 476–489 days to reach a 10% target.** That is not
 a funded-account plan; it is a savings account with drawdowns.
+
+---
+
+## E-159 / E-160 — THE ONE THING THAT SORTS A SWEEP, AND WHY IT CHANGES NOTHING
+
+Veer takes a handful of trades a day; the mechanical version takes 24. If any
+feature knowable AT ENTRY separated his handful from the rest, that would be the
+biggest single improvement available, because refusing a trade is free.
+
+Eight features, none using a bar later than the entry bar, quartiled on the
+FIRST half only, filter judged on the SECOND half it never saw:
+
+```
+  M1 feature        Q1        Q2        Q3        Q4    monotone?
+  stop width   +0.1158   +0.0995   +0.0461   +0.0280    YES, down
+  atr regime   +0.0508   +0.0443   +0.1011   +0.0934    no
+  range pos    +0.0911   +0.0566   +0.0615   +0.0803    no
+  level age    +0.0556   +0.0829   +0.0730   +0.0800    no
+  room         +0.0750   +0.0716   +0.0374   +0.1055    no
+```
+
+**One feature works, and it works on both clocks at the same place: how far past
+the level the sweep ran.** Monotone across all four quartiles, and the filter
+holds out of sample — M1 keep-below-0.70-ATR gives +0.0986/trade unseen against
++0.0702 unfiltered, with the refused trades genuinely worse at +0.0461. On M5,
++0.2852 against +0.2123, refused +0.1351.
+
+**And it must not be used.** E-160 swept it directly, because the system already
+has this exact parameter — the risk cap:
+
+```
+  M1  cap      n   /day   win%   points   /trade   maxDD  DD GBP   worst
+      0.5    530    4.9  54.3%     90.5  +0.1707     1.5       8   -0.58
+      0.7   2112   19.4  53.7%    225.1  +0.1066     2.4      14   -0.80
+      1.2   3916   35.9  53.5%    301.5  +0.0770     3.3      19   -0.80   <- shipped
+      none  4914   45.1  53.4%    306.3  +0.0623     8.3      48   -5.90
+```
+
+**Per-trade rises as the cap tightens and TOTAL POINTS FALL — 301.5 to 225.1 to
+90.5.** This is E-074 restated in a new place: *the best per-trade gate set
+banked the least.* The refused trades are worse, and they are still profitable,
+so refusing them is paying for quality with money.
+
+The last hope was that a funded account would pay for the lower variance. It
+does not:
+```
+  M5, 0.25% risk               cap 0.7   cap 1.0   cap 1.2
+  FundingPips 2 Step Pro         79.2%     85.5%     89.8%
+  E8 performance (funded)        57.8%     71.0%     76.2%
+  Alpha Capital Alpha One        92.2%     94.8%     97.0%
+```
+**The shipped 1.2 is better at every firm that is not already at 100%.** On M1
+it is mixed and never clearly better. So the cap stays at 1.2 ATR, where E-138
+put it for safety — uncapped, the worst trade is −5.90 points against −0.80, and
+the drawdown £48 against £19. **It is a safety limit, it was never an edge, and
+E-159 is the proof that tightening it toward the edge costs money.**
+
+**Two features were reported as "flat" in an earlier run and were not measured
+at all:** level age matched almost no pivots (fixed — it is genuinely flat), and
+hour-of-day was reading a field name that does not exist on the Series, so every
+value was zero. Hour is integer-valued and collapses under quartiles anyway; it
+needs a session test, not this one. **Recorded because "flat" and "not measured"
+look identical in a table and only one of them is a finding.**
+
+*Caveat on the E-160 table:* candidates are generated once at an unlimited cap
+and then re-filtered, so the one-position-at-a-time scheduler hands the slot to
+different trades than a run generated at each cap would. The rows are internally
+consistent with each other, which is what the comparison needs, but the absolute
+figures differ slightly from E-155's (884 trades vs 907 at the same 1.2 cap).
