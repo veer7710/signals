@@ -1055,42 +1055,53 @@ if legDir > 0 and (sigSweepB or sigBrB or sigObB or sigDetB)
 if legDir < 0 and (sigSweepS or sigBrS or sigObS or sigDetS)
     legHit := true
 
-f_closeLeg(toPx, toBar) =>
-    size = math.abs(toPx - legFrom)
-    if size >= legMin * atr and not na(legFrom)
+// Pine CANNOT modify a global inside a user function, so this is written
+// inline rather than as f_closeLeg(). It was a function first and that is a
+// compile error - the counters would never have been written.
+legClose = false
+float legToPx  = na
+int   legToBar = na
+if barstate.isconfirmed and not na(ph) and legDir >= 0 and not na(legFrom)
+    legClose := true
+    legToPx  := ph
+    legToBar := bar_index - pvLen
+if barstate.isconfirmed and not na(pl) and legDir <= 0 and not na(legFrom)
+    legClose := true
+    legToPx  := pl
+    legToBar := bar_index - pvLen
+
+if legClose
+    legSize = math.abs(legToPx - legFrom)
+    if legSize >= legMin * atr
         nLegAll += 1
-        ptsLegAll += size
+        ptsLegAll += legSize
         if legHit
             nLegHit += 1
-            ptsLegHit += size
+            ptsLegHit += legSize
         if showLegs
-            col = legHit ? (legDir > 0 ? cBuy : cSell) : color.new(#8FA3B8, 30)
-            line.new(legFromB, legFrom, toBar, toPx, color = col, width = 1,
-                 style = legHit ? line.style_solid : line.style_dotted)
+            legCol = legHit ? (legDir > 0 ? cBuy : cSell) : color.new(#8FA3B8, 30)
+            line.new(legFromB, legFrom, legToBar, legToPx, color = legCol,
+                 width = 1, style = legHit ? line.style_solid : line.style_dotted)
             if legLbl
-                label.new(math.round((legFromB + toBar) / 2),
-                     (legFrom + toPx) / 2,
-                     f_num(legDir * (toPx - legFrom), "0.0") + "pt"
+                label.new(math.round((legFromB + legToBar) / 2),
+                     (legFrom + legToPx) / 2,
+                     f_num(legDir * (legToPx - legFrom), "0.0") + "pt"
                      + (legHit ? "" : "  MISSED"),
                      style = label.style_label_center, size = size.tiny,
                      color = color.new(chart.bg_color, 100),
-                     textcolor = legHit ? col : color.new(#8FA3B8, 10))
-    true
+                     textcolor = legHit ? legCol : color.new(#8FA3B8, 10))
 
+// start the next leg from whichever extreme just confirmed
 if barstate.isconfirmed and not na(ph)
-    if legDir >= 0 and not na(legFrom)
-        f_closeLeg(ph, bar_index - pvLen)
-    legFrom := ph
+    legFrom  := ph
     legFromB := bar_index - pvLen
-    legDir := -1
-    legHit := false
+    legDir   := -1
+    legHit   := false
 if barstate.isconfirmed and not na(pl)
-    if legDir <= 0 and not na(legFrom)
-        f_closeLeg(pl, bar_index - pvLen)
-    legFrom := pl
+    legFrom  := pl
     legFromB := bar_index - pvLen
-    legDir := 1
-    legHit := false
+    legDir   := 1
+    legHit   := false
 
 // ---------------------------------------------------------- open a trade ---
 if anyBuy or anySell

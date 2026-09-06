@@ -558,58 +558,94 @@ def score_rows(rows, names, mu, sd, signs):
     return out
 
 
-def cmd_pr(thr=10.0):
-    hdr(f"PRECISION / RECALL — flag the top N% of extremes, catch what fraction "
-        f"of >= {thr:.0f} ATR legs?")
-    print("  Feature set and signs chosen on the FIRST half; every number below")
-    print("  is on the SECOND half, which the chooser never saw.\n")
+# Features knowable AT the extreme bar itself (bars <= p). An indicator built
+# only from these could in principle paint on the extreme bar; everything else
+# needs the three confirmation bars anyway.
+AT_EXTREME = ["sweep_atr", "swept", "n_swept", "wick_atr", "body_frac",
+              "close_pos", "vol_ratio", "atr_regime", "atr_pts", "dist_ema200",
+              "took_pd", "compress", "prior_leg_atr", "room_atr"]
+POST = ["disp1", "disp3", "range3", "engulf3", "fvg3", "vol_ratio3"]
+
+
+def label_of(r, thr, mode):
+    if mode == "atr":
+        return 1 if r["full_atr"] >= thr else 0
+    if mode == "cap":
+        return 1 if r["cap_atr"] >= thr else 0
+    return 1 if r["full_pts"] >= thr else 0
+
+
+def choose(A_, labA, pool):
+    rank = []
+    for nm in pool:
+        a, n1, n0 = auc([r["f"][nm] for r in A_], labA)
+        if a == a:
+            rank.append((abs(a - 0.5), nm, 1.0 if a > 0.5 else -1.0))
+    rank.sort(reverse=True)
+    picks = [(nm, sg) for _, nm, sg in rank[:3]]
+    names = [nm for nm, _ in picks]
+    signs = {nm: sg for nm, sg in picks}
+    mu, sd = {}, {}
+    for nm in names:
+        v = [r["f"][nm] for r in A_ if r["f"][nm] == r["f"][nm]]
+        mu[nm] = sum(v) / len(v); sd[nm] = statistics.pstdev(v)
+    return names, signs, mu, sd
+
+
+def pr_line(tag, B_, labB, sc, days):
+    order = sorted(((v, i) for i, v in enumerate(sc) if v == v), reverse=True)
+    nb = max(1, sum(labB))
+    print(f"      {tag:<22}", end="")
+    for frac in (0.05, 0.10, 0.20, 0.50):
+        nsel = max(1, int(frac * len(order)))
+        sel = [i for _, i in order[:nsel]]
+        tp = sum(labB[i] for i in sel)
+        print(f" | top{int(frac*100):>2}%: P {tp/nsel:.3f} R {tp/nb:.3f} "
+              f"FP/day {(nsel-tp)/days:5.2f}", end="")
+    print()
+
+
+def cmd_pr(thr=10.0, mode="atr"):
+    hdr(f"PRECISION / RECALL — flag the top N% of extremes; what share of the "
+        f"big legs do you catch?")
+    print("  Feature set and signs chosen on the FIRST half; every number is on the")
+    print("  SECOND half. 'at-extreme only' uses the 14 features computable on bar p")
+    print("  itself; 'best 3 / all' may use the 6 that need bars p+1..p+3.")
+    print("  The NULL row is the identical procedure on a driftless random walk:")
+    print("  its precision MUST equal its base rate at every flag rate.\n")
     for tf in ("M1", "M5", "M15"):
-        s, sp, vol, rows = prep(tf)
+        _, _, _, rows = prep(tf)
         half = len(rows) // 2
         A_, B_ = rows[:half], rows[half:]
-        labA = [1 if r["full_atr"] >= thr else 0 for r in A_]
-        labB = [1 if r["full_atr"] >= thr else 0 for r in B_]
-        nd_all = ndays(s)
-        days_B = len({(r["ts"] + TZOFF) // 86400 for r in B_})
+        labA = [label_of(r, thr, mode) for r in A_]
+        labB = [label_of(r, thr, mode) for r in B_]
+        days = len({(r["ts"] + TZOFF) // 86400 for r in B_})
         base = sum(labB) / len(labB)
-
-        # choose on first half
-        rank = []
-        for nm in FEATURES:
-            a, n1, n0 = auc([r["f"][nm] for r in A_], labA)
-            if a == a: rank.append((abs(a - 0.5), nm, 1.0 if a > 0.5 else -1.0))
-        rank.sort(reverse=True)
-        picks = [(nm, sg) for _, nm, sg in rank[:3]]
-        names = [nm for nm, _ in picks]
-        signs = {nm: sg for nm, sg in picks}
-        mu, sd = {}, {}
-        for nm in names:
-            v = [r["f"][nm] for r in A_ if r["f"][nm] == r["f"][nm]]
-            mu[nm] = sum(v) / len(v)
-            sd[nm] = statistics.pstdev(v)
-        desc = ", ".join(nm + ("(+)" if signs[nm] > 0 else "(-)") for nm in names)
-        print(f"  --- {tf}: chosen on first half = {desc}")
-        print(f"      unseen half: {len(B_)} origins over {days_B} days, "
-              f"{sum(labB)} big legs, base rate {base:.4f}, "
-              f"{len(B_)/days_B:.1f} extremes/day")
-
-        variants = {"best single": [names[0]], "best 2": names[:2], "best 3": names}
-        for vname, nms in variants.items():
-            sc = score_rows(B_, nms, mu, sd, signs)
-            order = sorted((v, i) for i, v in enumerate(sc) if v == v)
-            order.reverse()
-            print(f"      {vname:<12}", end="")
-            for frac in (0.05, 0.10, 0.20, 0.30, 0.50):
-                nsel = max(1, int(frac * len(order)))
-                sel = [i for _, i in order[:nsel]]
-                tp = sum(labB[i] for i in sel)
-                prec = tp / nsel
-                rec = tp / max(1, sum(labB))
-                fp_day = (nsel - tp) / days_B
-                print(f" | top{int(frac*100):>2}%: P {prec:.3f} R {rec:.3f} "
-                      f"FP/day {fp_day:5.2f}", end="")
-            print()
-        print(f"      (lift at top10% = precision / base rate)")
+        print(f"  --- {tf}: unseen {len(B_)} origins over {days} days "
+              f"({len(B_)/days:.1f} extremes/day), {sum(labB)} big legs, "
+              f"base rate {base:.4f}")
+        for tag, pool in (("best 3 of all 20", FEATURES),
+                          ("at-extreme only", AT_EXTREME)):
+            names, signs, mu, sd = choose(A_, labA, pool)
+            sc = score_rows(B_, names, mu, sd, signs)
+            desc = ",".join(nm + ("+" if signs[nm] > 0 else "-") for nm in names)
+            pr_line(f"{tag}", B_, labB, sc, days)
+            print(f"        chosen: {desc}")
+            if tag == "best 3 of all 20":
+                sc1 = score_rows(B_, names[:1], mu, sd, signs)
+                pr_line("  (best single)", B_, labB, sc1, days)
+        for seed in (11,):
+            _, _, _, nr = prep(tf, synthetic=seed)
+            nh = len(nr) // 2
+            NA, NB = nr[:nh], nr[nh:]
+            nlA = [label_of(r, thr, mode) for r in NA]
+            nlB = [label_of(r, thr, mode) for r in NB]
+            nd = len({(r["ts"] + TZOFF) // 86400 for r in NB})
+            names, signs, mu, sd = choose(NA, nlA, FEATURES)
+            sc = score_rows(NB, names, mu, sd, signs)
+            print(f"      NULL seed {seed} base rate {sum(nlB)/len(nlB):.4f}")
+            pr_line(f"  null best 3", NB, nlB, sc, nd)
+        print()
 
 
 # ------------------------------------------------------------- 5. trade

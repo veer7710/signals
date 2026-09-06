@@ -554,3 +554,40 @@ accurate every single time he made it.
 
 There is a second, quieter cost: every screenshot he sent me of "missed entries"
 was evidence I dismissed as a strategy question, when it was a bug report.
+
+---
+
+## 2026-09-06 — I SHIPPED A COUNTER THAT COULD NEVER HAVE COUNTED
+
+The leg scoreboard - the feature built specifically to answer Veer's "our
+signals aren't catching top to bottom" - was written as a function:
+
+```pine
+f_closeLeg(toPx, toBar) =>
+    ...
+    nLegAll += 1
+    ptsLegAll += size
+```
+
+**Pine cannot modify a global variable inside a user-defined function.** It
+either refuses to compile or writes a local that is discarded. So the panel's
+"legs caught 12 / 40" would have read **0 / 0 forever**, and the feature built to
+measure a complaint would have silently measured nothing.
+
+`check_pine.py` said CLEAN. It validates identifiers, declaration order, global
+scope, drawing calls and continuation indents — and knew nothing about this rule.
+
+### The fourth checker blind spot today
+1. `ast.parse` accepted Python that `compile()` rejects — nine files broken.
+2. `check_mq5.py` does not validate struct members — `s.level` for `s.lvl`.
+3. `check_pine.py` did not know the continuation-indent rule — three of those,
+   two pre-existing, and the user hit it in his editor.
+4. And now: `check_pine.py` did not know functions cannot write globals.
+
+**Every one of these was found by looking, not by tooling** — and in case 3 the
+user found it for me. The rule that keeps holding: **a checker that is not the
+real compiler has a blind spot, and the blind spot is never in what it checks.**
+
+Fixed: the leg logic is inline, and `check_pine.py` now walks every function
+body and flags any write to a `var` global that is not one of its parameters.
+Verified against the exact bug it was written for.

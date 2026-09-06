@@ -209,6 +209,45 @@ def check_continuations(src):
     return out
 
 
+
+def check_global_write_in_function(src):
+    """Pine cannot modify a GLOBAL variable inside a user-defined function.
+
+    A function that does `nLegAll += 1` on a global either fails to compile or
+    silently writes a local that is thrown away, so the counter never moves and
+    nothing tells you. This shipped once: the leg scoreboard was written as
+    f_closeLeg() and its counters could never have been written.
+
+    Heuristic: find `name(args) =>` at column 0, walk its indented body, and
+    flag any `x := ...` or `x += ...` where x is declared with `var` at global
+    scope and is not a parameter of that function.
+    """
+    lines = src if isinstance(src, list) else src.splitlines()
+    globals_ = set()
+    for l in lines:
+        m = re.match(r"^var\s+(?:\w+\s+)?(\w+)\s*=", l)
+        if m:
+            globals_.add(m.group(1))
+    out = []
+    i = 0
+    while i < len(lines):
+        m = re.match(r"^(\w+)\s*\(([^)]*)\)\s*=>", lines[i])
+        if not m:
+            i += 1
+            continue
+        fname = m.group(1)
+        params = {p.strip().split("=")[0].strip() for p in m.group(2).split(",") if p.strip()}
+        j = i + 1
+        while j < len(lines) and (not lines[j].strip() or lines[j][:1] in (" ", "\t")):
+            body = lines[j].split("//")[0]
+            w = re.match(r"\s*(\w+)\s*(:=|\+=|-=|\*=|/=)", body)
+            if w and w.group(1) in globals_ and w.group(1) not in params:
+                out.append((j + 1, fname, w.group(1), lines[j].strip()[:60]))
+            j += 1
+        i = j
+    return out
+
+
 def check_order(src, declared):
     """Pine is single-pass: a name must appear textually BEFORE it is used.
     The existence check alone passes a file that reads a variable declared
@@ -550,6 +589,12 @@ def check(path):
     problems += check_tables(src)
     problems += check_draw_in_ternary(src)
     problems += check_global_only(src)
+    for ln, fn, gname, ctx in check_global_write_in_function(src):
+        problems.append((ln, f"WRITES GLOBAL '{gname}' inside function '{fn}' - "
+                             f"Pine cannot modify a global in a user function. It "
+                             f"either fails to compile or silently writes a local "
+                             f"that is discarded, so the value never changes and "
+                             f"nothing tells you. Inline the logic instead.", ctx))
     for ln, ind, ctx in check_continuations(src):
         problems.append((ln, f"CONTINUATION indented {ind} spaces - a multiple of "
                              f"4 means a BLOCK in Pine, so the compiler reports "
