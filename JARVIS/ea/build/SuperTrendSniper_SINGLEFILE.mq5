@@ -1192,7 +1192,11 @@ input group "=== PROP FIRM GUARDS ==="
 input double InpDailyLossPct  = 3.0;    // stop for the day at this % equity loss
 input double InpMaxDDPct      = 6.0;    // stop permanently at this % from peak
 input int    InpMaxTradesDay  = 20;     // hard cap on entries per day
-input int    InpResetHourUTC  = 0;      // daily reset hour, UTC
+input int    InpResetHourUTC  = 0;      // daily reset hour in BROKER SERVER time
+                                        // (F16: TimeCurrent() is server time, NOT UTC.
+                                        //  Check this against the prop firm rule book -
+                                        //  a mismatched boundary can put two of the EA's
+                                        //  2.5% days inside one of the firm's 5% days.)
 input bool   InpFlattenOnBreach = true; // close open positions when a limit breaks
 
 input group "=== SAFETY ==="
@@ -3057,7 +3061,14 @@ void ManagePosition()
       {
          double be = NormalizeDouble(open, dg);
          bool better = (dir > 0) ? (be > sl) : (be < sl);
-         if(better) { trade.PositionModify(tk, be, tp); Log("moved to break-even"); }
+         // F13. Announced success it never checked.
+         if(better)
+         {
+            if(trade.PositionModify(tk, be, tp)) Log("moved to break-even");
+            else Log(StringFormat("BREAK-EVEN MODIFY REJECTED %d %s - stop "
+                                  "unchanged at %.*f", trade.ResultRetcode(),
+                                  trade.ResultRetcodeDescription(), dg, sl));
+         }
       }
 
       // --- trail. ON by default and arms IMMEDIATELY (InpTrailAtR = 0), because
@@ -3071,9 +3082,18 @@ void ManagePosition()
          bool better = (dir > 0) ? (t > sl) : (t < sl);
          // A modify inside the broker's stop level is rejected, silently and
          // repeatedly. Leave the stop where it is rather than spam the server.
-         double mn = MinStopDist();
+         // F6: the freeze band refuses a modify AND an EA close, and it was
+         // read nowhere in this project.
+         double mn = MathMax(MinStopDist(), FreezeDist());
          bool room = (mn <= 0.0) || (MathAbs(price - t) >= mn);
-         if(better && room) { trade.PositionModify(tk, t, tp); }
+         // F13. This is the EA's main trail and it ran on by default with its
+         // result discarded and no log at all. Rejected, the stop simply never
+         // moved again and nothing anywhere said so.
+         if(better && room && !trade.PositionModify(tk, t, tp))
+            Log(StringFormat("TRAIL MODIFY REJECTED %d %s - the stop is STILL "
+                             "%.*f, not %.*f. The trail is NOT running.",
+                             trade.ResultRetcode(),
+                             trade.ResultRetcodeDescription(), dg, sl, dg, t));
       }
    }
 }
@@ -3412,6 +3432,15 @@ double RangePos()
    }
    if(hi <= lo) return 0.5;
    return (iClose(_Symbol, _Period, 1) - lo) / (hi - lo);
+}
+
+// F6. FREEZE LEVEL: inside this band the broker refuses both a stop
+// modification and an EA close of the position. Read nowhere in this project
+// until now, and the trail places its stop close to price by construction.
+double FreezeDist()
+{
+   long lv = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   return (double)lv * _Point;
 }
 
 double MinStopDist()
@@ -3759,8 +3788,17 @@ void DisasterBrake()
                    && spNow > InpMaxSpreadX * spAvg);
 
    int look = MathMax(InpBrakeBars, 1);
+   // F8. iClose() returns 0.0 for a bar that is not in the cached series - the
+   // first ticks after attach, after a symbol change, after a history purge.
+   // For a SHORT, against = (0 - price) * -1 is a huge POSITIVE number, so the
+   // brake fired on every losing short and the log claimed a thousand-ATR move
+   // against us. DisasterBrake is the FIRST thing OnTick calls, well above the
+   // bars-available guard further down, so nothing else caught this.
+   if(Bars(_Symbol, _Period) <= look) return;
    double was = iClose(_Symbol, _Period, look);
+   if(was <= 0.0) return;
    double now = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(now <= 0.0) return;
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
@@ -3872,7 +3910,12 @@ void TrailProfitStop()
       bool room   = (mn <= 0.0) || (MathAbs(px - want) >= mn);
       if(!better || !safe || !room) continue;
 
-      if(trade.PositionModify(tk, want, tp))
+      if(!trade.PositionModify(tk, want, tp))
+         Log(StringFormat("PROFIT STOP REJECTED %d %s - the broker does NOT "
+                          "hold %.*f; the stop is still %.*f.",
+                          trade.ResultRetcode(),
+                          trade.ResultRetcodeDescription(), dg, want, dg, sl));
+      else
          Log(StringFormat("profit stop -> %.*f  (peak %s = %.2fR, keeping "
                           "%.0f%% = %s). The broker holds this now, so a spike "
                           "cannot take it back.",
@@ -4202,12 +4245,39 @@ void CheckGuardsTick()
       }
    }
 
-   if(!hit) return;
+   if(hit)
+   {
+      Log(why);
+      PersistGuards();
+      Journal("GUARD", "-", 0, 0, 0, 0, eq, why);
+   }
 
-   Log(why);
-   PersistGuards();
-
+   // F3. This used to run ONCE, on the transition tick, and discard the result.
+   // The breach tick is by definition a fast, wide-spread, requote-prone tick -
+   // the likeliest tick in the whole session for a close to be rejected - and
+   // one rejection meant the position ran to its stop with "flatten on breach"
+   // switched on, nothing in the log, and the box still reading LOCKED.
+   // Flattening is a STATE: while a lock is set there must be nothing open and
+   // nothing resting, rechecked until that is true.
    if(!InpFlattenOnBreach) return;
+   if(!g_lockedDay && !g_lockedPerm) return;
+   static datetime lastFlatten = 0;
+   if(TimeCurrent() - lastFlatten < 2) return;
+   lastFlatten = TimeCurrent();
+
+   for(int i = OrdersTotal() - 1; i >= 0; i--)   // resting orders die first
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      if(trade.OrderDelete(tk))
+         Log(StringFormat("guard breach: cancelled resting order %I64u", tk));
+      else
+         Log(StringFormat("guard breach: COULD NOT cancel order %I64u: %d %s "
+                          "- it can still fill on a locked day", tk,
+                          trade.ResultRetcode(), trade.ResultRetcodeDescription()));
+   }
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       ulong tk = PositionGetTicket(i);
@@ -4216,8 +4286,11 @@ void CheckGuardsTick()
       if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
       if(trade.PositionClose(tk))
          Log("closed on guard breach: " + IntegerToString((int)tk));
+      else
+         Log(StringFormat("GUARD BREACH CLOSE REJECTED %I64u: %d %s - STILL "
+                          "OPEN, retrying next tick", tk, trade.ResultRetcode(),
+                          trade.ResultRetcodeDescription()));
    }
-   Journal("GUARD", "-", 0, 0, 0, 0, eq, why);
 }
 
 //===================================================================
@@ -4681,7 +4754,17 @@ void OnTick()
    // Equity peak tracks on every tick so the drawdown lock cannot be
    // out-run between bars.
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq > g_peakEq) g_peakEq = eq;
+   if(eq > g_peakEq)
+   {
+      g_peakEq = eq;
+      // F9. PersistGuards() was only ever called from the three BREACH paths,
+      // so during ordinary profitable running the stored peak was stale or
+      // absent - and LoadGuards does MathMax(stored, current), which quietly
+      // moves the max-drawdown baseline DOWN to whatever equity you restarted
+      // at. Peak 1000, restart at 950, and the 8% floor is measured off 950.
+      static datetime lastPk = 0;
+      if(TimeCurrent() - lastPk >= 60) { lastPk = TimeCurrent(); PersistGuards(); }
+   }
 
    int ds = DayStamp();
    if(ds != g_dayStamp)

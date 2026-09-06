@@ -270,3 +270,81 @@ afternoon adding filters.
 turns the strategy off.** Before shipping any threshold, compute where the
 live market actually sits relative to it — the number was already in E-053 and
 I did not look at it.
+
+---
+
+## 2026-09-06 — TWENTY-THREE LIVE-SAFETY DEFECTS, NONE OF THEM SYNTAX
+
+An MQL5 audit of both EAs, run because E-151 found one silent-failure bug in
+`SweepSniper.TrailStop()` and the obvious next question was how many more of
+that class there were. The static checker reports both files clean and always
+did: **none of this is syntax, and no tool in this repo could have caught any
+of it.**
+
+The pattern, stated once because it is the same pattern twenty-three times:
+**a trade call whose result is discarded, followed by a log line that announces
+success.** Read the Experts log afterwards and it says the trade exited. It did
+not.
+
+### The ones that would have cost money first
+- **The pending order was tracked in one `ulong`.** A failed `OrderDelete` set
+  it to 0 anyway; so did every `OnInit` (restart, recompile, timeframe change,
+  **any parameter change**); so did an async `ResultOrder()` of 0. Then `TryArm`
+  believes it is flat and arms a SECOND order on a live one. Both fill. That is
+  double the position and double the risk cap that the whole of E-138 exists to
+  enforce. Fixed by counting orders at the broker, which is the only source of
+  truth.
+- **The daily-loss and max-drawdown guards never closed anything.** They
+  cancelled the pending order and stopped arming. The position whose floating
+  loss caused the breach kept running - and a prop firm measures the daily limit
+  on EQUITY, so the guard fired at the exact moment it needed to act and did
+  nothing. SuperTrendSniper had the fix (`InpFlattenOnBreach`); SweepSniper
+  never received it.
+- **SuperTrendSniper's flatten ran once, on the transition tick, unchecked.**
+  The breach tick is a fast, wide-spread, requote-prone tick - the likeliest
+  tick in the session for a close to be rejected. One rejection and the position
+  ran to its stop with the feature switched on and nothing in the log.
+- **The max drawdown was measured from ATTACH equity, not peak.** Attach at £60,
+  floor £56.40. Grow to £100 and the floor is *still* £56.40 - a 44% drawdown
+  from peak before a "6% max drawdown" guard says a word. `g_peakEq` was being
+  computed every tick and read by nothing.
+- **`SweepSniper`'s only exit was unverified.** There is no take profit in that
+  EA by design, so `PositionClose` on the give-back is the exit. Its result was
+  discarded and `"trail level already passed - market exit"` was logged either
+  way.
+- **`DisasterBrake` force-closed every losing short on the first ticks after
+  attach.** `iClose()` returns 0.0 for a bar not yet cached; for a short,
+  `against = (0 - 3900) * -1` clears any threshold. It is the FIRST thing
+  `OnTick` calls, above the bars-available guard.
+- **`Bars()` was used as a clock.** It plateaus at the terminal's "max bars in
+  chart" setting - after which the time exit never fires again - and jumps by
+  thousands when history back-fills, firing the time exit on a position seconds
+  old. Now `iBarShift` off the position's own open time.
+- **`SYMBOL_TRADE_FREEZE_LEVEL` was read nowhere in the project.** Inside that
+  band the broker refuses both a stop modification and an EA close, and the
+  give-back trail puts its stop close to price by construction.
+- **The fixed-lot path ignored `SYMBOL_VOLUME_MIN/STEP`.** If this broker's
+  minimum on gold is not 0.01, every order returns 10014 and the EA silently
+  never trades.
+- **Nothing ever asked whether trading was possible** - `TERMINAL_CONNECTED`,
+  `MQL_TRADE_ALLOWED`, `ACCOUNT_TRADE_EXPERT` were checked nowhere. AutoTrading
+  off meant the exits logged success while doing nothing.
+- **A "confirmed pivot" could be accepted at price 0.0.** `iHigh`/`iLow` return
+  0.0 for bars that are not loaded, and 0.0 passes every comparison.
+- **`DEAL_ENTRY_INOUT` was dropped** (netting accounts, which several prop firms
+  use) and a PARTIAL close reset the trail's peak on a position still open.
+- **`OrderCalcMargin` was called nowhere**, so a too-small account produced 120
+  bars of identical rejections and a log that looked like a broker fault.
+
+### The lesson, and it is a rule now
+**A trade call whose return value is discarded is a bug, without exception.**
+Not a style point. Every single one of these produced a log that said the
+opposite of what happened, which is worse than no log at all: it is what you
+would read after losing money, to find out why, and be told nothing was wrong.
+
+### Still unverified, and it needs a terminal
+Nothing here has been compiled - `check_mq5.py` cannot do that and says so. PU
+Prime's actual stops level, freeze level, volume min/step, tick size, filling
+mode and XAUUSD margin are all numbers the code now reads instead of assuming,
+but which of them bite can only be seen on a live chart. **Print them all in
+OnInit and read them off the terminal before the funded account.**

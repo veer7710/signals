@@ -185,6 +185,8 @@ showZones = input.bool(true, "Order zones",   group = gD, inline = "s1")
 showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
 showHist  = input.bool(true, "Finished trades", group = gD, inline = "s2")
 showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
+showRefused = input.bool(false, "Mark refused setups", group = gD,
+     tooltip = "OFF by default because it is chart noise. A refused setup is one where the stop would have been wider than the risk cap allows, so the trade was declined - there is nothing to act on and there are a lot of them. The count is still in the full panel under 'refused'.")
 panelPos  = input.string("Top right", "Panel position", group = gD,
      options = ["Top right", "Bottom right", "Bottom left"])
 panelBig  = input.bool(false, "Show the full panel", group = gD,
@@ -372,9 +374,16 @@ for i = 1 to obLen
     obUps += close[i] > open[i] ? 1 : 0
     obDns += close[i] < open[i] ? 1 : 0
 
-newObBull = useOB and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
+// DRAWING AND TRADING ARE SEPARATE. E-151 turned the order block OFF as an
+// ENTRY, but Veer asked for the blocks on the chart - "i want order block
+// entries used as well they are incredible" - and they ARE real structure, they
+// just do not clear the spread. So the block is detected whenever it is going
+// to be drawn OR traded, and only the ENTRY is gated on useOB. Before this the
+// tooltip promised the blocks would still draw and they did not.
+obDetect = showZones or useOB
+newObBull = obDetect and obMove >= obThr and close[obp] < open[obp] and obUps == obLen
      and barstate.isconfirmed
-newObBear = useOB and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
+newObBear = obDetect and obMove >= obThr and close[obp] > open[obp] and obDns == obLen
      and barstate.isconfirmed
 
 if newObBull
@@ -411,8 +420,8 @@ if array.size(obBearBx) > 0
             box.delete(b)
             array.remove(obBearBx, i)
 
-obAliveB = useOB and not na(obBullBot) and low >= obBullBot
-obAliveS = useOB and not na(obBearTop) and high <= obBearTop
+obAliveB = obDetect and not na(obBullBot) and low >= obBullBot
+obAliveS = obDetect and not na(obBearTop) and high <= obBearTop
 // THE RISK CAP APPLIES TO EVERY SOURCE. The first build of this file computed
 // obRisk after the take conditions and never used it, so an order block with a
 // stop wider than the cap would have been taken anyway. That cap is the only
@@ -431,12 +440,12 @@ obUseRet = obMode != "at detection"
 // version of "catch the birth of the move".
 obDetRiskB = newObBull ? math.abs(close - (low[obp] - stopBuf * atr)) : na
 obDetRiskS = newObBear ? math.abs(close - (high[obp] + stopBuf * atr)) : na
-obDetB   = obUseDet and newObBull and obDetRiskB <= maxRisk * atr
-obDetS   = obUseDet and newObBear and obDetRiskS <= maxRisk * atr
+obDetB   = useOB and obUseDet and newObBull and obDetRiskB <= maxRisk * atr
+obDetS   = useOB and obUseDet and newObBear and obDetRiskS <= maxRisk * atr
 
-obFillB  = obUseRet and obAliveB and low <= obBullTop and low[1] > obBullTop
+obFillB  = useOB and obUseRet and obAliveB and low <= obBullTop and low[1] > obBullTop
      and obRiskB <= maxRisk * atr and barstate.isconfirmed
-obFillS  = obUseRet and obAliveS and high >= obBearBot and high[1] < obBearBot
+obFillS  = useOB and obUseRet and obAliveS and high >= obBearBot and high[1] < obBearBot
      and obRiskS <= maxRisk * atr and barstate.isconfirmed
 
 // ========================== BREAK AND RETEST ===============================
@@ -792,9 +801,9 @@ plotshape(takeDetB, "BUY  OB at detection",  shape.circle, location.belowbar,
      color = cBuy,  size = size.tiny)
 plotshape(takeDetS, "SELL OB at detection",  shape.circle, location.abovebar,
      color = cSell, size = size.tiny)
-plotshape(tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
+plotshape(showRefused and tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
      color = color.new(cBuy, 70),  size = size.tiny)
-plotshape(tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
+plotshape(showRefused and tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
      color = color.new(cSell, 70), size = size.tiny)
 
 // ================================ THE PANEL ================================
@@ -819,7 +828,14 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, panelBig ? 16 : 11, border_width = 1,
+    // The panel is exactly as tall as the rows it will draw. With one signal
+    // running there is no "which signal is paying" to answer - the profit row
+    // IS the sweep - so that block disappears rather than printing two rows of
+    // zeros. Veer: "nothing overboard".
+    nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
+    showSplit = nSigOn > 1
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 2 + (panelBig ? 5 : 0)
+    tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 
@@ -836,9 +852,6 @@ if barstate.islast and showPanel
          text_color = posDir == 0 ? color.new(#8FA3B8, 0) : posDir > 0 ? cPos : cNeg,
          text_size = size.tiny, text_halign = text.align_right)
 
-    // WHAT PERIOD IS THIS? Veer asked and the old panel never said. It is every
-    // bar TradingView has loaded on this chart - on M1 that is roughly a
-    // fortnight, not today - so the range is printed.
     // Rows are placed from a running counter, not hard-coded indices, so
     // hiding a block cannot leave a hole or stack two rows on each other.
     r = 1
@@ -860,20 +873,24 @@ if barstate.islast and showPanel
              str.tostring(nWins) + "W " + str.tostring(nTrades - nWins) + "L", cVal)
     r += 1
 
-    f_sep(r, "── which signal is paying ──")
-    r += 1
-    f_row(r, "SWEEP", f_num(pS, "0.0") + "pt",
-             str.tostring(nS) + " tr  " + (nS > 0 ? str.tostring(100.0 * wS / nS, "0") + "%W" : "-"),
-             pS >= 0 ? cPos : cNeg)
-    r += 1
-    f_row(r, "BREAK+RETEST", f_num(pB, "0.0") + "pt",
-             str.tostring(nB) + " tr  " + (nB > 0 ? str.tostring(100.0 * wB / nB, "0") + "%W" : "-"),
-             pB >= 0 ? cPos : cNeg)
-    r += 1
-    f_row(r, "ORDER BLOCK", f_num(pO, "0.0") + "pt",
-             str.tostring(nO) + " tr  " + (nO > 0 ? str.tostring(100.0 * wO / nO, "0") + "%W" : "-"),
-             pO >= 0 ? cPos : cNeg)
-    r += 1
+    if showSplit
+        f_sep(r, "── which signal is paying ──")
+        r += 1
+        if useSweep
+            f_row(r, "SWEEP", f_num(pS, "0.0") + "pt",
+                 str.tostring(nS) + " tr  " + (nS > 0 ? str.tostring(100.0 * wS / nS, "0") + "%W" : "-"),
+                 pS >= 0 ? cPos : cNeg)
+            r += 1
+        if useBR
+            f_row(r, "BREAK+RETEST", f_num(pB, "0.0") + "pt",
+                 str.tostring(nB) + " tr  " + (nB > 0 ? str.tostring(100.0 * wB / nB, "0") + "%W" : "-"),
+                 pB >= 0 ? cPos : cNeg)
+            r += 1
+        if useOB
+            f_row(r, "ORDER BLOCK", f_num(pO, "0.0") + "pt",
+                 str.tostring(nO) + " tr  " + (nO > 0 ? str.tostring(100.0 * wO / nO, "0") + "%W" : "-"),
+                 pO >= 0 ? cPos : cNeg)
+            r += 1
 
     // how late can he be and still have a valid trade? The stop does not move
     // when he chases, so the risk cap is what breaks first - not the profit.

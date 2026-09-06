@@ -841,6 +841,7 @@ input group "=== GUARDS ==="
 input double InpMaxDayLossPct = 3.0;
 input double InpMaxDDPct      = 6.0;
 input int    InpMaxTradesDay  = 60;     // it runs ~19/day; this is a circuit breaker
+input bool   InpFlattenOnBreach = true; // close open trades when a limit breaks
 input bool   InpVerbose       = true;
 
 input group "=== THE PROFIT BOX ==="
@@ -898,17 +899,18 @@ int    g_armSrc = 0;      // 1 sweep, 2 break+retest, 3 OB detect, 4 OB return
 int      g_atr = INVALID_HANDLE;
 datetime g_lastBar = 0;
 ulong    g_pend = 0;        // the resting limit
-int      g_pendBar = 0;
 int      g_pendDir = 0;
-double   g_pendStop = 0.0;
 
 double   g_peakPrice = 0.0; // best excursion of the open position
-int      g_posBar = 0;
+datetime g_posBarTime = 0;  // F10: a TIME, because Bars() plateaus and jumps
+double   g_lastSl = 0.0;    // F7: the last stop we successfully asked for
+datetime g_lastTry = 0;     // F7: throttle on exit retries
 double   g_posEntry = 0.0;
 int      g_posDir = 0;
 
 double   g_dayStartEq = 0.0, g_peakEq = 0.0, g_floor = 0.0;
 int      g_dayStamp = 0, g_tradesToday = 0, g_refusedToday = 0;
+ulong    g_lastPosId = 0;   // F20: count trades, not fills
 bool     g_lockDay = false, g_lockPerm = false;
 
 void Log(string s) { if(InpVerbose) Print("[SS] ", s); }
@@ -968,19 +970,73 @@ int PosCount()
    return n;
 }
 
-bool OrderAlive(ulong tk)
+// F1. A ulong holding "the" pending ticket is not a record of what is resting
+// at the broker, and three ordinary events make the two disagree: a failed
+// OrderDelete (which used to zero the ticket anyway), an OnInit from a restart
+// or a parameter change, and a ResultOrder() of 0 on an async placement. Each
+// one ends with TryArm believing it is flat and arming a SECOND order on top of
+// a live one. Both can fill. That doubles the position and doubles the risk cap
+// the whole of E-138 exists to enforce. So: count the orders at the broker.
+int PendingCount()
 {
-   if(tk == 0) return false;
-   return OrderSelect(tk);
+   int n = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      n++;
+   }
+   return n;
 }
 
+bool OrderAlive(ulong tk) { return PendingCount() > 0; }
+
+// Deletes EVERY order of ours, and says so when it cannot. A cancel that was
+// rejected is not a cancel: the old code forgot it, and the guards call this,
+// so a locked-out day could still open a trade an hour later.
 void KillPending(string why)
 {
-   if(!OrderAlive(g_pend)) { g_pend = 0; return; }
-   if(trade.OrderDelete(g_pend))
-      Log("cancelled resting limit: " + why);
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      if(trade.OrderDelete(tk))
+         Log(StringFormat("cancelled resting order %I64u: %s", tk, why));
+      else
+         Log(StringFormat("COULD NOT CANCEL order %I64u (%s): %d %s "
+                          "- IT IS STILL LIVE AND CAN STILL FILL",
+                          tk, why, trade.ResultRetcode(),
+                          trade.ResultRetcodeDescription()));
+   }
    g_pend = 0;
    g_pendDir = 0;
+}
+
+// F11. Neither EA ever called OrderCalcMargin. On a small account the order
+// simply comes back NO_MONEY, the setup stays live, and the identical order is
+// re-sent every bar until it expires - 120 bars of the same rejection on M1,
+// with nothing in the log saying the account is the problem.
+bool CanAfford(int dir, double lots, double price)
+{
+   double need = 0.0;
+   ENUM_ORDER_TYPE t = (dir > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(t, _Symbol, lots, price, need)) return true;  // unknown: try
+   double free = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(need <= free * 0.90) return true;
+   static datetime told = 0;
+   if(TimeCurrent() - told > 3600)
+   {
+      told = TimeCurrent();
+      PrintFormat("[SS] REFUSED: %.2f lots needs %.2f margin and only %.2f is "
+                  "free. E-081 - 0.01 lots cannot be made smaller, so it is the "
+                  "ACCOUNT that has to be bigger. Not retrying this every bar.",
+                  lots, need, free);
+   }
+   return false;
 }
 
 double MinStopDist()
@@ -989,9 +1045,44 @@ double MinStopDist()
    return (double)lv * _Point;
 }
 
+// F6. FREEZE LEVEL. Inside this band the broker refuses BOTH a stop
+// modification and an EA close. It was read nowhere in this project, and the
+// give-back trail places its stop close to price by construction - which is
+// exactly where the band is. When it bites, the trail silently stops moving
+// and the market exit silently does not happen, while the log says both worked.
+double FreezeDist()
+{
+   long lv = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+   return (double)lv * _Point;
+}
+
+// F18. Round to the symbol's TICK SIZE, not just its digit count. On XAUUSD
+// they are the same; on an instrument with a 0.05 tick they are not, and the
+// server rejects a correctly-rounded-to-digits price it cannot quote.
+double NormPx(double p)
+{
+   double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   int    dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   if(ts > 0.0) p = MathRound(p / ts) * ts;
+   return NormalizeDouble(p, dg);
+}
+
 double LotFor(double stopPts)
 {
-   if(InpUseFixedLots) return InpFixedLots;
+   double vmn = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double vmx = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double vst = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   // F12. The fixed-lot path returned the input untouched. If this broker's
+   // minimum or step on gold is not 0.01, every order comes back 10014
+   // INVALID_VOLUME and the EA never trades while the log fills with retcodes.
+   if(InpUseFixedLots)
+   {
+      double lf = InpFixedLots;
+      if(vst > 0.0) lf = MathFloor(lf / vst + 1e-9) * vst;
+      if(lf < vmn) lf = vmn;
+      if(lf > vmx) lf = vmx;
+      return NormalizeDouble(lf, 2);
+   }
    double tv = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double ts = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    if(tv <= 0.0 || ts <= 0.0 || stopPts <= 0.0) return InpFixedLots;
@@ -1011,6 +1102,12 @@ double LotFor(double stopPts)
 //==================== THE SETUP MACHINE ============================
 void UpdateSetups()
 {
+   // F17. iHigh/iLow return 0.0 for a bar that is not in the series yet - the
+   // first ticks after attach, or after a history purge - and 0.0 satisfies
+   // every comparison in ConfirmedPivot, so a "confirmed pivot" is accepted at
+   // price ZERO. It is then instantly "swept", and ResetSetup destroys that
+   // side's real level. NewObBlock already guards this; this did not.
+   if(Bars(_Symbol, _Period) < 2 * InpPivotBars + 5) return;
    double a = ATR();
    if(a <= 0.0) return;
    int bar = BarNo();
@@ -1258,6 +1355,7 @@ bool Place(int dir, int otype, double price, double stop, double atrRef,
 
    double lots = LotFor(risk);
    if(lots <= 0.0) return false;
+   if(!CanAfford(dir, lots, price)) return false;
 
    bool ok = false;
    if(otype == 0)
@@ -1283,7 +1381,6 @@ bool Place(int dir, int otype, double price, double stop, double atrRef,
    if(otype != 0)
    {
       g_pend    = trade.ResultOrder();
-      g_pendBar = BarNo();
       g_pendDir = dir;
       PB_NoteOrder(g_pend, (bid + ask) / 2.0);
    }
@@ -1372,15 +1469,15 @@ void TryArm()
       // was doing the right thing. Veer's question about the size of the
       // per-trade number is what sent me back to check the units, and this
       // was underneath it.
+      if(!CanAfford(dir, lots, lvl))
+      { if(sellSide) ResetSetup(g_sell); else ResetSetup(g_buy); return; }
       bool ok = sellSide
          ? trade.SellStop(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep")
          : trade.BuyStop(lots, lvl, _Symbol, stop, 0.0, ORDER_TIME_GTC, 0, "SS sweep");
       if(ok)
       {
          g_pend = trade.ResultOrder();
-         g_pendBar = bar;
          g_pendDir = dir;
-         g_pendStop = stop;
          PB_NoteOrder(g_pend, (bid + ask) / 2.0);
          Log(StringFormat("armed %s limit at %.*f, stop %.*f (%.2f ATR), %.2f lots",
                           sellSide ? "SELL" : "BUY", dg, lvl, dg, stop,
@@ -1447,8 +1544,26 @@ void TryArm()
 
 void AgePending()
 {
-   if(!OrderAlive(g_pend)) { g_pend = 0; return; }
-   if(BarNo() - g_pendBar > InpSetupLife) KillPending("unfilled and stale");
+   if(PendingCount() == 0) { g_pend = 0; return; }
+   // F10. Age the order off its OWN setup time, not off a Bars() count that
+   // plateaus and jumps.
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      datetime setup = (datetime)OrderGetInteger(ORDER_TIME_SETUP);
+      int age = iBarShift(_Symbol, _Period, setup, false);
+      if(age > InpSetupLife)
+      {
+         if(trade.OrderDelete(tk)) Log("cancelled: unfilled and stale");
+         else Log(StringFormat("COULD NOT CANCEL stale order %I64u: %d %s",
+                               tk, trade.ResultRetcode(),
+                               trade.ResultRetcodeDescription()));
+      }
+   }
+   if(PendingCount() == 0) { g_pend = 0; g_pendDir = 0; }
 }
 
 //==================== THE GIVE-BACK TRAIL ==========================
@@ -1472,7 +1587,8 @@ void TrailStop()
       if(g_posDir == 0 || MathAbs(entry - g_posEntry) > _Point)
       {
          g_posDir = dir; g_posEntry = entry; g_peakPrice = entry;
-         g_posBar = BarNo();
+         g_posBarTime = (datetime)PositionGetInteger(POSITION_TIME);
+         g_lastSl = 0.0;
       }
       g_peakPrice = (dir > 0) ? MathMax(g_peakPrice, px) : MathMin(g_peakPrice, px);
 
@@ -1480,7 +1596,7 @@ void TrailStop()
       if(runUp > 0.0)
       {
          int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
-         double cand = NormalizeDouble(entry + dir * runUp * (1.0 - InpGiveBack), dg);
+         double cand = NormPx(entry + dir * runUp * (1.0 - InpGiveBack));
          bool better = (dir > 0) ? (cand > sl) : (cand < sl);
          double md = MinStopDist();
 
@@ -1492,20 +1608,57 @@ void TrailStop()
          bool passed = (dir > 0) ? (px <= cand) : (px >= cand);
          if(better && passed)
          {
-            trade.PositionClose(tk);
-            Log("trail level already passed - market exit");
+            // F7. THIS IS THE ONLY EXIT THIS EA HAS - there is no take profit
+            // anywhere in it, by design (E-137). The close used to be sent with
+            // its result discarded and "market exit" logged either way, so a
+            // requote, a price-off, a freeze-band rejection or AutoTrading
+            // being switched off all produced a log line saying the trade was
+            // closed while it was still running. Throttled so a persistent
+            // rejection does not become a tick-rate retry storm.
+            if(TimeCurrent() - g_lastTry >= 2)
+            {
+               g_lastTry = TimeCurrent();
+               if(trade.PositionClose(tk))
+                  Log("trail level already passed - market exit DONE");
+               else
+                  Log(StringFormat("EXIT REJECTED %d %s - THE POSITION IS "
+                                   "STILL OPEN, stop still %.*f. Retrying.",
+                                   trade.ResultRetcode(),
+                                   trade.ResultRetcodeDescription(), dg, sl));
+            }
             continue;
          }
 
-         bool room = (md <= 0.0) || (dir * (px - cand) >= md);
-         if(better && room)
-            trade.PositionModify(tk, cand, 0.0);
+         // F6 freeze band, and F7 do not re-send the same price every tick.
+         double guardD = MathMax(md, FreezeDist());
+         bool room  = (guardD <= 0.0) || (dir * (px - cand) >= guardD);
+         bool moved = (MathAbs(cand - g_lastSl) >= _Point);
+         if(better && room && moved)
+         {
+            if(trade.PositionModify(tk, cand, 0.0))
+               g_lastSl = cand;
+            else
+               Log(StringFormat("TRAIL MODIFY REJECTED %d %s - the stop is "
+                                "STILL %.*f, not %.*f. The trail is NOT running.",
+                                trade.ResultRetcode(),
+                                trade.ResultRetcodeDescription(),
+                                dg, sl, dg, cand));
+         }
       }
 
-      if(BarNo() - g_posBar >= InpMaxBars)
+      // F10. Bars() is not a clock. It plateaus at the terminal's "max bars in
+      // chart" setting, after which this subtraction freezes and the time exit
+      // NEVER fires again; and it jumps by thousands when history back-fills,
+      // firing the time exit instantly on a position seconds old. iBarShift
+      // does neither, and it is what SuperTrendSniper already uses.
+      int held = (g_posBarTime > 0)
+               ? iBarShift(_Symbol, _Period, g_posBarTime, false) : 0;
+      if(held >= InpMaxBars)
       {
-         trade.PositionClose(tk);
-         Log("time exit");
+         if(trade.PositionClose(tk)) Log("time exit DONE");
+         else Log(StringFormat("TIME EXIT REJECTED %d %s - still open",
+                               trade.ResultRetcode(),
+                               trade.ResultRetcodeDescription()));
       }
    }
 }
@@ -1517,22 +1670,115 @@ int DayStamp()
    return t.year * 10000 + t.mon * 100 + t.day;
 }
 
+// F5. MT5 calls OnInit on a restart, a recompile, a timeframe change and EVERY
+// parameter change, and OnInit used to reset the day baseline, the drawdown
+// floor and both locks to whatever the (already drawn down) equity was. Lose
+// 3%, nudge an input, lose another 3%. SuperTrendSniper fixed this and called
+// it BLOCKER 1; this EA never got the fix. Keyed by login and magic so no other
+// account or EA inherits a lock, and disabled in the tester so nothing leaks
+// between passes.
+bool   GuardsPersist() { return !(bool)MQLInfoInteger(MQL_TESTER); }
+string GKey(string f)
+{
+   return "SS_" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN))
+        + "_" + IntegerToString(InpMagic) + "_" + f;
+}
+double GGet(string f, double d)
+{
+   if(!GuardsPersist()) return d;
+   return GlobalVariableCheck(GKey(f)) ? GlobalVariableGet(GKey(f)) : d;
+}
+void GSet(string f, double v) { if(GuardsPersist()) GlobalVariableSet(GKey(f), v); }
+
+void PersistGuards()
+{
+   GSet("peakEq", g_peakEq);
+   GSet("dayStartEq", g_dayStartEq);
+   GSet("dayStamp", (double)g_dayStamp);
+   GSet("tradesDay", (double)g_tradesToday);
+   GSet("lockDay",  g_lockDay  ? 1.0 : 0.0);
+   GSet("lockPerm", g_lockPerm ? 1.0 : 0.0);
+}
+
+void LoadGuards()
+{
+   if(!GuardsPersist()) return;
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double pk = GGet("peakEq", 0.0);
+   if(pk > 0.0) g_peakEq = MathMax(pk, eq);
+   g_lockPerm = (GGet("lockPerm", 0.0) > 0.5);
+   if((int)GGet("dayStamp", -1.0) == DayStamp())
+   {
+      double ds = GGet("dayStartEq", 0.0);
+      if(ds > 0.0) g_dayStartEq = ds;
+      g_tradesToday = (int)GGet("tradesDay", 0.0);
+      g_lockDay     = (GGet("lockDay", 0.0) > 0.5);
+   }
+   g_floor = g_peakEq * (1.0 - InpMaxDDPct / 100.0);
+   if(g_lockPerm)
+      Print("[SS] RESTORED: the permanent max-drawdown lock is SET. This EA "
+            "will not trade. Clear it by deleting the global variable "
+            + GKey("lockPerm"));
+   if(g_lockDay) Print("[SS] RESTORED: locked out for the rest of today.");
+}
+
 void CheckGuards()
 {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   if(eq > g_peakEq) g_peakEq = eq;
+   if(eq > g_peakEq) { g_peakEq = eq; PersistGuards(); }
+
+   // F4. The floor used to be set ONCE, in OnInit, from whatever the equity
+   // was when the EA was attached. Attach at GBP60 and the floor is GBP56.40 -
+   // grow to GBP100 and it is STILL GBP56.40, which is a 44% drawdown from
+   // peak before a "6% max drawdown" guard says a word. Every prop firm
+   // measures from the peak. g_peakEq was already being computed and was never
+   // read by anything.
+   if(g_peakEq > 0.0) g_floor = g_peakEq * (1.0 - InpMaxDDPct / 100.0);
+
    if(!g_lockDay && g_dayStartEq > 0.0
       && eq <= g_dayStartEq * (1.0 - InpMaxDayLossPct / 100.0))
    {
       g_lockDay = true;
-      KillPending("daily loss limit");
       Log("DAILY LOSS LIMIT - no new trades today");
+      PersistGuards();
    }
    if(!g_lockPerm && g_floor > 0.0 && eq <= g_floor)
    {
       g_lockPerm = true;
-      KillPending("max drawdown");
       Log("MAX DRAWDOWN - stopped");
+      PersistGuards();
+   }
+
+   // F2/F3. A limit that only refuses NEW trades is not a limit. The position
+   // whose floating loss BREACHED the limit was left running, and a prop firm
+   // measures the daily limit on equity - so the guard fired at exactly the
+   // moment it needed to act, and did nothing but stop arming.
+   //
+   // Flattening is a STATE, not an event: while a lock is set there must be
+   // nothing resting and nothing open, rechecked every couple of seconds. The
+   // breach tick is a fast, wide-spread, requote-prone tick, which makes it the
+   // likeliest tick in the session for a close to be rejected - and the old
+   // one-shot version would have given up there, silently.
+   if(!g_lockDay && !g_lockPerm) return;
+   static datetime lastFlat = 0;
+   if(TimeCurrent() - lastFlat < 2) return;
+   lastFlat = TimeCurrent();
+
+   if(PendingCount() > 0)
+      KillPending(g_lockPerm ? "max drawdown" : "daily loss limit");
+   if(!InpFlattenOnBreach) return;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+      if(trade.PositionClose(tk))
+         Log("closed on guard breach");
+      else
+         Log(StringFormat("GUARD CLOSE REJECTED %I64u: %d %s - STILL OPEN, "
+                          "retrying", tk, trade.ResultRetcode(),
+                          trade.ResultRetcodeDescription()));
    }
 }
 
@@ -1567,6 +1813,24 @@ int OnInit()
    g_dayStartEq = eq; g_peakEq = eq;
    g_floor = eq * (1.0 - InpMaxDDPct / 100.0);
    g_dayStamp = DayStamp();
+   LoadGuards();          // F5: after the defaults, never before
+
+   // F1. Adopt what is already at the broker instead of arming on top of it.
+   g_pend = 0;
+   for(int i = OrdersTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = OrderGetTicket(i);
+      if(tk == 0) continue;
+      if(OrderGetInteger(ORDER_MAGIC) != InpMagic) continue;
+      if(OrderGetString(ORDER_SYMBOL) != _Symbol)  continue;
+      g_pend    = tk;
+      g_pendDir = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_STOP
+                || OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_LIMIT) ? 1 : -1;
+      Log(StringFormat("adopted resting order %I64u on start", tk));
+   }
+   if(PosCount() > 0)
+      Log("adopted an open position on start - the peak and the bar clock "
+          "restart from here. The broker's stop is untouched.");
 
    int corner = InpBoxCorner == 0 ? CORNER_LEFT_UPPER  :
                 InpBoxCorner == 1 ? CORNER_RIGHT_UPPER :
@@ -1580,9 +1844,19 @@ int OnInit()
                "stop %.2f ATR past the extreme, RISK CAP %.2f ATR, give back %.0f%%",
                SS_BUILD, InpPivotBars, InpSweepAtr, InpWickCut, InpStopBufAtr,
                InpMaxRiskAtr, InpGiveBack * 100.0);
-   Print("[SS] Measured (variant B, the one that runs): 2579 trades, 23.6/day, "
-         "65.1% win, +309.5 points, 107.3 control se, OOS +0.0991 vs IS +0.1241, "
-         "walk-forward 5 of 5, max drawdown GBP12.68, worst trade -GBP4.63.");
+   Print("[SS] Measured on the EA-executable variant, under fills that could "
+         "actually be got (E-151): 2596 trades, 23.8/day, 53.5% win, "
+         "+201.1 points, 71.2 control se on a control that itself LOSES, "
+         "walk-forward 5 of 5 (+0.0486 to +0.0984), max drawdown GBP15.72, "
+         "worst trade -GBP4.63.");
+   Print("[SS] E-151: the older, higher figures came from a backtest that "
+         "filled the trail at prices no order could rest at. Three signals "
+         "died with it - break+retest and both order block entries are OFF by "
+         "default and lose money when switched on. The sweep is the strategy.");
+   Print("[SS] E-156: at 0.25% risk a trade the funded pass rate simulates at "
+         "~100% for FTMO, FundedNext, E8 Classic and The5ers, 86% FundingPips, "
+         "48% Alpha Capital on M1 but 96.5% on M5. M5 is the funded clock. "
+         "0.50% risk is worse at EVERY firm.");
    Print("[SS] THE RISK CAP IS NOT AN OPTIMISATION. Uncapped, the worst single "
          "trade was 57% of a GBP60 account and the max drawdown 63%. Read E-138 "
          "before raising InpMaxRiskAtr.");
@@ -1603,6 +1877,27 @@ void OnDeinit(const int reason)
 
 void OnTick()
 {
+   // F15. Nothing in this project ever asked whether trading was possible. With
+   // AutoTrading off, or after a disconnect, every trade call returns
+   // TRADE_RETCODE_TRADE_DISABLED - and the exit path used to log "market exit"
+   // regardless. An EA that cannot act must say so, not pretend.
+   if(!TerminalInfoInteger(TERMINAL_CONNECTED)
+      || !TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)
+      || !MQLInfoInteger(MQL_TRADE_ALLOWED)
+      || !AccountInfoInteger(ACCOUNT_TRADE_ALLOWED)
+      || !AccountInfoInteger(ACCOUNT_TRADE_EXPERT))
+   {
+      static datetime shout = 0;
+      if(TimeCurrent() - shout > 60)
+      {
+         shout = TimeCurrent();
+         Print("[SS] TRADING IS DISABLED (AutoTrading off, disconnected, or "
+               "this account forbids EAs). OPEN POSITIONS ARE NOT BEING "
+               "MANAGED - the trail and the time exit are both dead.");
+      }
+      return;
+   }
+
    int ds = DayStamp();
    if(ds != g_dayStamp)
    {
@@ -1612,6 +1907,7 @@ void OnTick()
       g_refusedToday = 0;
       g_lockDay = false;
       Log("new trading day");
+      PersistGuards();
    }
 
    CheckGuards();
@@ -1639,22 +1935,39 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    if(HistoryDealGetInteger(trans.deal, DEAL_MAGIC) != InpMagic) return;
    if(HistoryDealGetString(trans.deal, DEAL_SYMBOL) != _Symbol) return;
 
-   long entry = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
-   if(entry == DEAL_ENTRY_IN)
+   long  entry = HistoryDealGetInteger(trans.deal, DEAL_ENTRY);
+   ulong pid   = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+
+   // F14. DEAL_ENTRY_INOUT is what a NETTING account produces on a reversal,
+   // and several prop firms run netting. It was dropped on the floor: the trade
+   // was never counted, the pending was never cleared and the trail kept
+   // measuring against the previous position's entry.
+   if(entry == DEAL_ENTRY_IN || entry == DEAL_ENTRY_INOUT)
    {
-      g_tradesToday++;
+      // F20. Count TRADES, not deals. One pending order that fills in three
+      // parts is three DEAL_ENTRY_IN events and one trade, and the old counter
+      // tripped the daily circuit breaker on trades that never happened.
+      if(pid != g_lastPosId) { g_tradesToday++; g_lastPosId = pid; }
       g_pend = 0;
       g_posDir = 0;                       // TrailStop re-seeds from the position
       PB_PromoteOrder((ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER),
-                      (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID),
-                      HistoryDealGetDouble(trans.deal, DEAL_PRICE));
+                      pid, HistoryDealGetDouble(trans.deal, DEAL_PRICE));
+      PersistGuards();
       Log("FILLED");
       return;
    }
-   if(entry == DEAL_ENTRY_OUT)
+   if(entry == DEAL_ENTRY_OUT || entry == DEAL_ENTRY_OUT_BY)
    {
-      g_posDir = 0;
-      g_peakPrice = 0.0;
+      // F14. A PARTIAL close also raises DEAL_ENTRY_OUT. Zeroing the peak on a
+      // position that is still open restarts the give-back from entry, so the
+      // ratchet stalls until price makes a new extreme. Only a close that
+      // actually left us flat ends the trade.
+      if(!PositionSelectByTicket(pid))
+      {
+         g_posDir = 0;
+         g_peakPrice = 0.0;
+         g_lastSl = 0.0;
+      }
       g_pbDirty = true;
       Log(StringFormat("closed, profit %.2f",
                        HistoryDealGetDouble(trans.deal, DEAL_PROFIT)));
