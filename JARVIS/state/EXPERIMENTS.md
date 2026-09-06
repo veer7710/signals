@@ -7176,3 +7176,45 @@ written for E-141 and it is the correct objection. **The EA has been right and
 the backtest has been wrong since the day that comment was written, and nobody
 compared them.** The EA-executable subset is the 25% column above, and it is
 flat.
+
+---
+
+## E-166 — "IT REACTED THERE BEFORE", RE-ASKED UNDER HONEST FILLS
+
+Veer has raised this twice, with a screenshot both times. E-143 answered it with
+a perfectly monotone ladder pointing the OPPOSITE way — a level that had never
+reacted was the best to trade. That result was computed with the E-165 entry
+bug, so it is not admissible, and there was a specific reason to suspect the bug
+had MADE it: a level price has visited many times is a level price hovers
+around, hovering means the entry bar more often OPENS past the level, and that
+is precisely the condition the old code mispriced.
+
+**That hypothesis was wrong.** The share of entries opening past the level is
+flat at 72–79% across every bucket — the bug did not fall harder on one group.
+
+What is left, under honest fills:
+```
+  M1  prior reactions      n   honest/tr   points   win%   old (broken)  opened past
+      1 — once           213     -0.0426     -9.1  46.5%       +0.0845          77%
+      2 — twice          229     +0.0668    +15.3  51.1%       +0.1583          72%
+      3+                2512     -0.0146    -36.8  45.1%       +0.0798          75%
+      ALL               2955     -0.0103    -30.4
+```
+**No ladder in either direction, and every bucket is near zero.** The one
+positive cell (2 reactions, +0.0668 on 229 trades) has a negative neighbour on
+each side, which is what noise looks like, not what an effect looks like.
+
+**A caveat that matters and stops this being a clean refutation of E-143:** the
+reaction definition here uses a 3000-bar lookback and my own thresholds, and it
+buckets the population very differently — E-143 found 91 trades on levels that
+had NEVER reacted, this finds 1. The two are not measuring the same thing, so
+this does not overturn E-143's table so much as fail to reproduce anything from
+a related question.
+
+**VERDICT: UNPROVEN, and unresolvable at this sample size.** The honest position
+is that nothing here supports trading a level differently because of how often
+it reacted before — and equally, nothing here refutes Veer's eye. His screenshot
+is one instance; 2955 trades say the mechanical version of it is flat. Those two
+statements are compatible: **he is selecting among these setups and the backtest
+is taking all of them**, which is exactly the gap this whole project keeps
+running into.

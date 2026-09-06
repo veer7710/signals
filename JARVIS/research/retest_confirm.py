@@ -408,66 +408,130 @@ def run_tf(tf):
     print("   " + "  ".join(f"{h:02d}:{len(v):>3}/{summ(v)['per']:+.3f}"
                             for h, v in sorted(byh.items())))
 
-    # ---------------- apply each single-feature cut to the SECOND half
+    # ---------------- TEST A (strict, pre-registered): monotone ladders only
     print("\n" + "=" * (W + 62))
-    print("  THE FILTER RULE: allowed vs REFUSED, on the UNSEEN SECOND HALF")
-    print("  (cut = the first-half median or quartile in the ladder's direction)")
+    print("  TEST A (strict) — only features with a MONOTONE first-half ladder")
+    print("  earn a filter. THE FILTER RULE: allowed vs REFUSED on the UNSEEN half.")
+    print("=" * (W + 62))
+    mono_feats = [f for f in FEATS if ladders[f][2] != "-"]
+    print(f"  monotone in the first half: {len(mono_feats)}/{len(FEATS)} features"
+          + (f"  -> {mono_feats}" if mono_feats else ""))
+    if mono_feats:
+        print(f"  {'filter (keep ...)':<{W}}{'n':>5}{'per':>9}{'pts':>8}{'win%':>7}"
+              f" | {'nref':>5}{'refused per':>12}{'refused pts':>12}  {'better?':>8}")
+    for f in mono_feats:
+        cuts, pers, mono, ns = ladders[f]
+        opts = ([(f"{f} > Q2 (keep high)", cuts[1], True),
+                 (f"{f} > Q3 (keep high)", cuts[2], True)] if mono == "UP" else
+                [(f"{f} < Q2 (keep low)", cuts[1], False),
+                 (f"{f} < Q1 (keep low)", cuts[0], False)])
+        for name, thr, keep_hi in opts:
+            allow, refuse = split(A2, f, thr, keep_hi)
+            report_split(name, allow, refuse)
+
+    # ---------------- TEST B (generous): median split, best side chosen IS
+    print("\n" + "=" * (W + 62))
+    print("  TEST B (generous) — EVERY feature gets a filter: split the first")
+    print("  half at its own median, keep whichever side paid better IN SAMPLE,")
+    print("  then apply that to the unseen half. 14 variants; if these are noise")
+    print("  about 7 of 14 hold their sign by chance alone.")
     print("=" * (W + 62))
     print(f"  {'filter (keep ...)':<{W}}{'n':>5}{'per':>9}{'pts':>8}{'win%':>7}"
           f" | {'nref':>5}{'refused per':>12}{'refused pts':>12}  {'better?':>8}")
-    results = []
+    held = 0
     for f in FEATS:
-        cuts, pers, mono, ns = ladders[f]
-        if mono == "-":
-            continue
-        for name, thr, keep_hi in ((f"{f} > Q2", cuts[1], mono == "UP"),
-                                   (f"{f} > Q3", cuts[2], mono == "UP"),
-                                   (f"{f} < Q2", cuts[1], mono == "DOWN"),
-                                   (f"{f} < Q1", cuts[0], mono == "DOWN")):
-            if (mono == "UP") != keep_hi:
-                continue
-            if mono == "UP" and name.startswith(f + " <"):
-                continue
-            if mono == "DOWN" and name.startswith(f + " >"):
-                continue
-            allow = [x for x in A2 if (x["f"][f] > thr if keep_hi else x["f"][f] < thr)]
-            refuse = [x for x in A2 if not (x["f"][f] > thr if keep_hi else x["f"][f] < thr)]
-            za, zr = summ(allow), summ(refuse)
-            if za is None or zr is None:
-                continue
-            ok = "YES" if za["per"] > zr["per"] else "no"
-            results.append((f, name, za, zr))
-            print(f"  {name:<{W}}{za['n']:>5}{za['per']:>+9.4f}{za['pts']:>8.1f}"
-                  f"{za['win']:>6.1f}% | {zr['n']:>5}{zr['per']:>+12.4f}"
-                  f"{zr['pts']:>12.1f}  {ok:>8}")
-    # ---------------- the best first-half filter, judged on the second half
+        cuts = ladders[f][0]
+        thr = cuts[1]
+        hi, lo = split(A1, f, thr, True)
+        keep_hi = summ(hi) is not None and summ(lo) is not None and summ(hi)["per"] > summ(lo)["per"]
+        allow, refuse = split(A2, f, thr, keep_hi)
+        if report_split(f"{f} {'>' if keep_hi else '<'} median", allow, refuse):
+            held += 1
+    print(f"  held on unseen data: {held}/{len(FEATS)}  "
+          f"(chance alone gives about {len(FEATS)/2:.0f}/{len(FEATS)})")
+
+    # ---------------- TEST C (most generous): best of 14 x 4 quartiles
     print("\n" + "=" * (W + 62))
-    print("  PRE-REGISTERED PICK: the single filter with the best FIRST-HALF")
-    print("  per-trade among monotone features, judged ONLY on the second half")
+    print("  TEST C (most generous) — take the SINGLE BEST first-half quartile out")
+    print(f"  of {len(FEATS)}x4 = {len(FEATS)*4} cells and see what it does unseen.")
+    print("  This is the largest multiple-comparison possible here; the best of")
+    print(f"  {len(FEATS)*4} random cells always looks good in sample.")
     print("=" * (W + 62))
-    best = None
+    bestq = None
     for f in FEATS:
         cuts, pers, mono, ns = ladders[f]
-        if mono == "-":
-            continue
-        thr, keep_hi = (cuts[1], True) if mono == "UP" else (cuts[1], False)
-        sel = [x for x in A1 if (x["f"][f] > thr if keep_hi else x["f"][f] < thr)]
-        z = summ(sel)
-        if z and (best is None or z["per"] > best[0]):
-            best = (z["per"], f, thr, keep_hi, z)
-    if best:
-        _, f, thr, keep_hi, z1 = best
-        allow = [x for x in A2 if (x["f"][f] > thr if keep_hi else x["f"][f] < thr)]
-        refuse = [x for x in A2 if not (x["f"][f] > thr if keep_hi else x["f"][f] < thr)]
-        hdr(f"pick = {FLABEL[f]}  {'>' if keep_hi else '<'} {thr:.4f}")
-        line("first half, ALLOWED (in sample)", [x for x in A1 if (x['f'][f] > thr if keep_hi else x['f'][f] < thr)])
+        for qi in range(4):
+            if ns[qi] < 60:
+                continue
+            if bestq is None or pers[qi] > bestq[0]:
+                bestq = (pers[qi], f, qi, cuts, ns[qi])
+    if bestq:
+        _, f, qi, cuts, nq = bestq
+        lo = -1e18 if qi == 0 else cuts[qi - 1]
+        hiv = 1e18 if qi == 3 else cuts[qi]
+        allow = [x for x in A2 if lo < x["f"][f] <= hiv]
+        refuse = [x for x in A2 if not (lo < x["f"][f] <= hiv)]
+        hdr(f"best in-sample cell: {FLABEL[f]} Q{qi+1}  ({lo:.4f}, {hiv:.4f}]")
+        line("first half, ALLOWED (in sample)",
+             [x for x in A1 if lo < x["f"][f] <= hiv])
         line("SECOND HALF, ALLOWED (unseen)", allow)
         line("SECOND HALF, REFUSED (unseen)", refuse)
         line("SECOND HALF, everything", A2)
         if len(allow) < 100:
-            print(f"  *** {len(allow)} unseen trades. Below the 100 minimum -> UNPROVEN "
-                  f"whatever the number says.")
+            print(f"  *** {len(allow)} unseen trades, below the 100 minimum -> UNPROVEN.")
+
+    # ---------------- TEST D: the hand-trader's stack, all three at once
+    print("\n" + "=" * (W + 62))
+    print("  TEST D — the confirmations STACKED, as a human would read them:")
+    print("  a violent break (disp above median) AND a shallow tag rather than a")
+    print("  deep push (depth below median) AND a strong close back (clspos above")
+    print("  median). Cuts are first-half medians; sides are the ones a trader")
+    print("  would state in advance, not fitted.")
+    print("=" * (W + 62))
+    md = {f: ladders[f][0][1] for f in FEATS}
+    def stack(x):
+        return (x["f"]["disp"] > md["disp"] and x["f"]["depth"] < md["depth"]
+                and x["f"]["clspos"] > md["clspos"])
+    for lbl, bk in (("first half", A1), ("SECOND half (unseen)", A2)):
+        a = [x for x in bk if stack(x)]
+        r = [x for x in bk if not stack(x)]
+        hdr(f"stacked confirmation — {lbl}")
+        line("ALLOWED", a); line("REFUSED", r)
+
+    # ---------------- TEST E: hours picked in sample
+    print("\n" + "=" * (W + 62))
+    print("  TEST E — hours that paid in the first half, applied to the second.")
+    print("  (this feed is MISSING the 00:00 UTC hour; timestamps are SECONDS)")
+    print("=" * (W + 62))
+    good = {h for h, v in byh.items() if summ(v)["per"] > 0}
+    a = [x for x in A2 if int(x["f"]["hour"]) in good]
+    r = [x for x in A2 if int(x["f"]["hour"]) not in good]
+    print(f"  hours kept: {sorted(good)}")
+    hdr("hours chosen on the first half")
+    line("SECOND HALF, ALLOWED (unseen)", a)
+    line("SECOND HALF, REFUSED (unseen)", r)
     return book, A1, A2, ladders
+
+
+def split(bk, f, thr, keep_hi):
+    a = [x for x in bk if (x["f"][f] > thr if keep_hi else x["f"][f] <= thr)]
+    r = [x for x in bk if not (x["f"][f] > thr if keep_hi else x["f"][f] <= thr)]
+    return a, r
+
+
+def report_split(name, allow, refuse):
+    za, zr = summ(allow), summ(refuse)
+    if za is None or zr is None:
+        print(f"  {name:<{W}}  degenerate split"); return False
+    # Welch t on the difference allowed - refused
+    va = za["sd"] ** 2 / za["n"]; vr = zr["sd"] ** 2 / zr["n"]
+    tw = (za["per"] - zr["per"]) / math.sqrt(va + vr) if (va + vr) > 0 else 0.0
+    ok = za["per"] > zr["per"]
+    flag = ("YES" if ok else "no") + ("" if za["n"] >= 100 else " n<100")
+    print(f"  {name:<{W}}{za['n']:>5}{za['per']:>+9.4f}{za['pts']:>8.1f}"
+          f"{za['win']:>6.1f}% | {zr['n']:>5}{zr['per']:>+12.4f}"
+          f"{zr['pts']:>12.1f}  {flag:>8}  dt {tw:+.2f}")
+    return ok
 
 
 def main():
