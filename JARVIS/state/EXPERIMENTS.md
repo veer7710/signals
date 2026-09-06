@@ -6327,3 +6327,64 @@ was built from; the only way to tell a market structure effect from a curve fit
 is to point it somewhere it was never tuned. The sweep came back positive in all
 six cells with no re-fitting (E-146) — that is the strongest reason to trust the
 XAU M1 numbers, not a distraction from them. XAU M1 remains the shipping target.
+
+---
+
+## E-149 — THE COMBINED BOOK, AND THE DILUTION IT EXPOSES
+`JARVIS/research/combined.py`
+
+Every signal here had been measured **on its own, with the whole market to
+itself**. That is not what runs. The chart holds **one position at a time** and
+four entry types compete for it. Three things can happen that no separate test
+can see: **cannibalisation** (a weak signal takes the slot and a strong one
+arrives to find it occupied), **dilution** (more trades at a thinner average),
+or **genuine addition**. Only a joint simulation separates them.
+
+### M1 — IT IS DILUTION, AND IT IS DANGEROUS
+| enabled | n | /day | win% | points | per trade | max DD |
+|---|---|---|---|---|---|---|
+| SWEEP alone | 4006 | 36.7 | — | 449.3 | +0.1142 | — |
+| SWEEP + break/retest | 5107 | 46.8 | 65.3% | 488.2 | +0.0956 | £16.10 |
+| SWEEP + B/R + OB detection | 6686 | 61.3 | 64.1% | 502.4 | +0.0751 | £21.93 |
+| **ALL FOUR (shipped default)** | 9301 | 85.3 | 63.8% | **556.1** | **+0.0598** | £26.16 |
+
+Total points rise and the per-trade edge is **halved**. Then charge slippage:
+
+```
+M1        slippage:   0.00     0.02     0.05     0.10
+SWEEP alone  n=4006   449.3    369.2    249.0     48.7
+ALL FOUR     n=9301   556.1    370.0     91.0   -374.0
+```
+
+**They cross at 0.02 points.** Past that the combination is worse, and at 0.10 it
+loses 374 points while the sweep alone is still positive. The arithmetic is
+brutal and simple: **85 trades a day pays 85 round trips a day.**
+
+### M5 — THE COMBINATION IS FINE
+```
+M5        slippage:   0.00     0.02     0.05     0.10
+SWEEP alone  n=898    258.1    240.1    213.2    168.3
+ALL FOUR     n=1987   322.6    282.9    223.3    123.9
+```
+Crossover is around 0.07, so across the realistic 0.02–0.05 range all four wins.
+Per-trade stays healthy at +0.1624.
+
+### WHO ACTUALLY GETS THE SLOT
+Inside the combined M1 book: **SWEEP 2714 trades at +0.1142**, break+retest 1107
+at +0.0435, OB detection 1799 at +0.0330, OB return 3681 at +0.0376. The sweep
+carries it and the others are a third of its quality — exactly the ranking every
+separate test found, now confirmed under competition. **There is no
+cannibalisation:** the sweep's per-trade inside the combined book (+0.1142) is
+essentially its standalone figure, so the extras are filling idle time rather
+than stealing good trades.
+
+### WHAT SHIPPED
+The finding is now **in the file where the signals are switched on**, with the
+table above in the comment, and the panel gained a **"cost paid"** row — total
+round trips in points and money — so the dilution is visible live instead of
+being a thing you have to be told.
+
+**Guidance, stated plainly: on M5 run all four. On M1, if your fills slip more
+than about 0.02 points, turn the extras off and run the sweep.** The demo run
+measures which world you are in; the `cost paid` row and the `fill vs signal`
+row are how you read it.

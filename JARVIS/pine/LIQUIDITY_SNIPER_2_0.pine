@@ -69,9 +69,23 @@ indicator("LIQUIDITY SNIPER 2.0", overlay = true, max_labels_count = 500,
 
 // ------------------------------------------------------------------ inputs --
 gX = "1 · WHICH SIGNALS"
-useSweep = input.bool(true, "SWEEP  — wick takes the level, price returns", group = gX)
-useBR    = input.bool(true, "BREAK + RETEST — close through, then holds",   group = gX)
-useOB    = input.bool(true, "ORDER BLOCK — return to the block",            group = gX)
+// E-149 simulated all four sharing ONE position, which is what actually runs.
+// More signals = more total points and a THINNER per-trade edge, and every
+// extra trade pays the round trip again. Measured, total points by slippage:
+//                       0.00     0.02     0.05     0.10
+//   M1 sweep alone     449.3    369.2    249.0     48.7
+//   M1 all four        556.1    370.0     91.0   -374.0    <- crosses at 0.02
+//   M5 sweep alone     258.1    240.1    213.2    168.3
+//   M5 all four        322.6    282.9    223.3    123.9    <- crosses at ~0.07
+// SO: on M5, run all four. ON M1, IF YOUR FILLS SLIP MORE THAN ABOUT 0.02
+// POINTS, TURN THE EXTRAS OFF - 85 trades a day pays 85 round trips a day.
+// Measure it on demo and let the "cost paid" row in the panel decide.
+useSweep = input.bool(true, "SWEEP  — wick takes the level, price returns", group = gX,
+     tooltip = "The strongest of the four by every measure: 107.3 control se, and positive on all six instrument/timeframe cells it was pointed at without re-fitting (E-146). If you only run one, run this.")
+useBR    = input.bool(true, "BREAK + RETEST — close through, then holds",   group = gX,
+     tooltip = "73.8 control se. Trades WITH the break where the sweep fades it - the wick filter separates them.")
+useOB    = input.bool(true, "ORDER BLOCK — the block, and the return to it", group = gX,
+     tooltip = "The weakest of the three and still clearly real (56.8 control se). On M1 it is the first thing to switch off if your fills slip.")
 
 gS = "2 · THE SWEEP  (measured; leave alone unless testing)"
 pvLen    = input.int(5,    "Swing needs this many bars either side", group = gS, minval = 1)
@@ -763,7 +777,7 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, panelBig ? 15 : 10, border_width = 1,
+    tp := table.new(pos, 3, panelBig ? 16 : 11, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 
@@ -823,6 +837,15 @@ if barstate.islast and showPanel
     // when he chases, so the risk cap is what breaks first - not the profit.
     chaseTo  = posDir != 0 ? posStop + posDir * maxRisk * atr : na
     chasePts = posDir != 0 ? posDir * (chaseTo - close) : na
+    // THE COST PAID, in full. E-149 found that adding signals raises total
+    // points and CUTS the per-trade edge, and every extra trade pays the round
+    // trip again. On M1 all four signals beat the sweep alone at zero slippage
+    // and LOSE to it past 0.02 - because 85 trades a day pay 85 round trips a
+    // day. This row is that trade-off, live, in money.
+    costPaid = nTrades * (spreadPts + 2.0 * slipPts)
+    f_row(r, "cost paid", "-" + str.tostring(costPaid, "0.0") + "pt",
+             f_ccy(-costPaid), cNeg)
+    r += 1
     f_row(r, "enter by",
              posDir == 0 ? "-" : str.tostring(chaseTo, format.mintick),
              posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
