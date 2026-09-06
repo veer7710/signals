@@ -260,6 +260,25 @@ gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = 
      tooltip = "A point is 1.00 of price - one dollar. 0.01 lots is 1 ounce, so a $1 move is about 79p. The same unit you use when you say 3-4 points is 2-4 pound.")
 ccy      = input.string("£", "Currency symbol", group = gM)
 
+gL = "8b · THE LEGS  (bottom to top, top to bottom)"
+// Veer, repeatedly and correctly: "our signals aren't catching top to bottom or
+// bottom to top". Every measurement in this repo scored ENTRIES; none of them
+// ever measured the MOVE. So this measures the move.
+//
+// A leg runs from one confirmed swing to the next. Each completed leg is drawn
+// with its size in points and money, and it is marked CAUGHT if any signal
+// fired inside it in the leg's own direction, MISSED if none did. The panel
+// totals both.
+//
+// This is not a filter and it changes no signal. It is the scoreboard for the
+// complaint - so "we're missing the big moves" stops being an argument and
+// becomes a number on the chart.
+showLegs = input.bool(true, "Draw the legs and score them", group = gL)
+legMin   = input.float(3.0, "Only draw legs bigger than (ATR)", group = gL,
+     step = 0.5, minval = 0.0,
+     tooltip = "Small legs are noise and there are hundreds of them. Raise this until only the moves you would actually want are drawn - that is the set the indicator is being judged against.")
+legLbl   = input.bool(true, "Label each leg with its size", group = gL)
+
 gD = "9 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
 cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
@@ -978,6 +997,67 @@ if newDay
 if anySig and posDir != 0 and barstate.isconfirmed
     nMissed += 1
 
+// ======================== THE LEGS, MEASURED ===============================
+// A leg runs extreme to extreme. `ph`/`pl` confirm pvLen bars late, so a leg is
+// only ever CLOSED and drawn once its far end is confirmed - nothing here is
+// knowable earlier than it was, and nothing repaints.
+var float legFrom  = na          // price the current leg started at
+var int   legFromB = na          // bar it started on
+var int   legDir   = 0           // +1 rising, -1 falling
+var bool  legHit   = false       // did any signal fire inside it, its way
+var int   nLegAll  = 0
+var int   nLegHit  = 0
+var float ptsLegAll = 0.0
+var float ptsLegHit = 0.0
+if newDay
+    nLegAll := 0
+    nLegHit := 0
+    ptsLegAll := 0.0
+    ptsLegHit := 0.0
+
+// a signal counts for the leg it is INSIDE, in that leg's direction
+if legDir > 0 and (sigSweepB or sigBrB or sigObB or sigDetB)
+    legHit := true
+if legDir < 0 and (sigSweepS or sigBrS or sigObS or sigDetS)
+    legHit := true
+
+f_closeLeg(toPx, toBar) =>
+    size = math.abs(toPx - legFrom)
+    if size >= legMin * atr and not na(legFrom)
+        nLegAll += 1
+        ptsLegAll += size
+        if legHit
+            nLegHit += 1
+            ptsLegHit += size
+        if showLegs
+            col = legHit ? (legDir > 0 ? cBuy : cSell) : color.new(#8FA3B8, 30)
+            line.new(legFromB, legFrom, toBar, toPx, color = col, width = 1,
+                 style = legHit ? line.style_solid : line.style_dotted)
+            if legLbl
+                label.new(math.round((legFromB + toBar) / 2),
+                     (legFrom + toPx) / 2,
+                     f_num(legDir * (toPx - legFrom), "0.0") + "pt"
+                     + (legHit ? "" : "  MISSED"),
+                     style = label.style_label_center, size = size.tiny,
+                     color = color.new(chart.bg_color, 100),
+                     textcolor = legHit ? col : color.new(#8FA3B8, 10))
+    true
+
+if barstate.isconfirmed and not na(ph)
+    if legDir >= 0 and not na(legFrom)
+        f_closeLeg(ph, bar_index - pvLen)
+    legFrom := ph
+    legFromB := bar_index - pvLen
+    legDir := -1
+    legHit := false
+if barstate.isconfirmed and not na(pl)
+    if legDir <= 0 and not na(legFrom)
+        f_closeLeg(pl, bar_index - pvLen)
+    legFrom := pl
+    legFromB := bar_index - pvLen
+    legDir := 1
+    legHit := false
+
 // ---------------------------------------------------------- open a trade ---
 if anyBuy or anySell
     posDir   := anyBuy ? 1 : -1
@@ -1315,7 +1395,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (htfOn ? 3 : 0) + (panelBig ? 9 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 9 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1407,6 +1487,16 @@ if barstate.islast and showPanel
                  str.tostring(nAgainst) + " tr  " +
                  (nAgainst > 0 ? str.tostring(100.0 * wAgainst / nAgainst, "0") + "%W" : "-"),
                  pAgainst >= 0 ? cPos : cNeg)
+        r += 1
+    if showLegs
+        f_sep(r, "── the legs, and how many we flagged ──")
+        r += 1
+        f_row(r, "legs caught", str.tostring(nLegHit) + " / " + str.tostring(nLegAll),
+                 nLegAll > 0 ? str.tostring(100.0 * nLegHit / nLegAll, "0") + "% flagged" : "-",
+                 nLegAll > 0 and nLegHit * 2 >= nLegAll ? cPos : cNeg)
+        r += 1
+        f_row(r, "points in legs", f_num(ptsLegHit, "0.0") + "pt",
+                 "of " + f_num(ptsLegAll, "0.0") + "pt on offer", cVal)
         r += 1
     f_sep(r, "signals are real · the edge is NOT proven (E-165)")
     r += 1
