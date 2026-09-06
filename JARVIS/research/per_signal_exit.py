@@ -28,7 +28,7 @@ the opportunity to overfit.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, trail_level, trail_apply
 from liq_m1 import load, GBP
 import combined as C
 
@@ -47,23 +47,19 @@ def exit_variant(s, j, d, entry, sl, mode, param, hold=240):
             continue
         peak = max(peak, s.h[k]) if d > 0 else min(peak, s.l[k])
         up = d * (peak - entry)
-        c = None
         if mode == "give" and up > 0:
-            c = entry + d * up * (1.0 - param)
-        elif mode == "atr":
-            c = peak - d * param
-        if c is not None:
-            # E-151. The trail is computed from THIS bar's extreme, so it can
-            # only be placed once this bar has closed. A stop on the wrong side
-            # of the market cannot be placed: for a long, a sell-stop above the
-            # close does not exist. If the rule wants a level price has already
-            # left behind, the honest fill is a market exit at the close - NOT
-            # the peak. Without this clamp the trail books the previous bar's
-            # favourable extreme, and the tighter the trail the more often it
-            # does, which manufactures a monotone preference for tightness.
-            if d * (c - s.c[k]) >= 0:
+            # E-151: the ONE trail, from engine.py. This file used to hand-roll
+            # the clamp - numerically the same, but a second copy of the thing
+            # that had just cost three signals their status.
+            nsl = trail_level(entry, sl, peak, s.c[k], d, param)
+            if nsl is None:
                 return s.c[k], k
-            sl = max(sl, c) if d > 0 else min(sl, c)
+            sl = nsl
+        elif mode == "atr":
+            nsl = trail_apply(sl, peak - d * param, s.c[k], d)
+            if nsl is None:
+                return s.c[k], k
+            sl = nsl
         elif mode == "fixed":
             tp = entry + d * param * abs(entry - sl)
             if (s.h[k] >= tp) if d > 0 else (s.l[k] <= tp):

@@ -1,4 +1,22 @@
 """
+!! E-151 WARNING — THE NUMBERS IN THIS FILE ARE NOT TO BE QUOTED. !!
+
+This file computes its trailing stop inline, from a bar's own extreme, and then
+fills at that level without checking it is still on the reachable side of that
+bar's close. For a long that is a sell-stop above the market: an order that
+cannot exist. The backtest pays itself the bar's own favourable extreme, and the
+tighter the trail the more often it does.
+
+That defect is what made three of the four shipped signals look profitable when
+they are not - see E-151 in JARVIS/state/EXPERIMENTS.md. The correct
+implementation is `engine.trail_level` / `engine.trail_apply`, and
+`python3 JARVIS/tools/check_trails.py` is what found this file.
+
+This script has not been re-run since the fix. Its conclusions are SUSPENDED,
+not withdrawn: they may well survive, but nobody has checked. Import the engine
+functions and re-run it before citing anything here.
+"""
+"""
 E-101 — THE HYBRID. Market on the flip, PLUS a level-limit re-entry in the run.
 
 This is Veer's own design, tested as he described it rather than as a choice

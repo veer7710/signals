@@ -15,11 +15,21 @@
 //  control that keeps the geometry and destroys only the timing.
 //
 //    1  SWEEP          the level is taken by a WICK and price comes back
-//                      2579 trades  65.1% win  +309.5 pts  107.3 control se
-//                      in-sample +0.1241  ->  out of sample +0.0991
-//                      >>> UNCHANGED IN THIS VERSION. Veer: "dont change
-//                      signals that already exist they are good". The engine
-//                      below is lifted from 1.0 line for line.
+//                      4045 trades  53.3% win  +288.6 pts  +0.0713/trade
+//                      t = 14.3, and 65 standard errors above a time-shifted
+//                      control WHICH ITSELF LOSES 193 POINTS - so the money is
+//                      in the level, not in the exit.
+//                      Positive in 6 of 6 instrument/timeframe cells off XAU.
+//                      >>> THE RULES ARE UNCHANGED. Veer: "dont change signals
+//                      that already exist they are good". The engine below is
+//                      lifted from 1.0 line for line.
+//                      >>> THE NUMBERS ARE NOT. This block used to read "2579
+//                      trades 65.1% win +309.5 pts", which was the output of
+//                      the E-151 trail leak - a backtest filling at prices no
+//                      order could rest at. It overstated the win rate by 11.8
+//                      points and the per-trade edge by 68%. The signal is the
+//                      same signal; the old figures were measurement, not
+//                      strategy, and they were wrong.
 //
 //    2  BREAK+RETEST   the level is DISRESPECTED - a bar CLOSES through it -
 //                      then price comes back, holds, and resumes
@@ -139,7 +149,7 @@ obLen    = input.int(3,    "Candles after the OB candle", group = gO, minval = 1
 obThr    = input.float(0.0,"Minimum % move to qualify", group = gO, step = 0.05)
 obMode   = input.string("both", "Order block entry", group = gO,
      options = ["at detection", "on the return", "both"],
-     tooltip = "E-148. AT DETECTION - market, on the bar the block confirms - measured +0.0280/trade on M1 against +0.0163 for waiting for the return, and its out-of-sample is BETTER than its in-sample. ON THE RETURN fires far more often, so it makes more total points. They are different moments and both are positive, so 'both' is the default.")
+     tooltip = "BOTH is kept as the default so the two entries stay visible together, but under E-151 NEITHER of them makes money: at detection is -0.0089 a trade on M1 and on the return -0.0319, and the order block is negative in 6 of 6 cells off XAUUSD. The figures this tooltip used to quote (+0.0280 and +0.0163) came from the trail leak. This setting only does anything when ORDER BLOCK is switched on, which it is not by default, and switching it on costs money.")
 maxOB    = input.int(4,    "Keep this many zones per side", group = gO, minval = 1, maxval = 10)
 keepDead = input.bool(false,"Keep dead zones on the chart", group = gO,
      tooltip = "Off: a zone is removed when price trades through it, because it is no longer a zone. Signals are never removed either way.")
@@ -315,7 +325,6 @@ var int   nShort  = 0
 var float ptsLong = 0.0
 var float ptsShort= 0.0
 var int   nRefused= 0                   // setups the risk cap turned down
-var int   nObSig  = 0                   // order-block returns, counted not traded
 var int   firstT  = 0
 
 // a new confirmed pivot replaces any unfilled setup on that side
@@ -501,8 +510,10 @@ obRiskS  = not na(obBearTop) and not na(obBearBot)
 obUseDet = obMode != "on the return"
 obUseRet = obMode != "at detection"
 // AT DETECTION. The block confirms on THIS bar, so this is the earliest a
-// human or an EA could act - and E-148 measured it at nearly double the
-// return entry per trade on M1, with out-of-sample BETTER than in-sample.
+// human or an EA could act. E-148's claim that it measured nearly double the
+// return entry is WITHDRAWN by E-151: corrected, detection is -0.0089 a trade
+// and the return -0.0319. Both lose. This code stays so the blocks can be
+// DRAWN, which is what Veer asked for and which costs nothing.
 // The marker the eye loves is drawn obp bars back on the block candle, and
 // that price was not knowable when the block formed. This is the honest
 // version of "catch the birth of the move".
@@ -584,8 +595,12 @@ brFillS = useBR and sState == 2 and bar_index > sBar and low <= sTrig
 
 // ======================= ONE POSITION, THREE SOURCES =======================
 // First come, first served, strongest first when two fire on the same bar.
-// Sweep is strongest by measurement (107.3 control se), then break+retest
-// (73.8), then order block (56.8) - so that is the priority order.
+// The priority order is sweep, then break+retest, then order block. Those
+// three control-se figures (107.3 / 73.8 / 56.8) are WITHDRAWN - E-151 showed
+// they were measured on a trail that filled at unreachable prices, and only the
+// sweep survives correction. The ORDER is kept because it is still the right
+// order, and because with the other two off by default nothing else contends
+// for the slot anyway.
 var int   posSrc = 0          // 1 sweep, 2 break+retest, 3 order block
 var float posTgt = na
 
@@ -662,8 +677,39 @@ closedNow = false
 if posDir != 0 and barstate.isconfirmed
     hitStop = posDir > 0 ? low <= posStop : high >= posStop
     aged    = bar_index - posBar >= maxHold
-    if hitStop or aged
-        exitPx  := hitStop ? posStop : close
+
+    // The give-back ratchet, in the SAME ORDER the research does it: the stop
+    // is tested first against the level that was already resting, THEN this
+    // bar's extreme updates the peak, THEN the new level is worked out.
+    //
+    // E-151. That new level comes from THIS bar's high, so it cannot be placed
+    // until this bar has closed. If price has already left it behind, no order
+    // could have been resting there. The reference implementation
+    // (engine.trail_level) treats that as EXIT NOW, at this bar's close - and
+    // an earlier version of this file instead moved the stop to the close and
+    // held the position into the next bar. That is a third model, it fires on
+    // about 40% of trades, and it booked 9.4% per trade MORE than the strategy
+    // this file's header claims to measure. The panel must not be more
+    // optimistic than the backtest that justified the rule.
+    trailOut = false
+    if not hitStop and bar_index > posBar
+        posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
+        runUp = posDir * (posPeak - posEntry)
+        if runUp > 0
+            cand = posEntry + posDir * runUp * (1.0 - giveBack)
+            if posDir > 0 ? cand >= close : cand <= close
+                trailOut := true
+            else
+                posStop := posDir > 0 ? math.max(posStop, cand)
+                                      : math.min(posStop, cand)
+
+    if hitStop or aged or trailOut
+        // A stop does not fill at its price when the bar OPENS past it - it
+        // fills at the open. 15% of exits on M1 gap through, and booking the
+        // stop price for those flattered the book by 9.1 points.
+        gapPx   = posDir > 0 ? (open <= posStop ? open : posStop)
+                             : (open >= posStop ? open : posStop)
+        exitPx  := hitStop ? gapPx : close
         // NET, not gross. The spread once (buy the ask, sell the bid) and the
         // slippage twice (a stop order fills at or worse than its level, both
         // on the way in and on the way out).
@@ -708,23 +754,7 @@ if posDir != 0 and barstate.isconfirmed
         posSrc := 0
         posTgt := na
         closedNow := true
-    else if bar_index > posBar
-        // the give-back ratchet, armed only from the bar AFTER the peak is set
-        posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
-        runUp = posDir * (posPeak - posEntry)
-        if runUp > 0
-            cand = posEntry + posDir * runUp * (1.0 - giveBack)
-            // E-151. The level is derived from THIS bar's extreme, so it can
-            // only exist once this bar has closed. If price has already left it
-            // behind, no stop could have been resting there and the panel must
-            // not book a fill at it - the honest exit is the close. Without
-            // this the panel pays you the previous bar's high, and the tighter
-            // the give-back the more often it does: unclamped, the "best"
-            // give-back ran to the edge of every range tested, which is what a
-            // measurement artefact looks like, not an edge.
-            passed = posDir > 0 ? cand >= close : cand <= close
-            posStop := passed ? close : (posDir > 0 ? math.max(posStop, cand)
-                                                    : math.min(posStop, cand))
+
 
 // ======================= THE LIVE POSITION, DRAWN ==========================
 // One set of objects, created on the fill and moved each bar, deleted on the
@@ -905,7 +935,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 2 + (panelBig ? 5 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 2 + (panelBig ? 7 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -990,6 +1020,16 @@ if barstate.islast and showPanel
         f_row(r, "max drawdown", f_num(-maxDD, "0.0") + "pt", f_ccy(-maxDD), cNeg)
         r += 1
         f_row(r, "refused", str.tostring(nRefused), "stop too wide", cVal)
+        r += 1
+        // CLAUDE.md requires a long/short split on every claim. These four
+        // counters were being accumulated on every trade and displayed
+        // NOWHERE - the required check was computed and thrown away.
+        f_row(r, "long / short",
+                 f_num(ptsLong, "0.0") + " / " + f_num(ptsShort, "0.0") + "pt",
+                 str.tostring(nLong) + "L " + str.tostring(nShort) + "S",
+                 ptsLong >= 0 and ptsShort >= 0 ? cPos : cNeg)
+        r += 1
+        f_row(r, "best trade", f_num(bestPts, "0.0") + "pt", f_ccy(bestPts), cPos)
         r += 1
         f_row(r, "session",
                  inN ? "New York" : inL ? "London" : inA ? "Asia" : "closed",

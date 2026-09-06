@@ -270,10 +270,16 @@ def harness_b():
                 if k == j:
                     continue
                 peak = max(peak, s.h[k]) if tside > 0 else min(peak, s.l[k])
-                up = tside * (peak - entry)
-                if up > 0:
-                    c = entry + tside * up * 0.75
-                    sl = max(sl, c) if tside > 0 else min(sl, c)
+                # E-151. This control kept the leaky trail after the real book
+                # was fixed, because it wrote the give-back as a literal 0.75
+                # and the patch matched "1.0 - give". A control measured under a
+                # different exit from the thing it controls is not a control.
+                # It was inflated by +0.0455/trade, 4.1x its own magnitude.
+                nsl = trail_level(entry, sl, peak, s.c[k], tside, 0.25)
+                if nsl is None:
+                    px_out, kk = s.c[k], k
+                    break
+                sl = nsl
             if px_out is None:
                 kk = min(j + 240, n - 1)
                 px_out = s.c[kk]
