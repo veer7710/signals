@@ -514,3 +514,43 @@ applied to everything that came up in a grep for the give-back trail; this file
 spells it differently, so it did not come up, and `check_trails.py` only scans
 `JARVIS/research/`. **The tool that finds a bug class must be pointed at every
 place that class can live, and for this project that includes the Pine files.**
+
+---
+
+## 2026-09-06 — THE PANEL'S ONE-TRADE RULE WAS DELETING SIGNALS OFF THE CHART
+
+Veer reported this repeatedly and in plain language — *"it hit a level and
+produced no signal"*, *"we missed the clear top tick entries"*, *"where's the
+strategy gone"* — and every time I treated it as a question about the STRATEGY.
+It was a question about the CHART, and he was right.
+
+Every entry condition carried `posDir == 0`:
+
+```pine
+takeSweepB = useSweep and sessOk and fillB and posDir == 0
+...
+plotshape(takeSweepB, "BUY  sweep", ...)
+```
+
+The BUY/SELL marks were drawn from those same variables. **So while the
+simulated position was open — which on M1 is most of the time — a perfectly
+valid setup fired and nothing was drawn.** The panel's one-trade-at-a-time
+accounting rule was silently removing signals from his chart.
+
+**He trades these by hand. He is not limited to one position.** The chart's job
+is to show every setup; the panel's job is to model one account. Those are
+different jobs and they had been welded together.
+
+Fixed: `sig*` fires and is drawn, nothing suppresses it; `take*` is what the
+simulation books, still one at a time. Alerts now fire on the setup rather than
+on what the simulation had room for, and the full panel carries a **"missed
+while busy"** count so the gap is visible instead of hidden.
+
+### The lesson
+**When a user says a signal is missing, check whether it is missing or whether
+it is being hidden.** I re-measured the strategy four times over two days
+against a complaint that was really about a display rule — and the complaint was
+accurate every single time he made it.
+
+There is a second, quieter cost: every screenshot he sent me of "missed entries"
+was evidence I dismissed as a strategy question, when it was a bug report.

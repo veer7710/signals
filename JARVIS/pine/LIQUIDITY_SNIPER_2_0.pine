@@ -867,21 +867,56 @@ if newDay
     wB := 0
     wO := 0
 
-takeSweepB = useSweep and sessOk and fillB and posDir == 0
-takeSweepS = useSweep and sessOk and fillS and posDir == 0
-takeBrB    = brFillB and posDir == 0 and not takeSweepB and not takeSweepS
-takeBrS    = brFillS and posDir == 0 and not takeSweepB and not takeSweepS
-takeObB    = obFillB and posDir == 0 and not takeSweepB and not takeSweepS
+// ============ THE SIGNAL IS NOT THE SIMULATED TRADE ========================
+// THIS WAS A REAL BUG AND IT IS THE ONE VEER KEPT REPORTING: "it hit a level
+// and produced no signal", "we missed the clear top tick entries".
+//
+// Every take* below used to carry `posDir == 0`, and the BUY/SELL marks were
+// drawn from those. So while the simulated position was open - which on M1 is
+// most of the time - a perfectly valid setup fired and NOTHING WAS DRAWN. The
+// panel's one-trade-at-a-time rule was silently deleting signals off the chart.
+//
+// Veer trades these by hand. He is not limited to one position, and the chart's
+// job is to show him every setup. So:
+//     sig*   = the setup fired. DRAWN. Nothing suppresses it.
+//     take*  = the simulation took it. Still one at a time, because the panel
+//              has to model a single account honestly.
+// The panel's "missed while busy" row counts the difference, so the gap between
+// what you see and what the panel books is visible rather than hidden.
+sigSweepB = useSweep and sessOk and fillB
+sigSweepS = useSweep and sessOk and fillS
+sigBrB    = brFillB
+sigBrS    = brFillS
+sigObB    = obFillB
+sigObS    = obFillS
+sigDetB   = obDetB
+sigDetS   = obDetS
+
+anySig = sigSweepB or sigSweepS or sigBrB or sigBrS or sigObB or sigObS
+     or sigDetB or sigDetS
+
+takeSweepB = sigSweepB and posDir == 0
+takeSweepS = sigSweepS and posDir == 0
+takeBrB    = sigBrB and posDir == 0 and not takeSweepB and not takeSweepS
+takeBrS    = sigBrS and posDir == 0 and not takeSweepB and not takeSweepS
+takeObB    = sigObB and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS
-takeObS    = obFillS and posDir == 0 and not takeSweepB and not takeSweepS
+takeObS    = sigObS and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS
-takeDetB   = obDetB and posDir == 0 and not takeSweepB and not takeSweepS
+takeDetB   = sigDetB and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS and not takeObB and not takeObS
-takeDetS   = obDetS and posDir == 0 and not takeSweepB and not takeSweepS
+takeDetS   = sigDetS and posDir == 0 and not takeSweepB and not takeSweepS
      and not takeBrB and not takeBrS and not takeObB and not takeObS
 
 anyBuy  = takeSweepB or takeBrB or takeObB or takeDetB
 anySell = takeSweepS or takeBrS or takeObS or takeDetS
+
+// how many setups the chart showed you that the panel could not book
+var int nMissed = 0
+if newDay
+    nMissed := 0
+if anySig and posDir != 0 and barstate.isconfirmed
+    nMissed += 1
 
 // ---------------------------------------------------------- open a trade ---
 if anyBuy or anySell
@@ -918,21 +953,21 @@ if anyBuy or anySell
     tgtRuler = tgtMode == "N x risk" and tgtR > 0 ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
     posTgt  := tgtMode == "next liquidity level" ? f_nextLevel(posDir, posEntry) : tgtRuler
     // consume the setup that fired, so it cannot fire twice
-    if takeSweepB
+    if sigSweepB
         lvlB := na
         swB  := na
-    if takeSweepS
+    if sigSweepS
         lvlS := na
         swS  := na
-    if takeBrB
+    if sigBrB
         rState := 0
         rLvl := na
-    if takeBrS
+    if sigBrS
         sState := 0
         sLvl := na
-    if takeObB
+    if sigObB
         obBullTop := na
-    if takeObS
+    if sigObS
         obBearBot := na
 
 // ----------------------------------------------------------- the exit ------
@@ -1154,21 +1189,21 @@ plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side level",
 plot(showLvl and posDir == 0 and not na(lvlB) ? lvlB : na, "Buy-side level",
      color = color.new(cBuy, 45), style = plot.style_linebr, linewidth = 1)
 
-plotshape(takeSweepB, "BUY  sweep",  shape.labelup,   location.belowbar,
+plotshape(sigSweepB, "BUY  sweep",  shape.labelup,   location.belowbar,
      color = cBuy,  text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(takeSweepS, "SELL sweep",  shape.labeldown, location.abovebar,
+plotshape(sigSweepS, "SELL sweep",  shape.labeldown, location.abovebar,
      color = cSell, text = "SELL", textcolor = color.white, size = size.tiny)
-plotshape(takeBrB, "BUY  break+retest",  shape.triangleup,   location.belowbar,
+plotshape(sigBrB, "BUY  break+retest",  shape.triangleup,   location.belowbar,
      color = cBuy,  size = size.small)
-plotshape(takeBrS, "SELL break+retest",  shape.triangledown, location.abovebar,
+plotshape(sigBrS, "SELL break+retest",  shape.triangledown, location.abovebar,
      color = cSell, size = size.small)
-plotshape(takeObB, "BUY  order block",  shape.diamond, location.belowbar,
+plotshape(sigObB, "BUY  order block",  shape.diamond, location.belowbar,
      color = cBuy,  size = size.tiny)
-plotshape(takeObS, "SELL order block",  shape.diamond, location.abovebar,
+plotshape(sigObS, "SELL order block",  shape.diamond, location.abovebar,
      color = cSell, size = size.tiny)
-plotshape(takeDetB, "BUY  OB at detection",  shape.circle, location.belowbar,
+plotshape(sigDetB, "BUY  OB at detection",  shape.circle, location.belowbar,
      color = cBuy,  size = size.tiny)
-plotshape(takeDetS, "SELL OB at detection",  shape.circle, location.abovebar,
+plotshape(sigDetS, "SELL OB at detection",  shape.circle, location.abovebar,
      color = cSell, size = size.tiny)
 plotshape(showRefused and tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
      color = color.new(cBuy, 70),  size = size.tiny)
@@ -1203,7 +1238,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 8 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (panelBig ? 9 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1297,6 +1332,13 @@ if barstate.islast and showPanel
         r += 1
         // Volume-pivot blocks silently do nothing on a feed without volume,
         // and "no blocks" looks identical to "no setups". Say which it is.
+        // The gap between what the CHART shows and what the PANEL books. On
+        // M1 the simulation is in a trade most of the time, so most setups
+        // cannot be booked - and that is a fact about one-account simulation,
+        // not about the signals. Veer trades by hand and can take them.
+        f_row(r, "missed while busy", str.tostring(nMissed),
+                 "shown, not booked", nMissed > 0 ? cNeg : cVal)
+        r += 1
         f_row(r, "volume feed", volOk ? "present" : "MISSING",
                  volOk ? "volume blocks work" : "volume blocks cannot fire",
                  volOk ? cVal : cNeg)
@@ -1321,6 +1363,6 @@ plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)
 plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
 plot(atr, "ATR(14)", display = display.status_line)
 
-alertcondition(anyBuy,     "LS BUY",   "Liquidity Sniper BUY")
-alertcondition(anySell,    "LS SELL",  "Liquidity Sniper SELL")
+alertcondition(sigSweepB or sigBrB or sigObB or sigDetB, "LS BUY",  "Liquidity Sniper BUY")
+alertcondition(sigSweepS or sigBrS or sigObS or sigDetS, "LS SELL", "Liquidity Sniper SELL")
 alertcondition(closedNow,  "LS CLOSE", "Liquidity Sniper trade closed")
