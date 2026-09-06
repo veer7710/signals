@@ -46,3 +46,47 @@ repeatedly ("dumb simple to read and follow").
 locally good reason, compounds multiplicatively. Signal count must be measured
 after every change, not assumed. The Signals row on the panel existed and I
 never once looked at what it would read.
+
+---
+
+## 2026-09-06 — THE FIRST HONEST LIVE MEASUREMENT IN THIS PROJECT
+
+Veer ran SUPERTREND SNIPER 5.1 on XAUUSD M1 and photographed the panel. This is
+the first number this project has ever produced from **live current bars with a
+corrected fill model** rather than from 2018 backtest data.
+
+```
+  measured over   31 Aug -> 04 Sep 2026
+  trades                304        62.8 a day
+  win rate            32.6%        99W 205L
+  if traded         -117.1pt       -£92.12
+  avg trade          -0.385pt
+  SYSTEM            -117.1pt       stop / trail / stall, 304 trades
+  FLIP & HOLD        -85.0pt       flip to flip, 304 trades
+  exit adds          -32.1pt
+  cost paid         -103.4pt       -£81.34
+```
+
+### What it says, and it is not what it looks like
+**88% of the entire loss is transaction cost.** Gross, the system is about
+−13.7 points over 304 trades. **It is not losing because its direction is wrong.
+It is losing because it trades 63 times a day on M1 and pays 63 round trips.**
+
+And the exit stack is **actively harmful**: holding flip-to-flip loses 85 points
+where the stop/trail/stall version loses 117. The exits designed to protect the
+trade cost 32 points.
+
+### Why this matters more than any backtest here
+It is 4 days and 304 trades, which is a small sample and cannot settle
+anything on its own. But it is **live, current, real-spread data**, and it
+agrees with what Veer says when he looks at the chart: *"entries are just shit,
+we catch every trend not every volume candle"*. The panel and his eye are saying
+the same thing, which is the first time in this project that has happened.
+
+### The direction it points
+Not "find a better filter". **Trade less.** SuperTrend(7, 1.2) on M1 is a very
+tight band on a fast clock and it flips on noise. The open questions are in
+`st_churn.py`: does widening the multiplier cut churn without losing the trend;
+does the exit stack help at all; does a higher-timeframe direction gate cut
+trades a day - which is exactly what Veer asked for at the start of this project
+and which has never been tested on this system.
