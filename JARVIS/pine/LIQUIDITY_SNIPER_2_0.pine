@@ -234,8 +234,10 @@ htfOn  = input.bool(true, "Show higher-timeframe bias", group = gH)
 htfTf  = input.timeframe("15", "Bias timeframe", group = gH,
      tooltip = "The clock that decides 'with trend'. 15 or 60 on an M1 chart is the ICT/SMC convention: read the direction high, take the entry low.")
 htfLen = input.int(50, "Bias EMA length", group = gH, minval = 2)
-htfDim = input.bool(true, "Dim the against-trend signals", group = gH,
-     tooltip = "On: against-trend setups print as small dots instead of full BUY/SELL labels. They are never removed - a signal that has printed is permanent. Off: everything prints the same.")
+mtfOn  = input.bool(true, "Show the trend stack (M1 / M5 / M15 / H1)", group = gH,
+     tooltip = "Trends NEST. An H1 downtrend is exactly where you look for the M15 buy - the lower clock makes the new trend before the higher one turns. So this shows all four directions at once instead of pretending there is one answer. Read it top down: where the clocks DISAGREE is where the turn is happening.")
+htfDim = input.bool(false, "Dim the against-trend signals", group = gH,
+     tooltip = "OFF by default, and deliberately. Against the higher clock is NOT the same as wrong: an H1 downtrend is where the M15 buy lives, because the lower timeframe makes the new trend first. Turn this on only if you specifically want to trade one direction. Either way a signal that has printed is permanent and is never removed.")
 
 gT = "6 · SESSIONS"
 showSess = input.bool(true, "Show sessions", group = gT)
@@ -318,6 +320,16 @@ htfEma  = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen)[1],
      lookahead = barmerge.lookahead_off)
 htfUp   = not na(htfSrc) and not na(htfEma) and htfSrc > htfEma
 htfDn   = not na(htfSrc) and not na(htfEma) and htfSrc < htfEma
+// The stack. Trends nest: M1 turns before M5, M5 before M15, M15 before H1, and
+// the disagreement between them IS the turn. Read with lookahead_off on the
+// PREVIOUS bar of each clock, the only idiom that cannot repaint.
+b1  = request.security(syminfo.tickerid, "1",  (close > ta.ema(close, htfLen) ? 1 : -1)[1], lookahead = barmerge.lookahead_off)
+b5  = request.security(syminfo.tickerid, "5",  (close > ta.ema(close, htfLen) ? 1 : -1)[1], lookahead = barmerge.lookahead_off)
+b15 = request.security(syminfo.tickerid, "15", (close > ta.ema(close, htfLen) ? 1 : -1)[1], lookahead = barmerge.lookahead_off)
+b60 = request.security(syminfo.tickerid, "60", (close > ta.ema(close, htfLen) ? 1 : -1)[1], lookahead = barmerge.lookahead_off)
+f_arrow(bv) =>
+    na(bv) ? "·" : bv > 0 ? "▲" : "▼"
+
 plot(htfOn and not na(htfEma) ? htfEma : na, "HTF bias",
      color = htfUp ? color.new(cBuy, 55) : color.new(cSell, 55), linewidth = 2)
 ph = ta.pivothigh(high, pvLen, pvLen)
@@ -1395,7 +1407,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 9 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (mtfOn ? 1 : 0) + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 9 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1475,6 +1487,17 @@ if barstate.islast and showPanel
              posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
     r += 1
+    // THE TREND STACK. Veer's own model: "a m15 changes from m5 which changes
+    // from m1" - the lower clock makes the new trend first, so an H1 downtrend
+    // is where the M15 buy lives. Four directions, one row, no interpretation
+    // applied. Where they disagree is where the turn is.
+    if mtfOn
+        f_row(r, "trend stack",
+                 f_arrow(b1) + " " + f_arrow(b5) + " " + f_arrow(b15) + " " + f_arrow(b60),
+                 "M1  M5  M15  H1",
+                 (b1 == b5 and b5 == b15 and b15 == b60)
+                      ? (nz(b1) > 0 ? cPos : cNeg) : cVal)
+        r += 1
     if htfOn
         f_sep(r, "── with the " + htfTf + " bias, or against it ──")
         r += 1

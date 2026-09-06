@@ -628,6 +628,122 @@ CMDS = {"null": cmd_null, "facts": cmd_facts, "grid": cmd_grid,
         "perbook": cmd_perbook, "edge": cmd_edge, "oos": cmd_oos,
         "control": cmd_control, "modern": cmd_modern, "power": cmd_power}
 
+
+
+# ============================================ the control the lead needs
+def welch(a, b):
+    """Does the label SEPARATE? Two-sample Welch t on net points."""
+    na, ma, _ = tstat(a); nb, mb, _ = tstat(b)
+    if na < 2 or nb < 2:
+        return na, nb, 0.0, 0.0
+    va = statistics.variance(a); vb = statistics.variance(b)
+    se = math.sqrt(va / na + vb / nb)
+    return na, nb, ma - mb, ((ma - mb) / se if se > 0 else 0.0)
+
+
+def cmd_separate(ctxs=None):
+    """The discriminator test. The 2x2 tables answer 'is the WITH cell
+    positive'. This answers the question the hypothesis actually asks:
+    'do the trades the label calls WITH-trend BEAT the ones it calls
+    AGAINST'. Welch t on net points, per exec clock, per context."""
+    sm1, spm1 = load_m1()
+    cache, labcache = {}, {}
+    print("=" * 112)
+    print("  DOES THE LABEL SEPARATE? Welch t, WITH-trend minus AGAINST,")
+    print("  net points per trade. Bonferroni over 25 (ctx x exec) cells")
+    print("  needs |t| > 2.87.")
+    print("=" * 112)
+    print(f"  {'ctx':<12}{'exec':<6}{'nWITH':>7}{'WITH/tr':>10}"
+          f"{'nAGST':>7}{'AGST/tr':>10}{'diff':>10}{'Welch t':>9}"
+          f"{'sign?':>10}")
+    for ctxname in (ctxs or CTXORDER):
+        pooled, pb, days, sprd, cache, labcache = run_books(
+            sm1, spm1, ctxname, cache=cache, labcache=labcache)
+        for ex in EXECS:
+            w = [x["net"] for k in ((+1, +1), (-1, -1))
+                 for x in pooled.get((ex,) + k, [])]
+            a = [x["net"] for k in ((+1, -1), (-1, +1))
+                 for x in pooled.get((ex,) + k, [])]
+            if len(w) < 2 or len(a) < 2:
+                continue
+            nw, na, df, t = welch(w, a)
+            mw = sum(w) / nw; ma = sum(a) / na
+            sg = "OPPOSITE" if mw * ma < 0 else "same"
+            print(f"  {ctxname:<12}{ex:<6}{nw:>7}{mw:>+10.4f}"
+                  f"{na:>7}{ma:>+10.4f}{df:>+10.4f}{t:>9.2f}{sg:>10}")
+        print()
+
+
+def cmd_trendctrl(ctxs=None):
+    """THE CONTROL THAT DECIDES THE SLOW-CLOCK LEAD.
+
+    The exit-free table shows big positive with-trend forward returns on M30
+    and H1. But a with-trend forward return is also what you get from the
+    TREND LABEL ALONE, with no sweep at all, in a market that trended. So:
+    for every exec bar carrying label L, take direction d = L and measure the
+    same forward return. That is the label's own drift, computed on tens of
+    thousands of bars so its error is negligible. The sweep only adds
+    something if the real cell beats it by more than the real cell's own
+    standard error.
+    """
+    sm1, spm1 = load_m1()
+    HZ = (1, 5, 20, 50)
+    cache, labcache = {}, {}
+    for ctxname in (ctxs or CTXORDER):
+        agg, drift = {}, {}
+        for (htf, ltf) in GRIDCELLS:
+            key = (htf, ltf)
+            if key not in cache:
+                cache[key] = build(sm1, spm1, ltf, htf)
+            sl, SP, A, o, nsw, nlv = cache[key]
+            lk = (ltf, CTXOF[ltf], ctxname)
+            if lk not in labcache:
+                labcache[lk] = labels_for(sm1, spm1, ltf, CTXOF[ltf], ctxname)
+            lab = labcache[lk]
+            for (d, L), sub in split_orders(o["return"], lab).items():
+                rows, fills, gt = forward(sl, A, sub, horizons=HZ)
+                for h in HZ:
+                    agg.setdefault((ltf, d, L, h), []).extend(rows[h])
+            if ltf not in drift:
+                dd = {}
+                for h in HZ:
+                    for L in (-1, 0, 1):
+                        v = [sl.c[j + h] - sl.c[j] for j in range(60, len(sl) - h)
+                             if lab[j] == L]
+                        nn, m, t = tstat(v)
+                        dd[(L, h)] = (nn, m)
+                drift[ltf] = dd
+        print("#" * 118)
+        print(f"#  LABEL-DRIFT CONTROL, ctx={ctxname}. 'sweep-drift' is the "
+              f"sweep's own contribution;")
+        print(f"#  'se' is that difference in the real cell's own standard "
+              f"errors. no cost, no exit.")
+        print("#" * 118)
+        for ex in EXECS:
+            if not any(k[0] == ex for k in agg):
+                continue
+            print(f"  --- exec {ex} ---")
+            print(f"  {'cell':<26}{'H':>4}{'n':>6}{'sweep':>10}{'drift':>10}"
+                  f"{'sweep-drift':>13}{'se':>8}{'nDrift':>9}")
+            for (lbl, d, L) in CELLDEF:
+                for h in HZ:
+                    v = agg.get((ex, d, L, h), [])
+                    if len(v) < 20:
+                        continue
+                    n, m, t = tstat(v)
+                    sd = statistics.stdev(v)
+                    nn, md = drift[ex][(L, h)]
+                    md = d * md
+                    se = (m - md) / (sd / math.sqrt(n)) if sd > 0 else 0.0
+                    print(f"  {lbl:<26}{h:>4}{n:>6}{m:>+10.4f}{md:>+10.4f}"
+                          f"{m - md:>+13.4f}{se:>8.2f}{nn:>9}")
+            print()
+
+
+CMDS["separate"] = cmd_separate
+CMDS["trendctrl"] = cmd_trendctrl
+
+
 if __name__ == "__main__":
     c = sys.argv[1] if len(sys.argv) > 1 else "facts"
     CMDS[c](*sys.argv[2:])

@@ -65,6 +65,7 @@ PINE_ONLY = {
     "htfLen": "bias EMA length, drawing and panel only",
     "htfDim": "how against-trend signals are drawn",
     "showLegs": "the leg scoreboard - drawing and panel only",
+    "mtfOn": "the trend stack row - panel only",
     "legMin": "smallest leg to draw, drawing only",
     "legLbl": "leg size labels, drawing only",
     "obRule": "which block rule to DRAW - the EA draws nothing",
