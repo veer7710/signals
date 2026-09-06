@@ -1,62 +1,66 @@
 # NEXT SESSION — start here
 
-Read `CLAUDE.md`, then `JARVIS/state/SESSION_STATE.md` (2026-09-06), then this.
+Read `CLAUDE.md`, then `JARVIS/state/SESSION_STATE.md`, then E-165 in
+`EXPERIMENTS.md`, then the last two entries in `FAILURE_LOG.md`.
 
-## Where things stand
+## The situation, stated plainly
 
-E-151 found that every give-back trail in the repo was filling at prices no
-order could rest at. Corrected, **only the liquidity SWEEP makes money**; the
-break+retest and both order-block entries are negative and are now OFF by
-default in both the Pine and the EA. The sweep survived hard: +0.0713/trade on
-M1 (n=4045, t=14.3), 65 se above a control that itself loses, positive in 6 of 6
-cells off XAUUSD. The 25% give-back exit was re-tested four ways and stays.
-23 live-safety defects in the two EAs are fixed (`FAILURE_LOG.md`).
+**There is no validated strategy in this repository.** Two fill bugs, found on
+the same day, removed all four signals:
+
+- **E-151** — the exit trail filled at prices no order could rest at. Killed
+  break+retest and both order-block entries.
+- **E-165** — the ENTRY booked the level on bars that had already opened past
+  it, on 75% of setups. Killed the sweep, which was the only one left.
+  Corrected: −0.0103 a trade on M1 (t −1.85); on the subset the EA can actually
+  execute, −0.0030 (t −0.37).
+
+The null is the thing to hold onto: **the old code made +0.0226 a trade at t = 5
+on a driftless random walk.** Every impressive number this repo produced came
+from that.
 
 ## Do these, in order
 
-1. **Read any agent findings not yet actioned.** An adversarial review of the
-   sweep and a code review of the Pine + research diff were running when the
-   session ended. Their conclusions may not be in `EXPERIMENTS.md` yet — check
-   `git log` against what the files say.
+1. **RUN THE NULL FIRST, ALWAYS.** `engine.entry_fill` and `engine.trail_level`
+   are now the only fill models and both have regression tests. Before any new
+   idea gets a control, a walk-forward or a parameter sweep, put it on a
+   driftless random walk. If it makes money there, stop.
 
-2. **The blocking item, and it cannot be done from here: a demo forward test.**
-   Everything in this repo is 2018 gold, backtested. E-155 measured that the M1
-   sweep is positive at 0.05 points of slippage and NEGATIVE at 0.10. Nothing
-   available in this environment can say which one is real. Until Veer runs
-   `SweepSniper.mq5` on a demo account and the log reports actual stop-fill
-   slippage, no live or funded claim can be upgraded past SUPPORTED.
-   The EA prints what is needed; it refuses to start on a live account
-   (`InpDemoOnly = true`) and that default must not be changed for him.
+2. **Re-measure what is left, honestly.** Every result from E-134 to E-164 used
+   the broken entry and is withdrawn. `combined.candidates()` is fixed at the
+   source, so re-running is now the honest thing rather than a rebuild. Expect
+   most of it to come back flat. That is fine — flat and known beats positive
+   and false.
 
-3. **Read PU Prime's actual symbol properties off the terminal.** The EAs now
-   read `SYMBOL_TRADE_FREEZE_LEVEL`, `SYMBOL_TRADE_STOPS_LEVEL`,
-   `SYMBOL_VOLUME_MIN/STEP`, `SYMBOL_TRADE_TICK_SIZE` and `OrderCalcMargin`
-   instead of assuming them, but which of them bite is only visible on a live
-   chart. Have Veer paste the OnInit block from the Experts log.
+3. **Do not restart from the sweep.** It has now failed twice under correction.
+   If liquidity sweeps are to be revisited, it needs a different entry
+   mechanism, because the wick that defines the setup is precisely what makes
+   the level unfillable.
 
-4. **Neither EA has been compiled.** `check_mq5.py` says so itself on every run.
-   MetaEditor F7 is the only thing that can confirm the ~23 patches build.
+4. **SuperTrend (E-158) is unaffected** — it does not use this entry. It is
+   still not funded-account material (it fails 3 of 7 firms on consistency, best
+   day 42.8–78.4% of profit), but it is the only thing here that has not been
+   disproven. That is where to look next.
 
-5. **The prop-firm day boundary is unverified** (F16). `TimeCurrent()` is broker
-   server time, not UTC, and a mismatch can put two of the EA's 2.5% days inside
-   one of the firm's 5% days. This needs the firm's rule book, not a guess.
+5. **Nothing goes on a live or funded account.** `InpDemoOnly = true` in
+   `SweepSniper.mq5` and it must stay true. The EA now prints the disproof on
+   startup.
 
-## Standing rules that were nearly broken this session
+## The one measurement that could change any of this
 
-- **A parameter monotone to the edge of the range you tested is a leak until
-  proven otherwise.** Extend the range. If it keeps running, look at the fill,
-  not the parameter. This is how E-151 was found.
-- **A trade call whose return value is discarded is a bug, without exception.**
-- **An out-of-sample test whose winner was chosen using the out-of-sample half
-  is not an out-of-sample test.** E-150 made exactly that error.
-- **A rule that wins on 25 unseen trades has not won anything.** Minimum 100.
+A demo run logging **requested entry price against actual fill price, per
+trade**. If real fills come back at the level on setups where price has already
+left it, the correction is wrong. Nothing short of measured fills should put
+money on this.
 
-## What NOT to do
+## Standing rules earned today
 
-- Do not re-enable break+retest or the order block as ENTRIES without new
-  evidence. Eight exit variants were tested on them; all eight failed.
-- Do not change the 25% give-back. It has 56 firm/risk/clock cells behind it.
-- Do not remove the order block DRAWING. Veer asked for it, and it is real
-  structure — it just does not pay on its own.
-- Do not tell Veer the system is ready for funded money. It has never been
-  forward tested and he must hear that plainly every time he asks.
+- **Run the null before anything else.** A t-statistic of 14 on a simple rule is
+  a symptom, not a triumph.
+- **A fill correction is a signal to re-audit the whole trade** — entry, stop,
+  exit, cost — not a repair to one line.
+- **When the EA and the backtest disagree, the disagreement IS the finding.**
+  They disagreed about 75% of all trades for months and nothing compared them.
+- **An out-of-sample test whose winner was chosen on the out-of-sample half is
+  not one.** A rule that wins on 25 unseen trades has won nothing; minimum 100.
+- **A parameter monotone to the edge of its tested range is a leak.**

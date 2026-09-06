@@ -4,9 +4,18 @@ Branch: `claude/trading-ea-pine-scripts-xv4m8q`.
 
 ## What this session found, in one line
 
-**A measurement bug was making three of the four shipped signals look
-profitable. They are not. The sweep is the strategy, and it survived the
-correction intact.**
+**Two measurement bugs were making all four shipped signals look profitable.
+None of them are. There is no strategy here right now.**
+
+E-151 killed three of them in the morning. E-165 killed the fourth — the sweep —
+in the evening, and it was the SAME defect one step earlier in the same trade:
+the entry booked a price the market had already left, on 75% of setups. The
+proof is a null: the backtest code extracts +0.0226 a trade at t = 5 from a
+driftless random walk. Nothing real does that.
+
+**Everything below this line was written before E-165 and describes a strategy
+that does not exist.** It is kept because the METHOD in it is sound and the exit
+work stands on its own — it was simply being applied to a phantom.
 
 ## E-151 — the bug
 
