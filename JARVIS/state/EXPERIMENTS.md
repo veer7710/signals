@@ -7370,3 +7370,99 @@ cannot be extended, which is exactly the E-151 leak signature. The defence is
 that the null AND the matched control were both run at that exact setting and
 both are clean. It could still be a bid-ask bounce artefact of the vendor's bar
 construction; there was no tick data to check.
+
+---
+
+## E-169 — HTF LEVELS BUILT PROPERLY, AND THE COST THEORY TESTED. BOTH ANSWERED.
+
+Two structural gaps, both attacked properly for the first time. **The null is
+clean** — pooled over 5 seeds × 4 cells, gross −0.0182/trade (t −3.15, i.e.
+slightly pessimistic) and net −0.2494, which is **1.08× the measured spread**,
+exactly what a martingale must pay. `0 of 10,539` null fills and `0 of 986` real
+fills were ever better than their own limit price. The resampler reproduces the
+vendor's own M5/M15 files bar-for-bar (31417/31419 and 10474/10475).
+
+### GAP 2 — the arithmetic is CONFIRMED, the conclusion is REJECTED
+```
+   TF     medATR   spread/ATR          TF      spread/ATR
+   M1     0.2463     0.9315            M30       0.1353
+   M5     0.6122     0.3748             H1       0.0928
+  M15     1.1440     0.2005             H4       0.0470   (modern gold: 0.029)
+```
+**Cost really is 10× more affordable on H1 than M1, and 63× on modern H4.** That
+half was right.
+
+**But the gross edge is ≈ 0 on every clock.** Across all 50 books, gross/ATR
+sits in a band of roughly −0.17 to +0.06 — it does not scale with the clock:
+- M1 needs gross/ATR ≥ 0.932, has ≈ 0 → **~20× short**
+- H1 needs gross/ATR ≥ 0.092, has ≈ +0.025 → **~3.7× short**
+
+**The slower clock closes the gap from 20× to 3×. It never crosses 1×.** No book
+with n ≥ 100 anywhere in the 2018 grid has cost/gross below **243%**. That single
+number is the answer to Gap 2: *it was never a cost problem, it is an edge
+problem.*
+
+### GAP 1 — the architecture was built, and it does not rescue the sweep
+Levels from M15/H1/Daily, execution on M1/M5/M15/M30/H1, entry a genuine LIMIT
+(after a sweep of a low price has closed back above, so a buy limit at the level
+rests below the market — placeable, which is exactly what E-165 killed the
+stop-order version of).
+
+**All 50 books are net-negative.** The four positive ones all have n < 46 and sit
++1.34 to +1.98 sd above a matched drift control — none reaches 2. Walk-forward:
+the three best-populated books are **0 of 6 folds**. Halves flip sign constantly
+(H1/H1 return: −0.2946 then +0.4005). Best of 81 first-half parameter variants,
+tested unseen: +0.5182/tr in sample → **−0.1752/tr out**, and long-only in sample.
+
+**Verdict on Gap 1: moving the level to a higher timeframe is a real structural
+correction and was worth building. It changes the numbers, not the sign.**
+
+### The five entries
+| entry | verdict |
+|---|---|
+| sweep → LTF return | **REJECTED** on M1/M5/M15; UNPROVEN on M30/H1 (underpowered); REJECTED on modern H1 (2.3–2.9 sd *below* control) |
+| **sweep → FVG** (never tested here before) | **REJECTED** on M1/M5/M15; UNPROVEN above — every book under 55 trades |
+| sweep → OTE 62–79% | **REJECTED.** Negative in 9 of 10 cells and all 6 modern; worst trade **−340.96 points** |
+| sweep + HTF order-block confluence | **UNPROVEN** — and the most interesting result here, see below |
+| break → retest | **REJECTED** on 2018; the modern positive is **DISPROVEN as edge** |
+
+**The break+retest "winner" is beta, not edge:** on modern gold D1/H4 it makes
++343.0 net, t 1.10 — but **+341.8 from longs against +1.2 from shorts, in a
+market that rose 2,129 points**, and the identical rule loses 368.2 on US500.
+
+**The order-block filter is the one thing that separates:** on 2018 the trades it
+allows do beat the ones it refuses by +0.1017 a trade (Welch t ≈ 1.96, 9 of 10
+cells same sign). But **the allowed trades still lose 0.158 a trade**, and on the
+2024-26 sample the separation **reverses sign**. It turns a losing book into a
+less-losing book, on one sample.
+
+### THE FINDING THAT MATTERS MOST — WE ARE FADING THE WRONG WAY
+Exit-free diagnostic: fill every order, no gate, no stop, no cost, and measure
+the raw directional move H bars later.
+```
+  return entry, pooled over all level timeframes
+    exec   fills          H=1            H=5           H=20
+      M5     913  -0.098(-3.49)  -0.092(-2.05)  -0.117(-1.49)
+     M15    1115  -0.071(-1.61)  -0.209(-2.77)  -0.341(-2.73)
+```
+**After a sweep, price CONTINUES more than it reverses.** The fade is
+systematically on the wrong side of the move. Reversed and costed, that is
++0.1112 a trade on the full sample — but **t 0.89**, and it decays across halves
+(+0.184 → +0.036). The null on that exact construct is clean.
+
+**UNPROVEN, and it was the most extreme of 125 cells**, so it is a lead and not
+a result. But it is the first thing in this project pointing at a direction we
+have never built: **the sweep as a CONTINUATION signal, not a reversal one.**
+
+### Power, stated plainly
+Smallest net edge resolvable at t=2, against a 0.229 spread: M15/M1 **0.0281**
+and M15/M5 **0.0457** (well powered — the negatives there are evidence);
+H1/M30 **0.287**, H1/H1 **0.402**, D1/H1 **0.736** (resolution EXCEEDS the
+spread — **those negatives are "no information", not evidence of absence**).
+An independent modern sample (GOLD_1h, 13,725 bars, 2024-04→2026-08) was brought
+in for that reason; its cost is ASSUMED and swept 0.10–0.80 with stable rankings.
+
+### Multiple comparisons, accounted
+80 primary books, 81 parameter variants, 300 exit-free cells, 125 pooled cells,
+100 half-splits, ~80 folds. Bonferroni on the primary books needs |t| > 3.2.
+**The highest t on any positive book anywhere is 1.66, in sample, on n=42.**
