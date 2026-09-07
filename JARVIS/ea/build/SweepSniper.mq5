@@ -106,6 +106,14 @@
 #property version   "2.00"
 #property strict
 
+//==================== FORWARD DECLARATIONS =========================
+// MQL5 needs a function DECLARED before it is called. Each of these is
+// defined further down the file than its first call, which is a compile
+// error, not a style point - check_mq5.py now catches the whole class.
+double ATR();
+bool   InOverlap();
+
+
 #include <Trade/Trade.mqh>
 CTrade trade;
 
@@ -211,6 +219,8 @@ input long   InpTrackMagic2   = 880041; // ZoneSniper, if you run it too
 input string InpTrackLabel2   = "ZONE  st+liq";
 input long   InpTrackMagic3   = 770001; // SuperTrendSniper
 input string InpTrackLabel3   = "SUPERTREND";
+input long   InpTrackMagic4  = 770069;  // LIQUIDITY, so ONE box shows every EA
+input string InpTrackLabel4  = "LIQUIDITY";
 
 //==================== STATE ========================================
 // One live setup per side. A swing HIGH is sell-side liquidity: the sweep runs
@@ -1397,6 +1407,7 @@ int OnInit()
            corner, InpBoxX, InpBoxY, "SWEEP  liq");
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
+   if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
 
    PrintFormat("[SS] === SWEEP SNIPER %s === pivot %d, sweep %.2f ATR, wick <= %.3f, "
                "stop %.2f ATR past the extreme, RISK CAP %.2f ATR, give back %.0f%%",

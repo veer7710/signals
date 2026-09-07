@@ -501,6 +501,10 @@ void PB_Draw()
    // (PB_Scan), which is the midnight his account rolls over on.
    if(g_pb.compact)
    {
+      // Veer: "make one massive profit box's and show pnl per ea so i can just
+      // screenshot that". Every EA now registers all four magics, so this block
+      // is the screenshot: one row per EA, today's points and trade count, on
+      // whichever chart he happens to be looking at.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
       g_pbMaxRows = 7 + extra;
 

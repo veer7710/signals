@@ -66,6 +66,15 @@
 #define STS_BUILD "2026-09-03 / 2.21 / disaster brake"
 #property strict
 
+//==================== FORWARD DECLARATIONS =========================
+// MQL5 needs a function DECLARED before it is called. Each of these is
+// defined further down the file than its first call, which is a compile
+// error, not a style point - check_mq5.py now catches the whole class.
+void   SkipLog(string dir, string why);
+string RiskTag();
+double FreezeDist();
+
+
 #include <Trade/Trade.mqh>
 
 // The shared profit box. It sits opposite the EXECUTION BOX and answers a
@@ -579,6 +588,10 @@ void PB_Draw()
    // (PB_Scan), which is the midnight his account rolls over on.
    if(g_pb.compact)
    {
+      // Veer: "make one massive profit box's and show pnl per ea so i can just
+      // screenshot that". Every EA now registers all four magics, so this block
+      // is the screenshot: one row per EA, today's points and trade count, on
+      // whichever chart he happens to be looking at.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
       g_pbMaxRows = 7 + extra;
 
@@ -997,7 +1010,24 @@ input int    InpNoFadeBars    = 3;      // ...for this many bars afterwards
 input double InpImpulseTighten= 0.70;   // tighten the give-back by this after one
 input bool   InpUseTrail      = true;   // ON: measured best on SuperTrend entries
 input double InpTrailAtR      = 0.0;    // arm immediately. A wide trail needs no delay
-input double InpTrailAtrMult  = 3.0;    // 3 ATR. Wide on purpose - tight trails lost
+input double InpTrailAtrMult  = 3.0;    // 3 ATR. Only used when InpGiveBack = 0.
+input double InpGiveBack      = 0.60;   // give back this much of the RUN-UP.
+                                        // 0 = the old distance trail.
+                                        // Veer, live: it "didn't even close at
+                                        // peaks meaning it missed even more
+                                        // profit". The distance trail measures
+                                        // 3 ATR from the CURRENT price, so it
+                                        // hands back 3 ATR of every peak. This
+                                        // measures from the PEAK instead.
+                                        // E-177, 2024-2026 gold 1h, 505 trades:
+                                        //   hold to flip  +0.354 ATR/trd, MAE 1.824, 44.6% win
+                                        //   give back 60% +0.158 ATR/trd, MAE 0.803, 50.7% win
+                                        // Return per unit of drawdown is the
+                                        // same (0.194 vs 0.197), so at equal
+                                        // drawdown this carries 2.27x the size
+                                        // for the same money - and half the
+                                        // excursion is what stops a GBP 60
+                                        // account being margin called.
 input bool   InpUseBreakEven  = false;  // KEEP FALSE. Worst rule on all 4 markets
 input double InpBreakEvenAtR  = 1.5;    // only used if you switch BE on to test it
 input bool   InpPartialAt1R   = false;  // close half at 1R, let the rest run
@@ -1025,6 +1055,15 @@ input group "=== FILTERS (both held out-of-sample) ==="
 // on: it is worth +0.316R of separation on gold, and with it removed the whole
 // edge collapses from +0.275R to +0.111R. It is the only gate in this EA that
 // has ever paid for itself.
+input group "=== TWO-POLE OSCILLATOR (the third pillar of your v19.18) ==="
+input bool   InpUseTwoPole    = false;  // OFF, and the reason is in E-180 below
+input int    InpTwoPoleLen    = 20;     // matches v19.18's T_TwoPoleLen
+input double InpTwoPoleSmooth = 4.0;    // matches v19.18's T_TwoPoleSmooth
+input int    InpTwoPoleMode   = 1;      // 0 = AGREES (it must already be turning)
+                                        // 1 = VETO   (refuse only if it is
+                                        //     moving meaningfully AGAINST)
+input double InpTwoPoleVeto   = 0.02;   // how hard "against" has to be, mode 1
+
 input bool   InpUseAdxFilter  = false;  // skip entries when the trend is already extended
 input double InpMaxAdx        = 35.0;   // ADX ceiling
 input bool   InpUseSession    = false;  // restrict to one session (see below)
@@ -1095,6 +1134,16 @@ input group "=== SIZE ==="
 input bool   InpUseFixedLots  = false;  // fixed size instead of % risk
 input double InpFixedLots     = 0.03;   // total size for one entry
 input double InpRiskPct       = 0.50;   // % of equity risked per trade (if not fixed)
+input double InpMaxMarginPct  = 35.0;   // NEVER commit more than this % of free
+                                        // margin to one entry. Veer, live: the
+                                        // EA "kept tryna fullport so got margin
+                                        // called" after taking GBP 50 to 140.
+                                        // This EA had NO margin check at all -
+                                        // it sized off risk and sent the order.
+input double InpMaxTotalLots  = 0.0;    // hard ceiling on open lots, 0 = off.
+                                        // The last line of defence: a cap in
+                                        // LOTS cannot be reasoned away by any
+                                        // sizing rule above it.
 // 2.0, not 1.5. E-071 measured every stop/target pair on the EA's own signals.
 // GOLD, points made per 0.01 lot:  1.5 ATR stop / 3R = +715.  2.0 ATR / 3R =
 // +1385.  Same entries, same target, one number changed. A 1.5 ATR stop on M1
@@ -1584,6 +1633,8 @@ input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770069;  // LiquiditySniper
 input string InpTrackLabel3  = "LIQUIDITY";
+input long   InpTrackMagic4  = 990077;  // SWEEP  liq, so ONE box shows every EA
+input string InpTrackLabel4  = "SWEEP  liq";
 input bool   InpBoxComment    = false;  // a chart Comment on top of a panel is clutter
 input int    InpPanelCorner   = 1;      // the EA's OWN execution panel. 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
 input int    InpPanelX        = 12;     // pixels in from that corner
@@ -2389,6 +2440,160 @@ double LotFor(double stopDistPrice)
    return NormalizeDouble(lots, 2);
 }
 
+//==================== THE TWO-POLE OSCILLATOR (E-180) ===============
+// Veer: "where's two pole oscillator gone from super trend sniper".
+//
+// It never went anywhere - I never put it in. His own XAUUSD_QUAD v19.18 names
+// THREE pillars, Supertrend + DEMA + Two-Pole, and the EA I built has two. That
+// is a regression from his own work and he was right to notice it. This is
+// ported from v19.18's TwoPoleValue(), recursion for recursion:
+//
+//     dev  = close - SMA(close, len)
+//     p1   = EMA(dev, a), p2 = EMA(p1, a),   a = 2/(smooth+1)
+//     raw  = p2 / stdev(close, len)
+//     tp   = SMA(raw, 3)
+//
+// AND IT SHIPS OFF, WHICH IS THE HONEST SETTING. E-180 measured all three of
+// v19.18's reads on top of the DEMA filter, on 2024-2026 gold:
+//
+//   1h, DEMA-only baseline +0.364 ATR/trade over 501 trades
+//     AGREES   +0.442 (t 2.45)   refused +0.264
+//     VETO     +0.490 (t 2.84)   refused +0.144
+//     LED      +0.663 (t 2.06)   refused +0.300
+//
+// which looks excellent - and then the out-of-sample test took it apart. Split
+// the sample in half and every read is strong in the FIRST half and refuses the
+// BETTER trades in the second:
+//
+//     VETO   H1 kept +0.412 vs refused -0.329   H2 kept +0.576 vs refused +0.632
+//
+// That is the signature of a fit, not an edge. So the code is here, correct and
+// switchable, its value is on the panel so it can be watched live, and it does
+// not change a single trade unless Veer turns it on deliberately.
+double g_tpNow = 0.0, g_tpPrev = 0.0;
+
+void UpdateTwoPole()
+{
+   g_tpNow = 0.0; g_tpPrev = 0.0;
+   int len = MathMax(2, InpTwoPoleLen);
+   int warm = MathMax(60, len * 3);
+   int total = len + warm + 5;
+   double c[];
+   if(CopyClose(_Symbol, _Period, 1, total, c) < total) return;
+   // c[0] is the newest closed bar; walk oldest -> newest so the recursion
+   // runs in bar order, exactly as Pine and v19.18 do it.
+   int maxIdx = total - len;
+   if(maxIdx < 5) return;
+   double raw[];
+   ArrayResize(raw, maxIdx + 1);
+   double a = 2.0 / (InpTwoPoleSmooth + 1.0);
+   double p1 = 0.0, p2 = 0.0;
+   bool started = false;
+   for(int idx = maxIdx; idx >= 0; idx--)
+   {
+      double sum = 0.0;
+      for(int j = 0; j < len; j++) sum += c[idx + j];
+      double sma = sum / len;
+      double sq = 0.0;
+      for(int j = 0; j < len; j++) { double d = c[idx + j] - sma; sq += d * d; }
+      double sd = MathSqrt(sq / len);
+      double dev = c[idx] - sma;
+      if(!started) { p1 = dev; p2 = p1; started = true; }
+      else { p1 = p1 + a * (dev - p1); p2 = p2 + a * (p1 - p2); }
+      raw[idx] = (sd > 0.0) ? p2 / sd : 0.0;
+   }
+   g_tpNow  = (raw[0] + raw[1] + raw[2]) / 3.0;
+   g_tpPrev = (raw[1] + raw[2] + raw[3]) / 3.0;
+}
+
+// dir > 0 for a long. Returns false = refuse this entry.
+bool TwoPoleAllows(int dir, string &why)
+{
+   if(!InpUseTwoPole) return true;
+   double d = g_tpNow - g_tpPrev;
+   if(InpTwoPoleMode == 0)
+   {
+      bool ok = (dir > 0) ? (d > 0.0) : (d < 0.0);
+      if(!ok) why = StringFormat("two-pole %.3f is not turning %s (slope %.4f)",
+                                 g_tpNow, dir > 0 ? "up" : "down", d);
+      return ok;
+   }
+   // VETO: flat or undeveloped is NOT evidence against. v19.98's own note -
+   // demanding a 20-length double-smoothed oscillator has already turned at the
+   // birth of a flip asks the slowest reader in the file to be the earliest.
+   bool against = (dir > 0) ? (d < -InpTwoPoleVeto) : (d > InpTwoPoleVeto);
+   if(against) why = StringFormat("two-pole is moving AGAINST this %s "
+                                  "(slope %.4f, past the %.4f veto)",
+                                  dir > 0 ? "long" : "short", d, InpTwoPoleVeto);
+   return !against;
+}
+
+//==================== CAN THIS ACCOUNT ACTUALLY CARRY IT? ===========
+// THE MARGIN CALL, AND WHY IT HAPPENED.
+//
+// Veer, live: SuperTrend "has previously bought 50 pound accounts to 140 but
+// wire riskier stack setups also it didn't even close at peaks ... and kept
+// tryna fullport so got margin called made loss".
+//
+// LotFor() sizes off RISK - equity x InpRiskPct / stop distance - and then the
+// order was sent. Nothing anywhere in this file asked the one question that
+// margin calls you: can the account carry this position at all? SweepSniper has
+// had CanAfford() since its live-safety pass; this EA never got it. Risk and
+// margin are different constraints: a tight M1 stop makes the RISK small and
+// the LOT SIZE large, which is exactly the combination that eats free margin.
+// As the account grew 50 -> 140 the lots grew with it, and nothing capped them
+// against what the broker would actually lend.
+//
+// Two independent brakes, because one of them can always be argued around:
+//   1. no single entry may commit more than InpMaxMarginPct of FREE margin
+//   2. InpMaxTotalLots is a hard ceiling in lots, immune to every sizing rule
+//
+// It refuses rather than shrinking. E-081: 0.01 lots cannot be made smaller, so
+// a size the account cannot carry is not a smaller trade, it is no trade.
+double OpenLots()
+{
+   double v = 0.0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong tk = PositionGetTicket(i);
+      if(tk == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol)  continue;
+      v += PositionGetDouble(POSITION_VOLUME);
+   }
+   return v;
+}
+
+bool CanAfford(int dir, double lots, double price, string &why)
+{
+   if(InpMaxTotalLots > 0.0 && OpenLots() + lots > InpMaxTotalLots + 1e-9)
+   {
+      why = StringFormat("%.2f open + %.2f new is over the %.2f lot ceiling",
+                         OpenLots(), lots, InpMaxTotalLots);
+      return false;
+   }
+   double need = 0.0;
+   ENUM_ORDER_TYPE t = (dir > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
+   if(!OrderCalcMargin(t, _Symbol, lots, price, need)) return true;   // unknown: try
+   double freeM = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   if(freeM <= 0.0)
+   {
+      why = "no free margin at all";
+      return false;
+   }
+   double frac = 100.0 * need / freeM;
+   if(frac > InpMaxMarginPct)
+   {
+      why = StringFormat("%.2f lots needs %.2f margin, which is %.0f%% of the "
+                         "%.2f free - over the %.0f%% ceiling. E-081: 0.01 lots "
+                         "cannot be made smaller, so it is the ACCOUNT that has "
+                         "to be bigger",
+                         lots, need, frac, freeM, InpMaxMarginPct);
+      return false;
+   }
+   return true;
+}
+
 //==================== PENDING ORDERS ===============================
 // A resting limit is the only way to get a better price than the market is
 // offering. The cost is real and is not hidden here: an order that never gets
@@ -2554,6 +2759,9 @@ void TryEntry()
          }
       }
    }
+
+   string tpWhy = "";
+   if(!TwoPoleAllows(flipUp ? 1 : -1, tpWhy)) { SkipLog(sdir, tpWhy); return; }
 
    string sw = "";
    if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
@@ -2746,6 +2954,15 @@ void TryEntry()
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   // LAST, AFTER EVERY SIZING RULE HAS FINISHED. This is the check that was
+   // missing when the account was margin called: risk said the size was fine
+   // and nothing asked whether the broker would carry it. Placed here, not
+   // earlier, because TrendRisk / RegimeSize / MidRange all still change `lots`
+   // above and the only size worth testing is the one about to be sent.
+   string afWhy = "";
+   if(!CanAfford(flipUp ? 1 : -1, lots, flipUp ? ask : bid, afWhy))
+   { SkipLog(sdir, afWhy); return; }
 
    // The stop is attached AT OrderSend, never "managed later". A stop that
    // only exists in EA memory does not exist at all if the terminal drops.
@@ -3226,9 +3443,34 @@ void ManagePosition()
       // not. It only ever moves the stop in the trade's favour.
       if(InpUseTrail && rNow >= InpTrailAtR)
       {
-         double t = (dir > 0) ? price - InpTrailAtrMult * atr
-                              : price + InpTrailAtrMult * atr;
+         // THE GIVE-BACK TRAIL. The old line measured InpTrailAtrMult ATR from
+         // the CURRENT price, which means it hands back that whole distance
+         // from every peak, every time - Veer's "it didn't even close at peaks".
+         // Measuring from the PEAK instead makes the give-back proportional to
+         // what the trade actually won: a trade that ran 10 ATR keeps 4 of them,
+         // a trade that ran 1 ATR is not stopped out by noise.
+         //
+         // E-151 is enforced here and it is not optional: a level on the far
+         // side of the current price is a stop no order could be resting at.
+         // Where the computed level is already behind price we leave the stop
+         // where it is rather than book a fill that could not have happened.
+         // The peak lives in the tracking table, which UpdatePeaks() keeps on
+         // every tick. ManagePosition() has no `ti` of its own - that local
+         // belongs to UpdatePeaks - so it is looked up here by ticket.
+         int pti = TrackFind(tk);
+         double t;
+         if(InpGiveBack > 0.0 && pti >= 0 && g_tkPeakPx[pti] > 0.0)
+         {
+            double up = dir * (g_tkPeakPx[pti] - open);
+            if(up <= 0.0) continue;                 // no run-up yet, no trail
+            t = open + dir * up * (1.0 - InpGiveBack);
+         }
+         else
+            t = (dir > 0) ? price - InpTrailAtrMult * atr
+                          : price + InpTrailAtrMult * atr;
          t = NormalizeDouble(t, dg);
+         // E-151: unplaceable means DO NOT PLACE, not "place it anyway".
+         if(dir * (t - price) >= 0.0) continue;
          bool better = (dir > 0) ? (t > sl) : (t < sl);
          // A modify inside the broker's stop level is rejected, silently and
          // repeatedly. Leave the stop where it is rather than spam the server.
@@ -4966,6 +5208,7 @@ int OnInit()
            pbCorner, InpBoxX, InpBoxY, "SUPERTREND");
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
+   if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
    return INIT_SUCCEEDED;
 }
 
@@ -5050,6 +5293,7 @@ void OnTick()
    if(Bars(_Symbol, _Period) < DemaEffLen() * 4 + 10) return;
 
    UpdateSuperTrend();
+   UpdateTwoPole();        // one recompute per bar, never on the tick path
    CheckConfigSanity();   // E-102: does this account fit these guards at all?
    BuildLevels();          // before anything asks where the levels are
    ExpireStalePendings();  // a limit is only good while its setup is

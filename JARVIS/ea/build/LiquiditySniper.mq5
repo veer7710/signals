@@ -101,6 +101,8 @@ input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770001;  // SuperTrendSniper
 input string InpTrackLabel3  = "SUPERTREND";
+input long   InpTrackMagic4  = 990077;  // SWEEP  liq, so ONE box shows every EA
+input string InpTrackLabel4  = "SWEEP  liq";
 
 input group "=== ZONES  (LuxAlgo: Liquidity Sweeps) ==="
 input int    InpPivLen        = 7;      // pivot length
@@ -1668,6 +1670,7 @@ int OnInit()
            pbCorner, InpBoxX, InpBoxY, "LIQUIDITY");
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
+   if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
    Readout();
 
    Print("=== LIQUIDITY SNIPER BUILD " + LQS_BUILD + " ===");

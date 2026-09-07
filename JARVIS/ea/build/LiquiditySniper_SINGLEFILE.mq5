@@ -586,6 +586,10 @@ void PB_Draw()
    // (PB_Scan), which is the midnight his account rolls over on.
    if(g_pb.compact)
    {
+      // Veer: "make one massive profit box's and show pnl per ea so i can just
+      // screenshot that". Every EA now registers all four magics, so this block
+      // is the screenshot: one row per EA, today's points and trade count, on
+      // whichever chart he happens to be looking at.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
       g_pbMaxRows = 7 + extra;
 
@@ -842,6 +846,8 @@ input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770001;  // SuperTrendSniper
 input string InpTrackLabel3  = "SUPERTREND";
+input long   InpTrackMagic4  = 990077;  // SWEEP  liq, so ONE box shows every EA
+input string InpTrackLabel4  = "SWEEP  liq";
 
 input group "=== ZONES  (LuxAlgo: Liquidity Sweeps) ==="
 input int    InpPivLen        = 7;      // pivot length
@@ -2409,6 +2415,7 @@ int OnInit()
            pbCorner, InpBoxX, InpBoxY, "LIQUIDITY");
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
+   if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
    Readout();
 
    Print("=== LIQUIDITY SNIPER BUILD " + LQS_BUILD + " ===");

@@ -394,6 +394,47 @@ def io_read(p):
         return f.read()
 
 
+def check_function_used_before_declared(src):
+    """MQL5 needs a function DECLARED before it is called, same as C. A file
+    this size relies on a forward-declaration block near the top; a function
+    added below and called above it is 'undeclared identifier'.
+
+    This is the third bug of this class in this repo (after a duplicate input
+    and a global used before declaration), so it gets a check too. A call that
+    appears before BOTH the definition and any prototype is reported.
+    """
+    def_pat = re.compile(r"^[A-Za-z_][\w:<>\*&\[\] ]*?\b(\w+)\s*\([^;]*\)\s*$")
+    proto_pat = re.compile(r"^[A-Za-z_][\w:<>\*&\[\] ]*?\b(\w+)\s*\([^;]*\)\s*;\s*$")
+    lines = src.split("\n")
+    defined, declared, depth = {}, {}, 0
+    for i, ln in enumerate(lines, 1):
+        code = re.sub(r"//.*$", "", ln).rstrip()
+        if depth == 0:
+            m = proto_pat.match(code)
+            if m:
+                declared.setdefault(m.group(1), i)
+            else:
+                m = def_pat.match(code)
+                if m:
+                    defined.setdefault(m.group(1), i)
+                    declared.setdefault(m.group(1), i)
+        depth += code.count("{") - code.count("}")
+        if depth < 0:
+            depth = 0
+
+    bad = []
+    for name, dline in declared.items():
+        if name in ("if", "for", "while", "switch", "return", "sizeof"):
+            continue
+        call = re.compile(r"(?<![\w.])" + re.escape(name) + r"\s*\(")
+        for i, ln in enumerate(lines[:dline - 1], 1):
+            code = re.sub(r"//.*$", "", ln)
+            if call.search(code) and not code.strip().startswith(("//", "*")):
+                bad.append((i, name, dline))
+                break
+    return bad
+
+
 def check_duplicate_inputs(src, path):
     """A global declared twice is a compile error MQL5 gives no quarter on, and
     static reading will not catch it: SuperTrendSniper.mq5 shipped with
@@ -464,6 +505,10 @@ def main():
         if not os.path.exists(p):
             print("MISSING: %s" % p); total += 1; continue
         probs = check(p)
+        for (line, name, dline) in check_function_used_before_declared(io_read(p)):
+            probs.append((line, "function '%s' is called here but not declared "
+                                "until line %d - MQL5 needs a definition or a "
+                                "prototype above the call" % (name, dline)))
         for (line, name, dline) in check_global_used_before_declared(io_read(p)):
             probs.append((line, "global '%s' is used here but not declared "
                                 "until line %d - MQL5 reads top-down and this "

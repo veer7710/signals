@@ -8161,3 +8161,99 @@ tested, and this now replicates across two eras seven years apart.** Pivot
 drops to 3 for M30 and below. It stays shipped and drawn — Veer trades these by
 hand and the levels are useful to see — but the EA's evidence is far weaker
 than SuperTrend's and the size should reflect that.
+
+---
+
+## E-180 — THE TWO-POLE OSCILLATOR: PORTED, AND IT SHIPS OFF
+
+Veer: *"where's two pole oscillator gone from super trend sniper"*.
+
+**It never went anywhere — I never put it in.** His own XAUUSD_QUAD v19.18 names
+three pillars, Supertrend + DEMA + Two-Pole, and the SuperTrendSniper I built
+has two. That is a regression from his own work and he was right to catch it.
+Ported from v19.18's `TwoPoleValue()`, recursion for recursion.
+
+Measured on top of the DEMA filter, 2024-2026 gold 1h, baseline +0.364 over 501:
+```
+  AGREES   kept 281  +0.442 (t 2.45)   refused 220  +0.264   YES
+  VETO     kept 318  +0.490 (t 2.84)   refused 183  +0.144   YES
+  LED      kept  88  +0.663 (t 2.06)   refused 413  +0.300   YES
+```
+All three look excellent. **Then the halves took it apart:**
+```
+  VETO   H1 kept +0.412 vs refused -0.329    H2 kept +0.576 vs refused +0.632
+  AGREES H1 kept +0.400 vs refused -0.196    H2 kept +0.493 vs refused +0.726
+```
+**Strong in the first half, refusing the BETTER trades in the second.** That is
+a fit, not an edge. **VERDICT: UNPROVEN.** The code ships, correct and
+switchable, `InpUseTwoPole = false`. It changes nothing unless he turns it on.
+
+---
+
+## E-181 — THE BALANCE THIS ACTUALLY NEEDS, AND WHY £50→£140 ENDED IN A MARGIN CALL
+
+Veer, live: SuperTrend *"has previously bought 50 pound accounts to 140 but wire
+riskier stack setups also it didn't even close at peaks ... and kept tryna
+fullport so got margin called made loss"*. Three separate defects, all found.
+
+### 1. RISK PER TRADE — E-081 sets it, the account does not
+0.01 lots is the smallest trade that exists and is £0.787 per point. So the
+STOP DISTANCE sets the risk, and the stop comes from the ATR of the clock:
+```
+  clock              ATR pts  stop pts  GBP risk   % of 60   150    300    500
+  M1 (ESTIMATED)        2.18      4.36      3.43      5.7%  2.3%   1.1%   0.7%
+  M5 (ESTIMATED)        4.88      9.75      7.67     12.8%  5.1%   2.6%   1.5%
+  M15 (measured)        8.44     16.89     13.29     22.2%  8.9%   4.4%   2.7%
+  H1 (measured)        12.14     24.27     19.10     31.8% 12.7%   6.4%   3.8%
+```
+**One M1 trade risks 5.7% of a £60 account. That is not a risk setting anyone
+chose — it is the floor.**
+
+### 2. MARGIN — the actual "fullport" mechanism, quantified
+0.01 lots of gold is ~£3,400 of notional:
+```
+  1:30    margin 113.33   =  189% of a GBP 60 account
+  1:100   margin  34.00   =   57% of a GBP 60 account
+  1:200   margin  17.00   =   28%
+  1:500   margin   6.80   =   11%
+```
+**At 1:100, one minimum position consumes 57% of a £60 account's margin.** Two
+open and it is gone. **SuperTrendSniper had no margin check of any kind** — it
+sized off risk and sent the order. SweepSniper has had `CanAfford()` since its
+live-safety pass; this EA never got it. That is the margin call, exactly.
+
+### 3. THE LOSING RUN THAT IS ORDINARY
+```
+  sample            trades   win%   worst losing run
+  2024-2026 1h         501  38.5%          12 in a row
+  2026 15m             184  33.7%          10 in a row
+```
+Twelve M1 losses in a row is **£41, or 68% of a £60 account** — and a 38% win
+rate makes a run of twelve ordinary, not unlucky.
+
+### THE ANSWER
+```
+  GBP  60   one M1 trade = 5.7% of the account   NOT VIABLE
+  GBP 100                  3.4%                  TIGHT
+  GBP 150                  2.3%                  TIGHT
+  GBP 250                  1.4%                  SURVIVABLE
+  GBP 400                  0.9%                  SURVIVABLE
+```
+**£172 is where one M1 trade becomes 2% of equity. £250 is where an ordinary
+twelve-loss run costs 16% instead of 68%.** £60 cannot trade M1 gold at the
+0.01 floor — not because the strategy is bad, because the lot size cannot go
+below 0.01 and gold moves £3.43 per 2-ATR stop.
+
+**The M1 and M5 ATR figures are ESTIMATED from the 15m file by the
+square-root-of-time rule** and are labelled as such wherever they are used.
+There is still no recent M1 gold in this repo.
+
+### What was fixed
+* `CanAfford()` ported in: no single entry may take more than
+  `InpMaxMarginPct` (35%) of free margin, plus `InpMaxTotalLots` as a hard
+  ceiling in lots that no sizing rule can argue around.
+* **The give-back trail**, for *"it didn't even close at peaks"*. The old trail
+  measured `InpTrailAtrMult` ATR from the CURRENT price, so it handed back 3 ATR
+  of every peak. It now measures from the PEAK (`g_tkPeakPx`, already tracked
+  and never read by the trail). E-177: MAE 1.824 → 0.803, win rate 44.6% →
+  50.7%, same return per unit of drawdown. `InpGiveBack = 0.60`.

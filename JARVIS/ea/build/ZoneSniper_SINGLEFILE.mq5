@@ -33,6 +33,15 @@
 #property version   "2.10"
 #property strict
 
+//==================== FORWARD DECLARATIONS =========================
+// MQL5 needs a function DECLARED before it is called. Each of these is
+// defined further down the file than its first call, which is a compile
+// error, not a style point - check_mq5.py now catches the whole class.
+double ATR1();
+void   AddZone(double px, int dir, datetime born, datetime dead);
+void   RemoveZone(int i);
+
+
 #include <Trade/Trade.mqh>
 CTrade trade;
 
@@ -549,6 +558,10 @@ void PB_Draw()
    // (PB_Scan), which is the midnight his account rolls over on.
    if(g_pb.compact)
    {
+      // Veer: "make one massive profit box's and show pnl per ea so i can just
+      // screenshot that". Every EA now registers all four magics, so this block
+      // is the screenshot: one row per EA, today's points and trade count, on
+      // whichever chart he happens to be looking at.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
       g_pbMaxRows = 7 + extra;
 
@@ -873,6 +886,8 @@ input long   InpTrackMagic2  = 770001;  // SuperTrendSniper
 input string InpTrackLabel2  = "SUPERTREND";
 input long   InpTrackMagic3  = 770069;  // LiquiditySniper
 input string InpTrackLabel3  = "LIQUIDITY";
+input long   InpTrackMagic4  = 990077;  // SWEEP  liq, so ONE box shows every EA
+input string InpTrackLabel4  = "SWEEP  liq";
 
 input group "=== GUARDS ==="
 input double InpMaxDayLossPct = 3.0;
@@ -1390,6 +1405,7 @@ int OnInit()
            corner, InpBoxX, InpBoxY, "ZONE  st+liq");
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
+   if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
    return INIT_SUCCEEDED;
 }
 
