@@ -7952,3 +7952,68 @@ should stop pretending otherwise.
 a single regime. Every future result reports the sample's efficiency ratio
 alongside it, and per-trade numbers are in ATR, never points, whenever two
 samples are compared.
+
+---
+
+## E-177 — SUPERTREND EXECUTION, MEASURED ON THE REGIME THAT MATTERS
+
+Veer: *"perfect the execution on suoertrend for the ea same w liquidity strat"*,
+and standing: *"i want top tick entrie to reduce drawdown"*, *"sl closer to be
+as it grows then trail sl not too aggressively"*.
+
+E-176 left exactly one SUPPORTED cell — SuperTrend + DEMA slope, 2024-2026 gold,
+1h. So the execution questions get asked there. 505 signals, cost 0.02 ATR.
+
+### 1. THE PULLBACK LIMIT IS WORSE, AND IT DOES NOT REDUCE DRAWDOWN
+```
+                                    n  missed   win%   ATR/trd      t  mean MAE
+  market at the next open         505      0%   44.6%    +0.354  +2.49     1.824
+  limit 0.25 ATR back, 6 bars     436     14%   44.5%    +0.312  +2.11     1.811
+  limit 0.50 ATR back, 6 bars     369     27%   42.0%    +0.128  +0.88     1.781
+  limit 1.00 ATR back, 6 bars     264     48%   40.2%    -0.047  -0.31     1.791
+```
+**Every pullback distance is worse than paying the market, and the deeper the
+pullback the worse it gets.** The limit misses 14–48% of the signals and the
+ones it misses are the ones that ran.
+
+**And the drawdown barely moves: 1.824 → 1.781 ATR.** This is the direct answer
+to the top-tick request, and it is no. On a trend system the drawdown does not
+come from a bad entry price — it comes from the trade going against you *after*
+you are in — so buying a better entry with a 27% miss rate pays for something
+that was never the problem. **Market at the next open stays.**
+
+### 2. THE TRAIL HALVES THE DRAWDOWN AND RAISES THE WIN RATE
+```
+                                    n   win%   ATR/trd      t  mean MAE
+  hold to the opposite flip       505  44.6%    +0.354  +2.49     1.824
+  trail, give back 60%            505  50.7%    +0.158  +1.90     0.803
+  trail, give back 50%            505  50.7%    +0.147  +1.88     0.801
+  trail, give back 35%            505  50.7%    +0.080  +1.25     0.784
+```
+**MAE 1.824 → 0.803 and the win rate goes 44.6% → 50.7%.** Return per unit of
+drawdown is essentially identical (0.194 holding, 0.197 at 60% give-back), so at
+equal drawdown the trail lets you carry **2.27x the size** — +0.360 a trade
+against +0.354. Same money, half the excursion, six more points of win rate.
+That is the funded-account trade Veer has been describing, and it is the first
+time this project has been able to price it.
+
+### 3. AND THEN THE OUT-OF-SAMPLE TEST TOOK THE PARAMETER STORY AWAY
+Chosen on the first half, judged on the second, per E-150's rule:
+```
+    picked setting  first half +0.067  ->  second half +0.593
+    shipped setting first half +0.005  ->  second half +0.680
+```
+**Both settings are ~zero in the first half and strongly positive in the
+second, and out of sample they differ by 0.008 on return/MAE, which is noise.**
+What changed between the halves is the market, not the setting.
+
+**VERDICT: no default changes.** The shipped 2.0 ATR stop with hold-to-flip is
+the best row on the unseen half; the trail is offered as a DRAWDOWN option with
+the numbers above attached, not as an upgrade. The pullback limit stays OFF and
+now has a measured reason.
+
+**And the finding that outranks all of it:** this system's return is a function
+of whether gold is trending, not of how it is tuned. That is why Veer's months
+of live M1 testing show profit — he has been trading the strongest gold trend on
+record — and it is also the warning: the 2018 sample that produced E-175's wrong
+verdict is what a flat regime looks like from the inside.
