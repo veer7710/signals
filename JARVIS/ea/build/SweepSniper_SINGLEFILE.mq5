@@ -831,6 +831,10 @@ input group "=== RISK — read E-138 before changing anything here ==="
 input double InpStopBufAtr   = 0.30;    // stop this far beyond the sweep extreme
 input double InpMaxRiskAtr   = 1.2;     // REFUSE the setup if the stop is wider
 input double InpGiveBack     = 0.25;    // give back this much of the best excursion
+input double InpHiWinR       = 0.0;     // HIGH WIN RATE: fixed target at this R (0 = off)
+                                        // At 0.5R you need 67% to break even, at 0.25R you need 80%.
+                                        // E-136: the spread caps the win rate near 81% on this setup,
+                                        // so 80% at 0.25R is break-even, not profit. Watch both numbers.
 input double InpBeAtR        = 1.0;     // move the stop to TRUE breakeven at this R (0 = never)
 input double InpTrailAtR     = 1.0;     // arm the give-back trail at this R (0 = from the first tick)
 input int    InpMaxBars      = 240;     // time exit, in chart bars
@@ -1679,6 +1683,21 @@ void TrailStop()
 
       int    dg0   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
       double risk0 = (g_posInit > 0.0) ? MathAbs(entry - g_posInit) : 0.0;
+
+      // HIGH WIN RATE MODE - a real take profit, placed at the broker so it
+      // fills without this EA having to be awake for the tick.
+      if(InpHiWinR > 0.0 && risk0 > 0.0)
+      {
+         double tgt  = NormPx(entry + dir * InpHiWinR * risk0);
+         double have = PositionGetDouble(POSITION_TP);
+         double gd2  = MathMax(MinStopDist(), FreezeDist());
+         bool   room2 = (gd2 <= 0.0) || (dir * (tgt - px) >= gd2);
+         if(MathAbs(have - tgt) >= _Point && room2)
+            if(!trade.PositionModify(tk, sl, tgt))
+               Log(StringFormat("TAKE PROFIT MODIFY REJECTED %d %s - no target is set",
+                                trade.ResultRetcode(),
+                                trade.ResultRetcodeDescription()));
+      }
       double runUp = dir * (g_peakPrice - entry);
       double runR  = (risk0 > 0.0) ? runUp / risk0 : 0.0;
 

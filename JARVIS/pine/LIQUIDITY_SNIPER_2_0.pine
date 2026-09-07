@@ -215,6 +215,10 @@ stopBuf  = input.float(0.30, "Stop beyond the invalidation (ATR)", group = gR, s
 maxRisk  = input.float(1.2, "REFUSE the setup if the stop is wider than (ATR)", group = gR, step = 0.1,
      tooltip = "E-138. Not an optimisation - uncapped, the worst single trade was 57% of a GBP60 account.")
 giveBack = input.float(0.25, "Give back this much of the best excursion", group = gR, step = 0.05)
+hiWin    = input.float(0.0, "HIGH WIN RATE: take a fixed target at (R)", group = gR,
+     step = 0.25, minval = 0.0,
+     tooltip = "0 = off, which is what every measurement in this repo used. Set it to 0.5 and you will see a high win rate; set it to 0.25 and a higher one still. THE ARITHMETIC, so you can judge it rather than take my word: at a 0.5R target you need 67% just to break even before costs, at 0.25R you need 80%. E-136 measured where the high win rate lives on this exact setup and found the SPREAD caps it around 81% - so an 80% win rate at a 0.25R target is roughly break-even, not a profit. Turn it on and watch the win rate AND the points together: the panel shows both, and they move in opposite directions. That is the trade-off, and it is yours to make."
+     )
 beAtR    = input.float(1.0, "Move the stop to breakeven at (R)", group = gR, step = 0.25, minval = 0.0,
      tooltip = "0 = never. It moves to the TRUE breakeven - entry plus the spread and both slippages - because a stop at the entry price still loses you the round trip. E-147 measured PARTIALS and they cost money; moving the stop costs nothing and is a different thing.")
 trailAtR = input.float(1.0, "Arm the give-back trail at (R)", group = gR, step = 0.25, minval = 0.0,
@@ -308,6 +312,11 @@ showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
 showHist  = input.bool(false, "Finished trades", group = gD, inline = "s2",
      tooltip = "OFF by default. On M1 this is a P&L label on every closed trade - thousands of them, capped at the last 500 by TradingView - and it is the single biggest source of clutter on the chart. It is also the most misleading thing here now that E-165 has shown the edge is not proven. Switch it on to study the history, not to read the market.")
 showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
+minGrade = input.string("A  — every setup", "Only print signals graded",
+     group = gX, options = ["A  — every setup", "A+ — 4 of 7 or better",
+     "A++ — 6 of 7 or better"],
+     tooltip = "Veer: 'print me banger signals'. This is the volume knob. A+ needs four of the seven confluences, A++ needs six. FEWER SIGNALS IS NOT AUTOMATICALLY BETTER SIGNALS - the panel's per-grade rows are there to tell you whether the higher grades actually did better on YOUR chart. Check them before you trust the gate. Note that raising this also raises the number of legs the chart marks MISSED, which is the honest cost of being fussier.")
+
 showCheck = input.bool(true, "Confluence checklist and grade", group = gD,
      tooltip = "Seven things knowable at the signal bar: the sweep, an order block, a volume push, agreement with the higher-timeframe clock, the London/NY overlap, a clear opposing level to run at, and a stop under 0.70 ATR. THE GRADE IS A COUNT, NOT A CLAIM - not one of these has been shown to predict anything in this repo, and several were tested and rejected. So the panel counts them and then MEASURES what each grade actually did on your chart. If A++ does not beat A on your own data, it will say so. That is the point of building it this way rather than selling you the grade.")
 showRefused = input.bool(false, "Mark refused setups", group = gD,
@@ -972,14 +981,43 @@ if newDay
 //              has to model a single account honestly.
 // The panel's "missed while busy" row counts the difference, so the gap between
 // what you see and what the panel books is visible rather than hidden.
-sigSweepB = useSweep and sessOk and fillB
-sigSweepS = useSweep and sessOk and fillS
-sigBrB    = brFillB
-sigBrS    = brFillS
-sigObB    = obFillB
-sigObS    = obFillS
-sigDetB   = obDetB
-sigDetS   = obDetS
+// ---- the bias flags, and the checklist, BEFORE the gate that uses them ----
+// The checklist is computed from the RAW setup conditions (fillB/fillS,
+// brFill*, obFill*, obDet*), never from sig*. sig* depends on the gate and the
+// gate depends on the score, so scoring off sig* would be circular.
+biasKnown = htfUp or htfDn
+withB  = not biasKnown or htfUp
+withS  = not biasKnown or htfDn
+
+rawB = fillB or brFillB or obFillB or obDetB
+rawS = fillS or brFillS or obFillS or obDetS
+
+ckSweep = fillB or fillS
+ckOB    = not na(obBullTop) or not na(obBearBot)
+ckVol   = pushUp or pushDn or pushUp[1] or pushDn[1]
+ckBias  = rawB ? withB : withS
+ckSess  = inLSess and inNSess
+ckDOL   = not na(f_nextLevel(rawB ? 1 : -1, close))
+ckTight = not na(atr) and atr > 0 and
+     ((fillB ? math.abs(lvlB - (extBf - stopBuf * atrB)) :
+       fillS ? math.abs(lvlS - (extSf + stopBuf * atrS)) : na) <= 0.70 * atr)
+ckScore = (ckSweep ? 1 : 0) + (ckOB ? 1 : 0) + (ckVol ? 1 : 0) + (ckBias ? 1 : 0)
+     + (ckSess ? 1 : 0) + (ckDOL ? 1 : 0) + (ckTight ? 1 : 0)
+
+// The grade gate. ckScore is computed above from seven things all knowable at
+// this bar. Raising the gate prints fewer marks; whether they are BETTER marks
+// is what the per-grade panel rows measure, and nothing here assumes it.
+gradeOk = minGrade == "A  — every setup" ? true
+     : minGrade == "A+ — 4 of 7 or better" ? ckScore >= 4 : ckScore >= 6
+
+sigSweepB = useSweep and sessOk and fillB and gradeOk
+sigSweepS = useSweep and sessOk and fillS and gradeOk
+sigBrB    = brFillB and gradeOk
+sigBrS    = brFillS and gradeOk
+sigObB    = obFillB and gradeOk
+sigObS    = obFillS and gradeOk
+sigDetB   = obDetB and gradeOk
+sigDetS   = obDetS and gradeOk
 
 anySig = sigSweepB or sigSweepS or sigBrB or sigBrS or sigObB or sigObS
      or sigDetB or sigDetS
@@ -987,9 +1025,6 @@ anySig = sigSweepB or sigSweepS or sigBrB or sigBrS or sigObB or sigObS
 // WITH the higher-timeframe bias, or against it. Buys agree with an up bias,
 // sells with a down bias. When no bias is available (the HTF has not warmed up)
 // everything counts as with-trend so nothing is ever hidden by missing data.
-biasKnown = htfUp or htfDn
-withB  = not biasKnown or htfUp
-withS  = not biasKnown or htfDn
 sigBuyWith    = (sigSweepB or sigBrB or sigObB or sigDetB) and withB
 sigBuyAgainst = (sigSweepB or sigBrB or sigObB or sigDetB) and not withB
 sigSellWith    = (sigSweepS or sigBrS or sigObS or sigDetS) and withS
@@ -1023,17 +1058,6 @@ anySell = takeSweepS or takeBrS or takeObS or takeDetS
 // grade is good. It COUNTS the confluences and then MEASURES what each grade
 // actually did on your own chart. If A++ does not beat A on your data, the
 // panel will say so, and that is the point of building it this way.
-ckSweep = sigSweepB or sigSweepS
-ckOB    = not na(obBullTop) or not na(obBearBot)
-ckVol   = pushUp or pushDn or pushUp[1] or pushDn[1]
-ckBias  = (sigSweepB or sigBrB or sigObB or sigDetB) ? withB : withS
-ckSess  = inLSess and inNSess
-ckDOL   = not na(f_nextLevel(anyBuy or sigSweepB or sigBrB or sigObB or sigDetB ? 1 : -1, close))
-ckTight = not na(atr) and atr > 0 and
-     ((sigSweepB ? math.abs(lvlB - (extBf - stopBuf * atrB)) :
-       sigSweepS ? math.abs(lvlS - (extSf + stopBuf * atrS)) : na) <= 0.70 * atr)
-ckScore = (ckSweep ? 1 : 0) + (ckOB ? 1 : 0) + (ckVol ? 1 : 0) + (ckBias ? 1 : 0)
-     + (ckSess ? 1 : 0) + (ckDOL ? 1 : 0) + (ckTight ? 1 : 0)
 f_tick(b) =>
     b ? "yes" : "-"
 
@@ -1229,8 +1253,16 @@ if posDir != 0 and barstate.isconfirmed
     // about 40% of trades, and it booked 9.4% per trade MORE than the strategy
     // this file's header claims to measure. The panel must not be more
     // optimistic than the backtest that justified the rule.
+    // HIGH WIN RATE MODE. A fixed target at hiWin x risk, checked before the
+    // trail so it wins the tie. E-110: the entry bar may not book its own
+    // favourable extreme, so this cannot fire on posBar.
+    hiTgt = hiWin > 0 and not na(posInit)
+         ? posEntry + posDir * hiWin * math.abs(posEntry - posInit) : na
+    hitTgt = not na(hiTgt) and bar_index > posBar
+         and (posDir > 0 ? high >= hiTgt : low <= hiTgt)
+
     trailOut = false
-    if not hitStop and bar_index > posBar
+    if not hitStop and not hitTgt and bar_index > posBar
         posPeak := posDir > 0 ? math.max(posPeak, high) : math.min(posPeak, low)
         runUp = posDir * (posPeak - posEntry)
         risk0 = math.abs(posEntry - posInit)
@@ -1257,13 +1289,13 @@ if posDir != 0 and barstate.isconfirmed
                 posStop := posDir > 0 ? math.max(posStop, cand)
                                       : math.min(posStop, cand)
 
-    if hitStop or aged or trailOut
+    if hitStop or hitTgt or aged or trailOut
         // A stop does not fill at its price when the bar OPENS past it - it
         // fills at the open. 15% of exits on M1 gap through, and booking the
         // stop price for those flattered the book by 9.1 points.
         gapPx   = posDir > 0 ? (open <= posStop ? open : posStop)
                              : (open >= posStop ? open : posStop)
-        exitPx  := hitStop ? gapPx : close
+        exitPx  := hitStop ? gapPx : hitTgt ? hiTgt : close
         // NET, not gross. The spread once (buy the ask, sell the bid) and the
         // slippage twice (a stop order fills at or worse than its level, both
         // on the way in and on the way out).
