@@ -18,34 +18,64 @@ PRE-REGISTRATION (fixed before any number was read)
   NOT independent samples and are never quoted as replication.
 * A LEG runs from one zigzag extreme to the next opposite extreme.
 * LABEL A (full leg): |terminal - origin| / ATR(14) at the origin bar.
+* LABEL P (points):   |terminal - origin| in points. Label A divides by a
+  quantity that is itself a feature, so `atr_pts` and `atr_regime` are inside
+  it; label P has no ATR in it at all. Both are reported because they answer
+  different questions and they disagree.
 * LABEL B (capturable): the part still available to someone who can only act
   after the pivot is CONFIRMED, i.e. from close[p+k] to the terminal price,
   in ATR. Label B is the honest one for an indicator; label A is what "top to
-  bottom" means in plain English. Both are reported.
+  bottom" means in plain English.
+* "BIG LEG" = the top 5% of legs by the label, with the cut taken from the
+  FIRST HALF ONLY and applied to the second. Quantile rather than a fixed ATR
+  cut so that the real sample and the null sample carry the SAME base rate --
+  see THE CORRECTION below.
 * FLAG TIME: a k=3 fractal pivot at bar p is not knowable until bar p+3 has
   closed. So every feature is computed from bars <= p+3 ONLY, and the
   indicator can only paint at p+3. This is stated, not hidden.
-* 19 numeric features + session, listed in FEATURES below. All of them were
-  written down before any AUC was computed. 19 features x 3 timeframes x 2
-  labels = 114 tests; the Bonferroni-corrected two-sided |z| for that is 3.28.
+* 20 numeric features + session, listed in FEATURES below, all written down
+  before any AUC was computed. 14 of them are computable ON bar p (AT_EXTREME)
+  and 6 read bars p+1..p+3 (POST).
 * Choose on the FIRST HALF of the sample, report on the SECOND half.
 * Costs: the file's own measured spread column, in price units, unscaled.
   E-165 showed the old per-timeframe `cs` rescaling charged M5/M15 2.5-4.6x
-  too much. Volume is TICK volume and is broker-dependent.
+  too much. Volume is TICK volume and is broker-dependent (E-167).
+
+THE CORRECTION THAT THIS FILE EXISTS TO CARRY (E-170 records it)
+---------------------------------------------------------------
+The first run of this study caught its own defect before it was finished:
+
+    "The null is NOT flat -- it produces lift too, because the post-extreme
+     features overlap the label."
+
+A feature measured a few bars AFTER the extreme -- displacement off the low,
+the first bars' range, the volume on the way out -- PARTLY CONTAINS the leg it
+is supposed to predict. On a driftless random walk it still shows lift, because
+a big first move mechanically implies a bigger measured leg. Measured here:
+`disp3` scores AUC 0.67-0.72 ON A RANDOM WALK. So:
+
+  * every feature's separation is computed on the REAL data AND on the null
+    with identical code, and the reported number is REAL MINUS NULL;
+  * the null is 6 seeds, not 1, so the null's own sampling error is visible;
+  * labels are quantiles so the two base rates match and lift-vs-lift is fair;
+  * features that read bars after p are marked * and are judged only against
+    the null, and only label B (which starts at close[p+3]) is clean for them;
+  * the features that CANNOT overlap the label -- anything computed on bar p
+    or earlier -- are the ones an indicator can actually be built from, and
+    they are reported separately (`surv`).
 
 THE NULL RUNS FIRST. A driftless random walk with the real timestamps, the
-real spread column and the real volume column, through the identical code. On
-a random walk nothing can separate, so every feature's AUC must be 0.5 and
-precision must equal the base rate. Any feature that scores on the null is
-scoring on arithmetic, not on the market -- in particular any feature that
-uses bars p+1..p+3 overlaps the label mechanically. The honest number for
-every feature is therefore REAL AUC MINUS NULL AUC.
+real spread column and the real volume column, through the identical code.
 
 Usage:
+
     python3 JARVIS/research/leg_origins.py null
     python3 JARVIS/research/leg_origins.py dist
     python3 JARVIS/research/leg_origins.py feat
     python3 JARVIS/research/leg_origins.py pr
+    python3 JARVIS/research/leg_origins.py surv
+    python3 JARVIS/research/leg_origins.py lat
+    python3 JARVIS/research/leg_origins.py modern
     python3 JARVIS/research/leg_origins.py trade
     python3 JARVIS/research/leg_origins.py all
 """
@@ -59,6 +89,8 @@ DATA = "/home/user/signals/data"
 TZOFF = 3600           # the 2018 feed's broker day starts at 23:00 UTC
 K = 3                  # fractal half-width -> confirmation latency of 3 bars
 TFMULT = {"M1": 1, "M5": 5, "M15": 15}
+GBP = 0.787            # E-081: 0.01 lots on XAUUSD = GBP 0.787 per point
+NULL_SEEDS = (11, 12, 13, 14, 15, 16)
 
 
 # ------------------------------------------------------------------ data
@@ -386,9 +418,13 @@ def hdr(t):
 
 
 _CACHE = {}
+_ROWS = {}
 
 
 def prep(tf, synthetic=None):
+    rk = (tf, synthetic)
+    if rk in _ROWS:
+        return _ROWS[rk]
     key = ("real" if synthetic is None else f"synth{synthetic}")
     if key not in _CACHE:
         s0, sp0, v0 = load_m1()
@@ -398,7 +434,34 @@ def prep(tf, synthetic=None):
     s0, sp0, v0 = _CACHE[key]
     s, sp, vol = resample(s0, sp0, v0, TFMULT[tf])
     rows, A = build(s, sp, vol, TFMULT[tf])
-    return s, sp, vol, rows
+    _ROWS[rk] = (s, sp, vol, rows)
+    return _ROWS[rk]
+
+
+# ------------------------------------------------------- quantile labelling
+#
+# WHY A QUANTILE LABEL AND NOT A FIXED ATR CUT.
+# A driftless random walk makes far fewer 10-ATR legs than the real market
+# (0.62% vs the real base rate), so a fixed cut compares a real AUC built on
+# ~600 positives against a null AUC built on ~30. The null estimate is then so
+# noisy that "real minus null" is dominated by the null's own sampling error --
+# on M5 seed 11 vs seed 12 the same feature moved 0.28 of AUC. Labelling the
+# top Q fraction of legs BY SIZE instead makes the two base rates identical by
+# construction, so lift is compared against lift on equal terms. Both labels
+# are reported; the fixed-ATR one is kept because it is what "a 10-ATR leg"
+# means in English.
+#
+QFRAC = 0.05           # "a big leg" = the top 5% of legs on this timeframe
+
+
+def qthresh(rows, key, q=QFRAC):
+    v = sorted(r[key] for r in rows if r[key] == r[key])
+    if not v: return float("inf")
+    return v[int((1.0 - q) * len(v))]
+
+
+def mklab(rows, key, thr):
+    return [1 if r[key] >= thr else 0 for r in rows]
 
 
 # ---------------------------------------------------------------- 1. null
@@ -460,89 +523,155 @@ def cmd_dist():
                     f"p90 {ss[int(.9*len(ss))]:6.2f} ATR, "
                     f"max {ss[-1]:6.1f} ATR, med dur {sorted(dur)[len(dur)//2]:3d} bars")
             print(line)
-            cnt = "         legs/day exceeding:  "
-            for t in (5, 10, 20, 30, 50):
+            cnt = "         legs/day >= ATR:  "
+            for t in (3, 5, 10, 20, 30):
                 n = sum(1 for x in sz if x >= t)
-                cnt += f"{t}ATR {n/nd:5.2f} (n={n:4d})  "
+                cnt += f"{t:>2}A {n/nd:6.2f}(n={n:5d})  "
             print(cnt)
-            cntp = "         legs/day exceeding:  "
-            for t in (1, 2, 5, 10):
+            cntp = "         legs/day >= pts:  "
+            for t in (1, 2, 5, 10, 20):
                 n = sum(1 for x in pts if x >= t)
-                cntp += f"{t}pt {n/nd:5.2f} (n={n:4d})  "
+                cntp += f"{t:>2}p {n/nd:6.2f}(n={n:5d})  "
             print(cntp)
+            # the same thing in money at the minimum tradeable size
+            zz = sorted(zip(sz, pts))
+            print(f"         median leg = {GBP*sorted(pts)[len(pts)//2]:6.2f} GBP at 0.01 lots, "
+                  f"p90 {GBP*sorted(pts)[int(.9*len(pts))]:6.2f}, "
+                  f"p99 {GBP*sorted(pts)[int(.99*len(pts))]:7.2f}, "
+                  f"max {GBP*max(pts):7.2f}; round-turn spread costs "
+                  f"{GBP*statistics.median(sp):.2f} GBP")
+            for t in (3, 5, 10, 20):
+                sel = [p for a, p in zz if a >= t]
+                if len(sel) < 5: continue
+                print(f"           legs >= {t:>2} ATR: n={len(sel):5d} "
+                      f"({len(sel)/nd:5.2f}/day)  median {statistics.median(sel):6.2f} pts "
+                      f"= {GBP*statistics.median(sel):7.2f} GBP  "
+                      f"gross/spread {statistics.median(sel)/statistics.median(sp):5.1f}x")
         print()
 
 
 # -------------------------------------------------------- 3. separation
-def cmd_feat(thr=10.0):
-    hdr(f"FEATURE SEPARATION — big-leg origin (>= {thr:.0f} ATR) vs the rest")
-    print("  Selection sample = FIRST HALF. Reported sample = SECOND HALF (unseen).")
-    print("  LABEL A 'full'  = |terminal - origin| / ATR  (top-to-bottom, what Veer means)")
-    print("  LABEL B 'cap'   = terminal - close[p+3] / ATR (what is still there when")
-    print("                    the fractal confirms and the indicator can paint)")
-    print("  'exc' = real AUC minus the mean NULL AUC on the same feature/timeframe.")
-    print("  Features using bars p+1..p+3 overlap label A mechanically and score on a")
-    print("  random walk, so exc is the only honest column. Bonferroni |z| for 114")
-    print("  tests = 3.28.\n")
-    null_auc, null_cap = {}, {}
-    for tf in ("M1", "M5", "M15"):
-        af = {nm: [] for nm in FEATURES}; ac = {nm: [] for nm in FEATURES}
-        for seed in (11, 12):
-            _, _, _, nr = prep(tf, synthetic=seed)
-            lb = [1 if r["full_atr"] >= thr else 0 for r in nr]
-            lc = [1 if r["cap_atr"] >= thr else 0 for r in nr]
-            for nm in FEATURES:
-                v = [r["f"][nm] for r in nr]
-                a, _, _ = auc(v, lb)
-                if a == a: af[nm].append(a)
-                a2, _, _ = auc(v, lc)
-                if a2 == a2: ac[nm].append(a2)
-        null_auc[tf] = {nm: (sum(v)/len(v) if v else float("nan")) for nm, v in af.items()}
-        null_cap[tf] = {nm: (sum(v)/len(v) if v else float("nan")) for nm, v in ac.items()}
+LABELS = [
+    ("full_atr", "A  full leg / ATR at origin   (top-to-bottom, what Veer means)"),
+    ("full_pts", "P  full leg in POINTS         (no ATR in the label at all)"),
+    ("cap_atr",  "B  leg REMAINING after the fractal confirms at p+3, / ATR"),
+]
+
+
+def null_auc_table(tf, key, thr_mode="q", fixed=10.0):
+    """Mean and spread of every feature's AUC on the driftless random walk,
+    through the identical code path. Threshold picked on the null's own first
+    half exactly as the real one is, so the base rates match."""
+    per = {nm: [] for nm in FEATURES}
+    base = []
+    for seed in NULL_SEEDS:
+        _, _, _, nr = prep(tf, synthetic=seed)
+        nh = len(nr) // 2
+        NA, NB = nr[:nh], nr[nh:]
+        t = qthresh(NA, key) if thr_mode == "q" else fixed
+        lb = mklab(NB, key, t)
+        if sum(lb) < 10 or sum(lb) == len(lb):
+            continue
+        base.append(sum(lb) / len(lb))
+        for nm in FEATURES:
+            a, _, _ = auc([r["f"][nm] for r in NB], lb)
+            if a == a:
+                per[nm].append(a)
+    out = {}
+    for nm in FEATURES:
+        v = per[nm]
+        if not v:
+            out[nm] = (float("nan"), float("nan"), 0)
+        else:
+            out[nm] = (sum(v) / len(v),
+                       statistics.pstdev(v) if len(v) > 1 else float("nan"), len(v))
+    return out, (sum(base) / len(base) if base else float("nan"))
+
+
+def cmd_feat():
+    hdr(f"FEATURE SEPARATION — REAL lift minus NULL lift, for each of 3 labels")
+    print("  Selection sample = FIRST HALF. Every reported number = SECOND HALF (unseen).")
+    print("  'big leg' = the top 5% of legs by that label, threshold taken from the")
+    print("  FIRST half only. The same quantile is used on the null, so the two base")
+    print("  rates are identical and AUC-vs-AUC is a fair comparison.")
+    print()
+    print("  LABELS")
+    for k, d in LABELS:
+        print(f"    {d}")
+    print()
+    print("  COLUMNS  is    = AUC on the first half (selection)")
+    print("           oos   = AUC on the unseen half")
+    print("           null  = mean AUC of the SAME feature on 6 driftless random walks")
+    print("           exc   = oos - null   <-- the only honest column")
+    print("           t     = exc / sqrt(se(oos)^2 + se(null mean)^2)")
+    print("  Features marked * use bars p+1..p+3 and therefore OVERLAP labels A and P")
+    print("  mechanically; they are meaningful only on label B, and only vs the null.")
+    print(f"  Multiple comparisons: 20 features x 3 timeframes x 3 labels = 180 tests.")
+    print(f"  Bonferroni two-sided |t| for 180 tests = 3.44.\n")
 
     for tf in ("M1", "M5", "M15"):
-        s_, sp, vol, rows = prep(tf)
+        _, sp, vol, rows = prep(tf)
         half = len(rows) // 2
         A_, B_ = rows[:half], rows[half:]
-        labA = [1 if r["full_atr"] >= thr else 0 for r in A_]
-        labB = [1 if r["full_atr"] >= thr else 0 for r in B_]
-        capB = [1 if r["cap_atr"] >= thr else 0 for r in B_]
+        days = len({(r["ts"] + TZOFF) // 86400 for r in B_})
+        bigA = qthresh(A_, "full_atr")
+        bigs = [r for r in B_ if r["full_atr"] >= bigA]
         dead = sum(1 for r in B_ if r["cap_atr"] <= 0) / len(B_)
-        bigs = [r for r in B_ if r["full_atr"] >= thr]
         bigdead = (sum(1 for r in bigs if r["cap_atr"] <= 0) / len(bigs)) if bigs else float("nan")
-        print(f"\n  --- {tf}: {len(rows)} leg origins "
-              f"({len(A_)} in-sample / {len(B_)} unseen), unseen base rate "
-              f"{sum(labB)/len(labB):.4f} ({sum(labB)} big legs); cap-label base "
-              f"{sum(capB)/len(capB):.4f} ({sum(capB)})")
-        print(f"      of unseen legs, {dead:.1%} are already OVER by the confirm bar "
-              f"p+3; of the >= {thr:.0f} ATR ones, {bigdead:.1%} are")
-        print(f"      median capturable share of a big leg: "
+        print("\n" + "-" * 78)
+        print(f"  {tf}: {len(rows)} leg origins, {len(A_)} in-sample / {len(B_)} unseen "
+              f"over {days} days ({len(B_)/days:.1f} extremes/day)")
+        print(f"      top-5% cut taken on the first half = {bigA:.2f} ATR "
+              f"({len(bigs)} unseen positives)")
+        print(f"      of ALL unseen legs {dead:.1%} are already over by the confirm bar p+3; "
+              f"of the top-5% ones {bigdead:.1%} are")
+        print(f"      median share of a top-5% leg still available at p+3: "
               f"{med([r['cap_atr']/r['full_atr'] for r in bigs]):.2f}")
-        res = []
-        for nm in FEATURES:
-            a1, x1, y1 = auc([r["f"][nm] for r in A_], labA)
-            a2, x2, y2 = auc([r["f"][nm] for r in B_], labB)
-            a3, x3, y3 = auc([r["f"][nm] for r in B_], capB)
-            rho = spearman([r["f"][nm] for r in B_], [r["full_atr"] for r in B_])
-            top, bot = quart_split(B_, nm, "full_atr")
-            res.append((abs(a2 - 0.5) if a2 == a2 else -1, nm, a1, a2,
-                        auc_z(a2, x2, y2), a2 - null_auc[tf][nm],
-                        a3, auc_z(a3, x3, y3), a3 - null_cap[tf][nm], rho, top, bot))
-        res.sort(reverse=True)
-        print("     feature        A_is   A_oos      z     exc | cap_oos      z     exc"
-              " |   rho   topq   botq")
-        for _, nm, a1, a2, z, ex, a3, z3, ex3, rho, top, bot in res:
-            print(f"     {nm:<13} {a1:6.3f} {a2:6.3f} {z:6.2f} {ex:+6.3f} | "
-                  f"{a3:6.3f} {z3:6.2f} {ex3:+6.3f} | {rho:+5.2f} {top:6.2f} {bot:6.2f}")
-        print("     session (hour of broker day, unseen half): median full leg ATR by hour")
+
+        for key, desc in LABELS:
+            nul, nbase = null_auc_table(tf, key)
+            t_ = qthresh(A_, key)
+            labA = mklab(A_, key, t_)
+            labB = mklab(B_, key, t_)
+            if sum(labB) < 10:
+                print(f"    label {key}: only {sum(labB)} unseen positives, skipped")
+                continue
+            n1_ = sum(labB); n0_ = len(labB) - n1_
+            se_ = math.sqrt((n1_ + n0_ + 1.0) / (12.0 * n1_ * n0_))
+            print(f"\n    LABEL {key}  cut {t_:.3f}  unseen positives {n1_} "
+                  f"(base {n1_/len(labB):.4f}); null base {nbase:.4f}")
+            print(f"      POWER LIMIT: se(AUC) = {se_:.4f}, so this cell can only "
+                  f"resolve an excess of {2*se_:.4f} at t=2 and {3.44*se_:.4f} "
+                  f"Bonferroni-corrected. Smaller true effects are invisible here.")
+            res = []
+            for nm in FEATURES:
+                a1, _, _ = auc([r["f"][nm] for r in A_], labA)
+                a2, n1, n0 = auc([r["f"][nm] for r in B_], labB)
+                nm_, nsd, nseed = nul[nm]
+                se = math.sqrt((n1 + n0 + 1.0) / (12.0 * n1 * n0)) if n1 and n0 else float("nan")
+                sen = (nsd / math.sqrt(nseed)) if nseed > 1 and nsd == nsd else 0.0
+                ex = a2 - nm_
+                tt = ex / math.sqrt(se * se + sen * sen) if se == se else float("nan")
+                res.append((abs(ex) if ex == ex else -1, nm, a1, a2, nm_, nsd, ex, tt))
+            res.sort(reverse=True)
+            print("       feature            is    oos    null  nullsd     exc       t")
+            for _, nm, a1, a2, nmn, nsd, ex, tt in res:
+                star = "*" if nm in POST else " "
+                print(f"      {star}{nm:<16} {a1:6.3f} {a2:6.3f} {nmn:7.3f} {nsd:7.3f} "
+                      f"{ex:+7.3f} {tt:+7.2f}")
+        # session, on the honest label
+        print("\n    median full leg (ATR) by hour of the broker day, unseen half:")
         byh = {}
         for r in B_:
             byh.setdefault(r["hour"], []).append(r["full_atr"])
-        line = "       "
-        for h in sorted(byh):
+        line = "      "
+        for i, h in enumerate(sorted(byh)):
             if len(byh[h]) >= 30:
-                line += f"{h:02d}h {med(byh[h]):4.1f}  "
+                line += f"{h:02d}h {med(byh[h]):4.1f} "
+            if i % 8 == 7:
+                line += "\n      "
         print(line)
+
 
 
 # ------------------------------------------------------ 4. precision/recall
@@ -575,14 +704,14 @@ def label_of(r, thr, mode):
     return 1 if r["full_pts"] >= thr else 0
 
 
-def choose(A_, labA, pool):
+def choose(A_, labA, pool, ntop=3):
     rank = []
     for nm in pool:
         a, n1, n0 = auc([r["f"][nm] for r in A_], labA)
         if a == a:
             rank.append((abs(a - 0.5), nm, 1.0 if a > 0.5 else -1.0))
     rank.sort(reverse=True)
-    picks = [(nm, sg) for _, nm, sg in rank[:3]]
+    picks = [(nm, sg) for _, nm, sg in rank[:ntop]]
     names = [nm for nm, _ in picks]
     signs = {nm: sg for nm, sg in picks}
     mu, sd = {}, {}
@@ -592,141 +721,429 @@ def choose(A_, labA, pool):
     return names, signs, mu, sd
 
 
-def pr_line(tag, B_, labB, sc, days):
-    """P = precision, R = recall, LIFT = precision / base rate. LIFT is the
-    only column that can be compared against the null, because the null's base
-    rate is not the real one (a driftless walk makes far fewer 10-ATR legs)."""
+FRACS = (0.01, 0.02, 0.05, 0.10, 0.20, 0.33, 0.50)
+
+
+def pr_stats(labB, sc, days):
+    """Precision, recall, lift and false flags per day at each cutoff.
+
+    LIFT = precision / base rate. It is the comparable quantity: the null and
+    the real sample carry the same base rate by construction (both label the
+    top 5% of their own legs), so lift-vs-lift is like for like."""
     order = sorted(((v, i) for i, v in enumerate(sc) if v == v), reverse=True)
     nb = max(1, sum(labB))
     base = sum(labB) / max(1, len(labB))
-    print(f"      {tag:<22}", end="")
-    for frac in (0.05, 0.10, 0.20, 0.50):
+    out = []
+    for frac in FRACS:
         nsel = max(1, int(frac * len(order)))
         sel = [i for _, i in order[:nsel]]
         tp = sum(labB[i] for i in sel)
         pr = tp / nsel
-        print(f" |{int(frac*100):>3}%: P {pr:.3f} R {tp/nb:.3f} "
-              f"L {pr/base if base else float('nan'):4.2f} F/d {(nsel-tp)/days:5.2f}", end="")
+        out.append((frac, pr, tp / nb, pr / base if base else float("nan"),
+                    (nsel - tp) / days, nsel, tp))
+    return out
+
+
+def pr_print(tag, st):
+    print(f"      {tag:<24}", end="")
+    for (fr, p, r, l, fd, n, tp) in st:
+        print(f" |{int(fr*100):>2}% P{p:.3f} R{r:.3f} L{l:4.2f} F/d{fd:5.1f}", end="")
     print()
 
 
-PTS_THR = {"M1": 3.0, "M5": 5.0, "M15": 10.0}
-
-
-def cmd_pr(thr=10.0, mode="atr"):
-    hdr(f"PRECISION / RECALL — flag the top N% of extremes; what share of the "
-        f"big legs do you catch?   label = {mode}, threshold {thr}")
-    print("  Feature set and signs chosen on the FIRST half; every number is on the")
-    print("  SECOND half. 'at-extreme only' uses the 14 features computable on bar p")
-    print("  itself; 'best 3 of all 20' may use the 6 that need bars p+1..p+3.")
-    print("  The NULL rows are the identical procedure on a driftless random walk.")
-    print("  A real result only counts if its LIFT beats the null's LIFT.\n")
+def cmd_pr():
+    hdr("PRECISION / RECALL — flag the top N% of extremes by score; what share "
+        "of the big legs is caught, and how many false flags a day?")
+    print("  'big leg' = top 5% of legs by the label, cut taken on the FIRST half.")
+    print("  Features and signs chosen on the FIRST half; every number is the SECOND.")
+    print("  'at-extreme' uses only the 14 features computable on bar p itself.")
+    print("  'all 20' may use the 6 that need bars p+1..p+3 and overlap labels A/P.")
+    print("  NULL = the identical procedure on 6 driftless random walks; the null's")
+    print("  base rate is the same 5% by construction, so LIFT is directly comparable.")
+    print("  L = precision / base rate.  A real result counts only if L beats null L.\n")
     for tf in ("M1", "M5", "M15"):
-        t = PTS_THR[tf] if mode == "pts" else thr
         _, _, _, rows = prep(tf)
         half = len(rows) // 2
         A_, B_ = rows[:half], rows[half:]
-        labA = [label_of(r, t, mode) for r in A_]
-        labB = [label_of(r, t, mode) for r in B_]
         days = len({(r["ts"] + TZOFF) // 86400 for r in B_})
-        print(f"  --- {tf} thr {t}: unseen {len(B_)} origins over {days} days "
-              f"({len(B_)/days:.1f} extremes/day), {sum(labB)} big legs, "
-              f"base rate {sum(labB)/len(labB):.4f}")
-        for tag, pool in (("REAL best 3 of 20", FEATURES),
-                          ("REAL at-extreme only", AT_EXTREME)):
-            names, signs, mu, sd = choose(A_, labA, pool)
-            sc = score_rows(B_, names, mu, sd, signs)
-            desc = ",".join(nm + ("+" if signs[nm] > 0 else "-") for nm in names)
-            pr_line(tag, B_, labB, sc, days)
-            print(f"        chosen: {desc}")
-            if pool is FEATURES:
-                pr_line("  REAL best single", B_, labB,
-                        score_rows(B_, names[:1], mu, sd, signs), days)
-        for seed in (11, 12):
+        for key in ("full_atr", "full_pts", "cap_atr"):
+            t_ = qthresh(A_, key)
+            labA = mklab(A_, key, t_); labB = mklab(B_, key, t_)
+            if sum(labB) < 10:
+                continue
+            print(f"  --- {tf}  label {key}  cut {t_:.3f}  unseen {len(B_)} origins / "
+                  f"{days} days ({len(B_)/days:.1f}/day), {sum(labB)} positives, "
+                  f"base {sum(labB)/len(labB):.4f}")
+            for tag, pool in (("REAL all 20", FEATURES),
+                              ("REAL at-extreme", AT_EXTREME)):
+                names, signs, mu, sd = choose(A_, labA, pool)
+                st = pr_stats(labB, score_rows(B_, names, mu, sd, signs), days)
+                pr_print(tag, st)
+                print("        chosen: " + ",".join(
+                    nm + ("+" if signs[nm] > 0 else "-") for nm in names))
+                # the null, same pool, same procedure, averaged over seeds
+                acc = []
+                for seed in NULL_SEEDS:
+                    _, _, _, nr = prep(tf, synthetic=seed)
+                    nh = len(nr) // 2
+                    NA, NB = nr[:nh], nr[nh:]
+                    tn = qthresh(NA, key)
+                    nlA = mklab(NA, key, tn); nlB = mklab(NB, key, tn)
+                    if sum(nlB) < 10: continue
+                    nd = len({(r["ts"] + TZOFF) // 86400 for r in NB})
+                    nn, sg, m2, s2 = choose(NA, nlA, pool)
+                    acc.append(pr_stats(nlB, score_rows(NB, nn, m2, s2, sg), nd))
+                if acc:
+                    mean = [(FRACS[i],
+                             sum(a[i][1] for a in acc) / len(acc),
+                             sum(a[i][2] for a in acc) / len(acc),
+                             sum(a[i][3] for a in acc) / len(acc),
+                             sum(a[i][4] for a in acc) / len(acc), 0, 0)
+                            for i in range(len(FRACS))]
+                    pr_print(f"NULL x{len(acc)} mean", mean)
+                    sds = "        null L sd:              "
+                    for i in range(len(FRACS)):
+                        v = [a[i][3] for a in acc]
+                        sds += f" |{int(FRACS[i]*100):>2}%              {statistics.pstdev(v):4.2f}      "
+                    print(sds)
+                    exc = "        REAL - NULL lift:       "
+                    for i in range(len(FRACS)):
+                        v = [a[i][3] for a in acc]
+                        d = st[i][3] - (sum(v) / len(v))
+                        exc += f" |{int(FRACS[i]*100):>2}%        {d:+6.2f}          "
+                    print(exc)
+            print()
+
+
+
+
+
+# ---------------------------------------------------- 4b. the survivors, alone
+def strat_auc(rows, valname, lab, byname, nq=5):
+    """AUC of `valname` computed WITHIN quintiles of `byname` and pooled by
+    n1*n0. This is the control for 'the feature is only a proxy for the
+    volatility regime': if tick volume at the extreme only works because busy
+    bars happen in volatile hours, holding the ATR regime fixed kills it."""
+    v = sorted(r["f"][byname] for r in rows if r["f"][byname] == r["f"][byname])
+    if len(v) < 100: return float("nan"), 0
+    cuts = [v[int((i + 1) * len(v) / nq)] for i in range(nq - 1)]
+    buckets = [[] for _ in range(nq)]
+    for r, y in zip(rows, lab):
+        b = r["f"][byname]
+        if b != b: continue
+        k = 0
+        while k < nq - 1 and b > cuts[k]:
+            k += 1
+        buckets[k].append((r["f"][valname], y))
+    num = den = 0.0; tot = 0
+    for bk in buckets:
+        if len(bk) < 40: continue
+        a, n1, n0 = auc([x for x, _ in bk], [y for _, y in bk])
+        if a != a or n1 == 0 or n0 == 0: continue
+        w = n1 * n0
+        num += a * w; den += w; tot += n1
+    return (num / den if den else float("nan")), tot
+
+
+def cmd_surv():
+    hdr("THE SURVIVORS, ISOLATED — is tick volume at the extreme bar anything "
+        "more than the volatility regime wearing a hat?")
+    print("  Only features computable ON bar p are eligible here; nothing that")
+    print("  reads p+1..p+3 can be in an indicator that paints at the extreme.")
+    print("  Every cell: real, then the same code on 6 driftless random walks.")
+    print("  Label = top 5% of legs by full_atr, cut from the FIRST half.\n")
+    for tf in ("M1", "M5", "M15"):
+        _, _, _, rows = prep(tf)
+        half = len(rows) // 2
+        A_, B_ = rows[:half], rows[half:]
+        t_ = qthresh(A_, "full_atr")
+        labB = mklab(B_, "full_atr", t_)
+        days = len({(r["ts"] + TZOFF) // 86400 for r in B_})
+        print(f"  --- {tf}: {len(B_)} unseen origins, {sum(labB)} positives, "
+              f"base {sum(labB)/len(labB):.4f}, cut {t_:.2f} ATR")
+
+        # (1) plain deciles of vol_ratio against the leg that follows
+        v = [(r["f"]["vol_ratio"], r) for r in B_ if r["f"]["vol_ratio"] == r["f"]["vol_ratio"]]
+        v.sort(key=lambda x: x[0])
+        q = len(v) // 10
+        print("      vol_ratio decile |  median leg ATR |  median leg pts |  P(top5%)")
+        for i in range(10):
+            ch = [r for _, r in v[i * q:(i + 1) * q]] if i < 9 else [r for _, r in v[9 * q:]]
+            if not ch: continue
+            pt = sum(1 for r in ch if r["full_atr"] >= t_) / len(ch)
+            print(f"        {i+1:2d}  ({med([x for x,_ in v[i*q:(i+1)*q]]):5.2f}x) "
+                  f"    {med([r['full_atr'] for r in ch]):6.2f}      "
+                  f"    {med([r['full_pts'] for r in ch]):6.3f}      "
+                  f"   {pt:.4f}")
+
+        # (2) raw vs volatility-stratified AUC, real and null
+        for nm in ("vol_ratio", "wick_atr", "atr_pts", "sweep_atr"):
+            a_raw, n1, n0 = auc([r["f"][nm] for r in B_], labB)
+            a_str, tot = strat_auc(B_, nm, labB, "atr_regime")
+            nr_raw, nr_str = [], []
+            for seed in NULL_SEEDS:
+                _, _, _, nr = prep(tf, synthetic=seed)
+                nh = len(nr) // 2
+                NA, NB = nr[:nh], nr[nh:]
+                tn = qthresh(NA, "full_atr")
+                nl = mklab(NB, "full_atr", tn)
+                if sum(nl) < 10: continue
+                x, _, _ = auc([r["f"][nm] for r in NB], nl)
+                y, _ = strat_auc(NB, nm, nl, "atr_regime")
+                if x == x: nr_raw.append(x)
+                if y == y: nr_str.append(y)
+            mr = sum(nr_raw) / len(nr_raw) if nr_raw else float("nan")
+            ms = sum(nr_str) / len(nr_str) if nr_str else float("nan")
+            print(f"      {nm:<12} AUC raw {a_raw:6.3f} (null {mr:5.3f}, exc "
+                  f"{a_raw-mr:+.3f}) | ATR-regime-stratified {a_str:6.3f} "
+                  f"(null {ms:5.3f}, exc {a_str-ms:+.3f})")
+
+        # (3a) does it work in BOTH directions, or is it one-sided?
+        for dd, dn in ((+1, "up legs  (swept LOW origins)"),
+                       (-1, "down legs(swept HIGH origins)")):
+            sub = [(r, y) for r, y in zip(B_, labB) if r["d"] == dd]
+            if len(sub) < 100: continue
+            a, n1, n0 = auc([r["f"]["vol_ratio"] for r, _ in sub],
+                            [y for _, y in sub])
+            nv = []
+            for seed in NULL_SEEDS:
+                _, _, _, nr = prep(tf, synthetic=seed)
+                nh = len(nr) // 2
+                NA, NB = nr[:nh], nr[nh:]
+                tn = qthresh(NA, "full_atr")
+                nl = mklab(NB, "full_atr", tn)
+                sb = [(r, y) for r, y in zip(NB, nl) if r["d"] == dd]
+                if sum(y for _, y in sb) < 10: continue
+                x, _, _ = auc([r["f"]["vol_ratio"] for r, _ in sb],
+                              [y for _, y in sb])
+                if x == x: nv.append(x)
+            mn = sum(nv) / len(nv) if nv else float("nan")
+            print(f"      vol_ratio {dn:<28} AUC {a:6.3f} (null {mn:5.3f}, "
+                  f"exc {a-mn:+.3f}, n={len(sub)}, positives {n1}, "
+                  f"z {auc_z(a,n1,n0):+5.2f})")
+
+        # (3) is it stable month by month?
+        bym = {}
+        for r, y in zip(B_, labB):
+            mth = ((r["ts"] + TZOFF) // 86400) // 30
+            bym.setdefault(mth, []).append((r["f"]["vol_ratio"], y))
+        line = "      vol_ratio AUC by ~month of the unseen half: "
+        for mth in sorted(bym):
+            bk = bym[mth]
+            if len(bk) < 200: continue
+            a, n1, n0 = auc([x for x, _ in bk], [y for _, y in bk])
+            line += f"{a:.3f}(n1={n1}) "
+        print(line)
+
+        # (4) vol_ratio ALONE as the flag, real vs null
+        sc = [r["f"]["vol_ratio"] if r["f"]["vol_ratio"] == r["f"]["vol_ratio"]
+              else float("nan") for r in B_]
+        pr_print("REAL vol_ratio alone", pr_stats(labB, sc, days))
+        acc = []
+        for seed in NULL_SEEDS:
             _, _, _, nr = prep(tf, synthetic=seed)
             nh = len(nr) // 2
             NA, NB = nr[:nh], nr[nh:]
-            nlA = [label_of(r, t, mode) for r in NA]
-            nlB = [label_of(r, t, mode) for r in NB]
+            tn = qthresh(NA, "full_atr")
+            nl = mklab(NB, "full_atr", tn)
+            if sum(nl) < 10: continue
             nd = len({(r["ts"] + TZOFF) // 86400 for r in NB})
-            if sum(nlB) < 5:
-                print(f"      NULL seed {seed}: only {sum(nlB)} positives, skipped")
-                continue
-            for tag, pool in ((f"NULL{seed} best 3 of 20", FEATURES),
-                              (f"NULL{seed} at-extreme", AT_EXTREME)):
-                names, signs, mu, sd = choose(NA, nlA, pool)
-                pr_line(tag, NB, nlB, score_rows(NB, names, mu, sd, signs), nd)
-            print(f"        null base rate {sum(nlB)/len(nlB):.4f} "
-                  f"({sum(nlB)} positives)")
+            acc.append(pr_stats(nl, [r["f"]["vol_ratio"] for r in NB], nd))
+        if acc:
+            pr_print(f"NULL x{len(acc)} mean", [
+                (FRACS[i], sum(a[i][1] for a in acc) / len(acc),
+                 sum(a[i][2] for a in acc) / len(acc),
+                 sum(a[i][3] for a in acc) / len(acc),
+                 sum(a[i][4] for a in acc) / len(acc), 0, 0)
+                for i in range(len(FRACS))])
         print()
 
 
+# ------------------------------------------- 4c. what confirmation latency costs
+def cmd_lat():
+    hdr("WHAT THE CONFIRMATION LATENCY COSTS — the ceiling on ANY non-repainting "
+        "swing flag")
+    print("  A k-bar fractal at bar p is not knowable until bar p+k has closed.")
+    print("  So an indicator that does not repaint can only mark the extreme k")
+    print("  bars late, and the part of the leg between p and p+k is gone. This")
+    print("  is arithmetic, not strategy: it bounds every result in this study.\n")
+    s0, sp0, v0 = load_m1()
+    print("   tf   k |  legs/day | mean leg | left at p+k |  % left | spread | "
+          "perfect net | GBP@0.01")
+    for tf in ("M1", "M5", "M15"):
+        s, sp, vol = resample(s0, sp0, v0, TFMULT[tf])
+        A = watr(s, 14)
+        nd = ndays(s)
+        for k in (1, 2, 3, 5):
+            L = legs(s, k)
+            full, left, spl = [], [], []
+            for (p, px, d, ti, tpx) in L:
+                if p < 260 or p + k >= len(s) - 2: continue
+                full.append(abs(tpx - px))
+                left.append(max(0.0, d * (tpx - s.c[p + k])))
+                spl.append(sp[p])
+            if len(full) < 50: continue
+            mf = sum(full) / len(full); ml = sum(left) / len(left)
+            ms = sum(spl) / len(spl)
+            print(f"  {tf:>3} {k:3d} | {len(full)/nd:9.1f} | {mf:8.4f} | "
+                  f"{ml:11.4f} | {100*ml/mf:6.0f}% | {ms:6.4f} | "
+                  f"{ml-ms:+11.4f} | {GBP*(ml-ms):+8.3f}")
+    print("\n  'perfect net' assumes an ORACLE exit at the leg's terminal extreme")
+    print("  and one round-turn spread. Nothing tradeable can beat it.")
+
+
+# ------------------------------- 4d. the one independent sample we actually have
+NOVOL = [f for f in AT_EXTREME if f not in ("vol_ratio",)]
+
+
+def cmd_modern():
+    hdr("INDEPENDENT SAMPLE — GOLD_1h.json, 2024-2026. Does anything replicate?")
+    print("  GOLD_M1_2018 covers 135 days of ONE regime and M5/M15 are exact")
+    print("  aggregations of it, so the whole study above is one sample. GOLD_1h")
+    print("  is a different broker, a different two years and a different clock.")
+    print("  It carries NO spread column and NO volume column, so:")
+    print("    * no P&L is quoted here, and")
+    print("    * vol_ratio -- the one at-extreme feature that survived the null")
+    print("      on 2018 -- CANNOT BE TESTED HERE AT ALL. That is a real hole.")
+    print("  What can be checked: the structural facts and the 13 non-volume")
+    print("  at-extreme features, same code, same first-half/second-half rule.\n")
+    rows0 = json.load(open(f"{DATA}/GOLD_1h.json"))
+    rows0.sort(key=lambda r: r[0])
+    seen, out = set(), []
+    for r in rows0:
+        if r[0] in seen: continue
+        seen.add(r[0]); out.append(r)
+    s = Series([r[0] for r in out], [r[1] for r in out], [r[2] for r in out],
+               [r[3] for r in out], [r[4] for r in out])
+    sp = [0.0] * len(s); vol = [1.0] * len(s)
+    nd = ndays(s)
+    print(f"  {len(s)} H1 bars over {nd} calendar days "
+          f"({out[0][0]} .. {out[-1][0]}), median ATR14 "
+          f"{med([x for x in watr(s,14)[100:] if x]):.3f} pts")
+    A = watr(s, 14)
+    for k in (2, 3, 5):
+        L = legs(s, k)
+        full = [abs(tp - p) for (i, p, d, ti, tp) in L if i > 260]
+        left = [max(0.0, d * (tp - s.c[i + k])) for (i, p, d, ti, tp) in L if i > 260]
+        sz = [abs(tp - p) / (A[i] or 1e-9) for (i, p, d, ti, tp) in L if i > 260]
+        ss = sorted(sz)
+        print(f"    k={k}: {len(full)} legs, median {ss[len(ss)//2]:.2f} ATR / "
+              f"{statistics.median(full):.2f} pts; mean leg {sum(full)/len(full):.3f}, "
+              f"left at p+k {sum(left)/len(left):.3f} "
+              f"({100*sum(left)/sum(full):.0f}%); "
+              f">=10 ATR {sum(1 for x in sz if x>=10)} "
+              f"({sum(1 for x in sz if x>=10)/nd:.3f}/day)")
+    rows, _ = build(s, sp, vol, 60)
+    half = len(rows) // 2
+    A_, B_ = rows[:half], rows[half:]
+    for key in ("full_atr", "full_pts", "cap_atr"):
+        t_ = qthresh(A_, key)
+        labA = mklab(A_, key, t_); labB = mklab(B_, key, t_)
+        if sum(labB) < 10: continue
+        print(f"\n    LABEL {key}  cut {t_:.3f}  {len(B_)} unseen, "
+              f"{sum(labB)} positives (base {sum(labB)/len(labB):.4f})")
+        res = []
+        for nm in NOVOL:
+            a1, _, _ = auc([r["f"][nm] for r in A_], labA)
+            a2, n1, n0 = auc([r["f"][nm] for r in B_], labB)
+            z = auc_z(a2, n1, n0)
+            res.append((abs(a2 - 0.5) if a2 == a2 else -1, nm, a1, a2, z))
+        res.sort(reverse=True)
+        print("       feature            is    oos       z")
+        for _, nm, a1, a2, z in res:
+            print(f"       {nm:<16} {a1:6.3f} {a2:6.3f} {z:+7.2f}")
+    print("\n  NOTE: no null is run on this file. The null's job on 2018 was to")
+    print("  price in the label overlap of the p+1..p+3 features; none of the 13")
+    print("  features above reads a bar after p, so none of them can overlap the")
+    print("  label. Their z is against 0.5 directly. n1 is small: read with care.")
+
+
 # ------------------------------------------------------------- 5. trade
-def cmd_trade(thr=10.0, frac=0.10):
+def _book(s, B_, ids, give=0.5, maxbars=400):
+    """Two books from the same flags. ORACLE holds to the leg's own terminal
+    extreme -- nobody can trade it, it is the ceiling. TRAIL is the shipped
+    give-back, routed through engine.trail_level()."""
+    book_o, book_t = [], []
+    for idx in ids:
+        r = B_[idx]
+        p = r["k_i"]                       # the fractal is not knowable before p+k
+        if p + 1 >= len(s) - 1: continue
+        d = r["d"]
+        fill = entry_fill(s.o[p + 1], s.o[p + 1], d)
+        spr = r["sp"]
+        ent = fill + d * spr / 2.0
+        book_o.append(d * ((r["tpx"] - d * spr / 2.0) - ent))
+        stop = r["px"] - d * 0.1 * r["atr"]
+        peak = ent; out = None
+        for j in range(p + 1, min(p + 1 + maxbars, len(s))):
+            if (d == 1 and s.l[j] <= stop) or (d == -1 and s.h[j] >= stop):
+                out = stop - d * spr / 2.0; break
+            peak = max(peak, s.h[j]) if d == 1 else min(peak, s.l[j])
+            nl = trail_level(ent, stop, peak, s.c[j], d, give)
+            if nl is None:
+                out = s.c[j] - d * spr / 2.0; break
+            stop = nl
+        if out is None: out = s.c[min(p + maxbars, len(s) - 1)] - d * spr / 2.0
+        book_t.append(d * (out - ent))
+    return book_o, book_t
+
+
+def _rep(tf, tag, nm, bk, days):
+    if len(bk) < 5: return
+    m = sum(bk) / len(bk)
+    sdv = statistics.pstdev(bk) or 1e-9
+    t = m / (sdv / math.sqrt(len(bk)))
+    print(f"  {tf:>3} {tag:<20} {nm:<18} n={len(bk):5d}  "
+          f"total {sum(bk):+9.1f} pts = {GBP*sum(bk):+9.2f} GBP  "
+          f"per trade {m:+.4f} pts  t {t:+6.2f}  "
+          f"win {sum(1 for x in bk if x>0)/len(bk):.1%}  "
+          f"{len(bk)/days:5.2f} trades/day")
+
+
+def cmd_trade(frac=0.10):
     hdr("ONLY AFTER THE CLASSIFICATION — what a trade from a flagged origin "
-        "would have made")
-    print("  Entry: market at the open of the bar AFTER the flag bar (p+k),")
-    print("  routed through engine.entry_fill(). Cost: the bar's own measured")
-    print("  spread, charged half in and half out. Two exits: an ORACLE hold to")
-    print("  the leg's terminal extreme (an upper bound nobody can trade), and")
-    print("  a give-back trail through engine.trail_level(give=0.5), stop at")
-    print("  the origin extreme.\n")
+        "would have made, net of the measured spread")
+    print("  This is reported LAST and on purpose. The study's question was")
+    print("  classification, not P&L; this cell only says what the classifier")
+    print("  would have been worth if traded mechanically.")
+    print("  Entry: market at the open of the bar AFTER the flag bar p+3,")
+    print("  routed through engine.entry_fill(). Cost: that bar's own MEASURED")
+    print("  spread, half in and half out. ORACLE = hold to the leg's terminal")
+    print("  extreme, an upper bound nobody can trade. TRAIL = the shipped")
+    print("  give-back through engine.trail_level(give=0.5), stop at the origin.")
+    print("  Flags chosen on the FIRST half, traded on the SECOND. GBP at 0.01")
+    print(f"  lots = {GBP} per point (E-081).\n")
     for tf in ("M1", "M5", "M15"):
         s, sp, vol, rows = prep(tf)
         half = len(rows) // 2
         A_, B_ = rows[:half], rows[half:]
-        labA = [1 if r["full_atr"] >= thr else 0 for r in A_]
-        rank = []
-        for nm in FEATURES:
-            a, n1, n0 = auc([r["f"][nm] for r in A_], labA)
-            if a == a: rank.append((abs(a - 0.5), nm, 1.0 if a > 0.5 else -1.0))
-        rank.sort(reverse=True)
-        picks = [(nm, sg) for _, nm, sg in rank[:3]]
-        names = [nm for nm, _ in picks]; signs = {nm: sg for nm, sg in picks}
-        mu, sd = {}, {}
-        for nm in names:
-            v = [r["f"][nm] for r in A_ if r["f"][nm] == r["f"][nm]]
-            mu[nm] = sum(v) / len(v); sd[nm] = statistics.pstdev(v)
-        sc = score_rows(B_, names, mu, sd, signs)
-        order = sorted(((v, i) for i, v in enumerate(sc) if v == v), reverse=True)
-        nsel = max(1, int(frac * len(order)))
-        sel = [i for _, i in order[:nsel]]
-        allid = [i for _, i in order]
-        for tag, ids in (("flagged top10%", sel), ("every extreme", allid)):
-            book_o, book_t = [], []
-            for idx in ids:
-                r = B_[idx]
-                p = r["k_i"]                    # flag bar
-                if p + 1 >= len(s) - 1: continue
-                d = r["d"]
-                fill = entry_fill(s.o[p + 1], s.o[p + 1], d)
-                spr = r["sp"]
-                ent = fill + d * spr / 2.0
-                # ORACLE: hold to the leg's own terminal extreme
-                ex_o = r["tpx"] - d * spr / 2.0
-                book_o.append(d * (ex_o - ent))
-                # give-back trail, stop at the origin extreme
-                stop = r["px"] - d * 0.1 * r["atr"]
-                peak = ent; out = None
-                for j in range(p + 1, min(p + 1 + 400, len(s))):
-                    if (d == 1 and s.l[j] <= stop) or (d == -1 and s.h[j] >= stop):
-                        out = stop - d * spr / 2.0; break
-                    peak = max(peak, s.h[j]) if d == 1 else min(peak, s.l[j])
-                    nl = trail_level(ent, stop, peak, s.c[j], d, 0.5)
-                    if nl is None:
-                        out = s.c[j] - d * spr / 2.0; break
-                    stop = nl
-                if out is None: out = s.c[min(p + 400, len(s) - 1)] - d * spr / 2.0
-                book_t.append(d * (out - ent))
-            for nm, bk in (("oracle-to-leg-end", book_o), ("giveback-trail", book_t)):
-                if len(bk) < 5: continue
-                m = sum(bk) / len(bk)
-                sdv = statistics.pstdev(bk) or 1e-9
-                t = m / (sdv / math.sqrt(len(bk)))
-                print(f"  {tf:>3} {tag:<15} {nm:<18} n={len(bk):5d}  "
-                      f"total {sum(bk):+9.1f} pts  per trade {m:+.4f}  "
-                      f"t {t:+6.2f}  win {sum(1 for x in bk if x>0)/len(bk):.1%}")
+        days = len({(r["ts"] + TZOFF) // 86400 for r in B_})
+        t_ = qthresh(A_, "full_atr")
+        labA = mklab(A_, "full_atr", t_)
+        # THE CEILING, before any flag: how much of the average leg is left
+        # once the fractal has confirmed, and what does the spread take?
+        mf = sum(r["full_pts"] for r in B_) / len(B_)
+        mc = sum(abs(r["cap_atr"]) * r["atr"] for r in B_) / len(B_)
+        msp = sum(r["sp"] for r in B_) / len(B_)
+        print(f"  {tf:>3} CEILING: mean leg {mf:.4f} pts; still there at the "
+              f"confirm bar p+3 {mc:.4f} pts ({100*mc/mf:.0f}%); round-turn "
+              f"spread {msp:.4f} pts ({100*msp/mc:.0f}% of it); "
+              f"perfect-exit net {mc-msp:+.4f} pts = {GBP*(mc-msp):+.3f} GBP")
+        for tag, pool in (("flagged all-20", FEATURES),
+                          ("flagged at-extreme", AT_EXTREME),
+                          ("flagged vol_ratio", ["vol_ratio"])):
+            names, signs, mu, sd = choose(A_, labA, pool, ntop=min(3, len(pool)))
+            sc = score_rows(B_, names, mu, sd, signs)
+            order = sorted(((v, i) for i, v in enumerate(sc) if v == v), reverse=True)
+            sel = [i for _, i in order[:max(1, int(frac * len(order)))]]
+            bo, bt = _book(s, B_, sel)
+            _rep(tf, f"{tag} top10%", "oracle-to-leg-end", bo, days)
+            _rep(tf, f"{tag} top10%", "giveback-trail", bt, days)
+        bo, bt = _book(s, B_, list(range(len(B_))))
+        _rep(tf, "every extreme", "oracle-to-leg-end", bo, days)
+        _rep(tf, "every extreme", "giveback-trail", bt, days)
         print()
+
 
 
 def main():
@@ -735,7 +1152,9 @@ def main():
     if cmd in ("dist", "all"): cmd_dist()
     if cmd in ("feat", "all"): cmd_feat()
     if cmd in ("pr", "all"): cmd_pr()
-    if cmd in ("prpts", "all"): cmd_pr(mode="pts")
+    if cmd in ("surv", "all"): cmd_surv()
+    if cmd in ("lat", "all"): cmd_lat()
+    if cmd in ("modern", "all"): cmd_modern()
     if cmd in ("trade", "all"): cmd_trade()
 
 

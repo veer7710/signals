@@ -7519,3 +7519,100 @@ overlap the label."* Features measured a few bars AFTER an extreme partly
 contain the move they are predicting, so they show lift on a random walk.
 **That study has to compare lift against lift, not lift against zero** — it
 caught its own defect before I did, and it is unfinished, not negative.
+
+---
+
+## E-171 — WHY WE MISS TOP TO BOTTOM. IT IS NOT THE FILTER.
+
+Veer's complaint, asked as a classification question for the first time: **of all
+swing extremes, which start a big leg, and what is knowable at the extreme?**
+
+### The null is NOT flat, and that alone invalidates a common method
+```
+  NULL, driftless random walk, "is this a top-5% leg":
+    disp3 AUC 0.672    range3 0.591    fvg3 0.573    atr_pts 0.441
+    top-1% flagged: precision 0.220 vs base 0.049  ->  LIFT 4.47 ON A COIN FLIP
+```
+Two artefacts, both large. **Label overlap:** the first three bars off an extreme
+are INSIDE the leg being measured, so displacement "predicts" it mechanically.
+**The ATR denominator:** dividing by ATR-at-origin makes quiet origins score
+large by construction. Everything below is REAL MINUS NULL.
+
+### THE CEILING — and this is the answer to the complaint
+```
+  tf  k | legs/day | mean leg | left at confirm | % left | perfect net
+  M1  1 |    451.4 |   0.5729 |          0.2938 |   51%  |     +0.0621
+  M1  3 |    188.2 |   0.9306 |          0.4756 |   51%  |     +0.2439
+  M5  3 |     37.5 |   2.1886 |          1.1289 |   52%  |     +0.8970
+  M15 3 |     12.4 |   3.8219 |          1.9907 |   52%  |     +1.7581
+```
+**Exactly 51–52% of every leg is already gone by the time a k-bar fractal
+confirms — for every k, on every clock.** Replicated at **53%** on GOLD_1h
+2024–26, a different broker and different years.
+
+**A non-repainting swing marker structurally forfeits half the move before it
+can paint.** That is not a filter problem and no feature can fix it. On M1 the
+spread then takes 54% of what is left.
+
+### The size of the prize, computed for the first time
+```
+  M1  188 legs/day, median 2.80 ATR = 0.72 pts = £0.57 at 0.01 lots
+      >= 10 ATR: 4.67/day, median 2.60 pts = £2.04
+      >= 20 ATR: 0.44/day, median 3.74 pts = £2.94
+  M15 >= 20 ATR: FOUR TIMES IN 135 DAYS
+```
+**The "banger" is either frequent-and-tiny or large-and-almost-absent. There is
+no cell that is both.** With a PERFECT exit at the leg's terminal extreme, the
+average M1 leg is worth **£0.16 net** at 0.01 lots.
+
+### THE SWEEP IS A NEGATIVE PREDICTOR — REJECTED, and it replicates negatively
+```
+  GOLD_1h 2024-26, independent:  n_swept AUC 0.329 (z -4.61)
+                                 took_pd  0.389 (-3.01)
+                                 sweep_atr 0.393 (-2.88)
+                                 swept     0.402 (-2.64)
+```
+Zero-to-negative in all 9 cells on 2018; **significantly BELOW 0.5 on all four
+sweep features on the independent modern sample.** **Extremes that sweep prior
+levels start SMALLER legs.** That is the opposite of the premise this entire
+project is built on, and it is the most solid negative in the study.
+
+### THE ONE THING THAT SURVIVES — tick volume AT the extreme. SUPPORTED.
+```
+                raw AUC (null, excess)      ATR-REGIME-STRATIFIED (null, excess)
+  M1   0.561 (0.502, +0.060)          0.572 (0.501, +0.071)   t 5.23
+  M5   0.588 (0.494, +0.094)          0.638 (0.497, +0.141)   t 3.47
+  M15  0.657 (0.529, +0.128)          0.710 (0.526, +0.184)   t 2.29
+```
+**It gets STRONGER when volatility regime is held fixed**, so it is not a
+volatility proxy. Deciles near-monotone (M1 median leg 2.46 → 3.50 ATR).
+Positive in **every sub-month** of the unseen half, on all three clocks, in both
+directions — though roughly twice as strong at BOTTOMS as at tops.
+
+**This is Veer's own idea** — *"catch volume pushes asap"* — and it is the first
+at-extreme feature in this project to survive a proper null and a stratified
+control.
+
+**The hole, stated plainly:** it is TICK volume, broker-dependent, and the only
+independent file in this repo carries no volume column. **The one survivor
+cannot be replicated on any independent data we hold.** One 135-day sample, one
+broker. It clears Bonferroni (|t| > 3.66 for 400 cells) on M1 only.
+
+### What an indicator built on it would actually do
+```
+  M1  flag top 10% by volume: 17.6 flags/day, catches 17.4% of big legs,
+                              15.9 of those flags wrong, every day
+  M15 flag top 20% by volume:  2.4 flags/day, catches 42.1%, 2.2 wrong
+```
+**That is a 1.7×–2.6× odds tilt, not "top to bottom".** And it still paints three
+bars late, by which time half the leg is gone.
+
+### Trading it — DISPROVEN
+Every trailed book negative on every clock: M1 −0.1924/trade (t −15.74), M5
+−0.1567 (−4.63). The flag DOES select bigger legs (oracle +0.2551 against
++0.2014 for every extreme), but the exit gives it all back and more.
+
+### The single most decision-relevant sentence in this repo
+**The signals are not missing top-to-bottom because the filter is wrong. Half
+the move is structurally unavailable to any non-repainting swing marker, and the
+extremes that begin the big legs are the ones that did NOT sweep liquidity.**
