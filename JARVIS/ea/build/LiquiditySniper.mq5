@@ -91,7 +91,7 @@ input group "=== SAFETY ==="
 input bool   InpDemoOnly      = true;   // refuse to start on a live account
 input long   InpMagic         = 770069; // magic number
 input bool   InpShowProfitBox = true;   // the on-chart points/money ledger box
-input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+input int    InpBoxCorner     = 1;      // 0 top-left, 1 TOP RIGHT, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
 // The highest chart this EA will start on. M30 by default because that is

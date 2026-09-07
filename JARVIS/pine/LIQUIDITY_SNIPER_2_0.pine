@@ -1581,7 +1581,26 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (mtfOn ? 1 : 0) + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 10 : 0)
+    // THE ROW COUNT MUST MATCH THE ROWS ACTUALLY WRITTEN, and it did not.
+    // A table.cell() at a row index past the table's size is a Pine RUNTIME
+    // ERROR and the panel stops drawing. On the SHIPPED defaults this wrote 16
+    // rows into a table of 15: the formula still charged 3 rows for an htfOn
+    // block that had been removed, and charged NOTHING for the 5-row checklist
+    // that replaced it. It was only correct with every single toggle switched
+    // on, which is the one configuration nobody runs.
+    //
+    // So every term below names the block it pays for, in the order the blocks
+    // are drawn, and tools/check_panel.py counts the file and fails the build
+    // if the two ever disagree again.
+    nRows = 1                                  // title
+         + 4                                   // today / if traded / trades / win
+         + (showSplit ? 1 + nSigOn : 0)         // -- which signal is paying --
+         + 2                                   // cost paid / enter by
+         + (showCheck ? 5 : 0)                  // -- checklist -- + 4 grade rows
+         + (mtfOn ? 1 : 0)                      // trend stack
+         + (showLegs ? 3 : 0)                   // -- legs -- + 2
+         + 1                                   // the separator before the tail
+         + (panelBig ? 10 : 0)                  // the full panel
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)

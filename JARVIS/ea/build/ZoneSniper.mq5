@@ -120,7 +120,7 @@ input double InpStMult       = 1.2;
 
 input group "=== THE PROFIT BOX ==="
 input bool   InpShowProfitBox = true;   // the on-chart panel
-input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+input int    InpBoxCorner     = 1;      // 0 top-left, 1 TOP RIGHT, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
 // The highest chart this EA will start on. M30 by default because that is

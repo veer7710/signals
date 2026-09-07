@@ -550,7 +550,11 @@ if barstate.islast and showPanel
         table.delete(tp)
     pos = panelPos == "Top right" ? position.top_right :
           panelPos == "Bottom left" ? position.bottom_left : position.bottom_right
-    tp := table.new(pos, 3, 15, border_width = 1,
+    // 18 rows for 15 written. The margin is deliberate: a cell past the table's
+    // size is a Pine RUNTIME error that kills the whole panel, and this file
+    // sat at exactly zero spare - one added row would have broken it silently.
+    // tools/check_panel.py reports the worst case across every toggle.
+    tp := table.new(pos, 3, 18, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
 

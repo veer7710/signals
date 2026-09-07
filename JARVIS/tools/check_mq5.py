@@ -394,6 +394,28 @@ def io_read(p):
         return f.read()
 
 
+def check_duplicate_inputs(src, path):
+    """A global declared twice is a compile error MQL5 gives no quarter on, and
+    static reading will not catch it: SuperTrendSniper.mq5 shipped with
+    InpBoxCorner, InpBoxX and InpBoxY each declared TWICE, eleven lines apart,
+    because the shared ProfitBox group and the EA's own execution panel had both
+    grown an input by the same name. The file did not compile at all and every
+    check in this tool passed it.
+    """
+    seen, dupes = {}, []
+    pat = re.compile(r"^\s*(?:input|sinput|extern)\s+"
+                     r"(?:group\s+)?"
+                     r"(?:const\s+)?[\w:]+\s+(\w+)\s*(?:=|;)", re.M)
+    for m in pat.finditer(src):
+        name = m.group(1)
+        line = src[:m.start()].count("\n") + 1
+        if name in seen:
+            dupes.append((line, name, seen[name]))
+        else:
+            seen[name] = line
+    return dupes
+
+
 def main():
     import glob
     paths = sys.argv[1:] or [f for f in sorted(glob.glob("JARVIS/ea/build/*.mq5"))
@@ -403,6 +425,10 @@ def main():
         if not os.path.exists(p):
             print("MISSING: %s" % p); total += 1; continue
         probs = check(p)
+        for (line, name, first) in check_duplicate_inputs(io_read(p), p):
+            probs.append((line, "input '%s' is ALREADY declared at line %d - "
+                                "MQL5 rejects this outright and the file will "
+                                "not compile" % (name, first)))
         print("=" * 70)
         print("  %s  (%d lines)" % (p, len(io_read(p).splitlines())))
         print("=" * 70)

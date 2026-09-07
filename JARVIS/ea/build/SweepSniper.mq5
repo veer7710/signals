@@ -198,7 +198,7 @@ input bool   InpJournal       = true;    // CSV of every fill: asked vs got
 
 input group "=== THE PROFIT BOX ==="
 input bool   InpShowProfitBox = true;
-input int    InpBoxCorner     = 3;      // 0 TL, 1 TR, 2 BL, 3 BR
+input int    InpBoxCorner     = 1;      // 0 top-left, 1 TOP RIGHT, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;
 input int    InpBoxY          = 12;
 input long   InpTrackMagic2   = 880041; // ZoneSniper, if you run it too

@@ -823,9 +823,12 @@ input double InpRunFarAtr     = 8.0;    // ATR travelled in this run = exhausted
 input double InpRunAdx        = 25.0;   // ADX at entry (weakest of the three)
 
 input group "=== EXECUTION BOX (what is actually happening) ==="
-input bool   InpShowBox       = true;   // on-chart profit and execution panel
+input bool   InpShowBox       = false;  // the EA's OWN panel. OFF: the shared
+                                        // profit box below says the same things
+                                        // in six rows, and two panels in one
+                                        // corner is the opposite of a clean chart.
 input bool   InpShowProfitBox = true;   // the shared points/money ledger box
-input int    InpBoxCorner     = 3;      // 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+input int    InpBoxCorner     = 1;      // 0 top-left, 1 TOP RIGHT, 2 bottom-left, 3 bottom-right
 input int    InpBoxX          = 12;     // pixels in from that corner
 input int    InpBoxY          = 12;
 // The highest chart this EA will start on. M30 by default because that is
@@ -835,10 +838,10 @@ input long   InpTrackMagic2  = 880041;  // ZoneSniper, if you run it too
 input string InpTrackLabel2  = "ZONE  st+liq";
 input long   InpTrackMagic3  = 770069;  // LiquiditySniper
 input string InpTrackLabel3  = "LIQUIDITY";
-input bool   InpBoxComment    = true;   // ALSO print it as a chart Comment (cannot be hidden)
-input int    InpBoxCorner     = 0;      // 0 top-left 1 top-right 2 bottom-left 3 bottom-right
-input int    InpBoxX          = 12;     // pixels in from that corner
-input int    InpBoxY          = 18;
+input bool   InpBoxComment    = false;  // a chart Comment on top of a panel is clutter
+input int    InpPanelCorner   = 1;      // the EA's OWN execution panel. 0 top-left, 1 top-right, 2 bottom-left, 3 bottom-right
+input int    InpPanelX        = 12;     // pixels in from that corner
+input int    InpPanelY        = 18;
 input int    InpBoxSize       = 9;      // font size
 input int    InpBoxWidth      = 330;    // backdrop width in pixels
 input color  InpBoxBg         = C'13,17,23';   // solid, so the panel is readable
@@ -3786,7 +3789,7 @@ void BoxBackdrop(int rows)
    if(ObjectFind(0, nm) < 0)
    {
       ObjectCreate(0, nm, OBJ_RECTANGLE_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpPanelCorner);
       ObjectSetInteger(0, nm, OBJPROP_BORDER_TYPE, BORDER_FLAT);
       ObjectSetInteger(0, nm, OBJPROP_BGCOLOR, InpBoxBg);
       ObjectSetInteger(0, nm, OBJPROP_COLOR, InpBoxBorder);
@@ -3796,8 +3799,8 @@ void BoxBackdrop(int rows)
       ObjectSetInteger(0, nm, OBJPROP_HIDDEN, true);
       ObjectSetInteger(0, nm, OBJPROP_ZORDER, 0);
    }
-   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX - 10);
-   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY - 12);
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpPanelX - 10);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpPanelY - 12);
    ObjectSetInteger(0, nm, OBJPROP_XSIZE, InpBoxWidth);
    ObjectSetInteger(0, nm, OBJPROP_YSIZE, rows * (InpBoxSize + 6) + 16);
 }
@@ -3808,9 +3811,9 @@ void BoxLine(int idx, string txt, color c)
    if(ObjectFind(0, nm) < 0)
    {
       ObjectCreate(0, nm, OBJ_LABEL, 0, 0, 0);
-      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
-      ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX);
-      ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY + idx * (InpBoxSize + 6));
+      ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpPanelCorner);
+      ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpPanelX);
+      ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpPanelY + idx * (InpBoxSize + 6));
       ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, InpBoxSize);
       ObjectSetString(0, nm, OBJPROP_FONT, "Consolas");
       ObjectSetInteger(0, nm, OBJPROP_SELECTABLE, false);
@@ -3818,7 +3821,7 @@ void BoxLine(int idx, string txt, color c)
       ObjectSetInteger(0, nm, OBJPROP_BACK, false);
       ObjectSetInteger(0, nm, OBJPROP_ZORDER, 1);   // above the backdrop
       // right-hand corners read right-to-left, or the text runs off the chart
-      if(InpBoxCorner == 1 || InpBoxCorner == 3)
+      if(InpPanelCorner == 1 || InpPanelCorner == 3)
          ObjectSetInteger(0, nm, OBJPROP_ANCHOR, ANCHOR_RIGHT_UPPER);
    }
    // SET THESE EVERY CALL, NOT ONLY AT CREATION.
@@ -3827,12 +3830,12 @@ void BoxLine(int idx, string txt, color c)
    // position forever - so the panel was drawn, correctly, somewhere the
    // chart was not showing. Veer has reported the box not working three
    // times; this is the version of that bug I can actually find.
-   ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpBoxCorner);
-   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpBoxX);
-   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpBoxY + idx * (InpBoxSize + 6));
+   ObjectSetInteger(0, nm, OBJPROP_CORNER, (ENUM_BASE_CORNER)InpPanelCorner);
+   ObjectSetInteger(0, nm, OBJPROP_XDISTANCE, InpPanelX);
+   ObjectSetInteger(0, nm, OBJPROP_YDISTANCE, InpPanelY + idx * (InpBoxSize + 6));
    ObjectSetInteger(0, nm, OBJPROP_FONTSIZE, InpBoxSize);
    ObjectSetInteger(0, nm, OBJPROP_ANCHOR,
-        (InpBoxCorner == 1 || InpBoxCorner == 3) ? ANCHOR_RIGHT_UPPER
+        (InpPanelCorner == 1 || InpPanelCorner == 3) ? ANCHOR_RIGHT_UPPER
                                                  : ANCHOR_LEFT_UPPER);
    ObjectSetString(0, nm, OBJPROP_TEXT, txt);
    ObjectSetInteger(0, nm, OBJPROP_COLOR, c);

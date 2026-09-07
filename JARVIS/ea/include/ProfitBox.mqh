@@ -75,6 +75,7 @@ struct PBConfig
    color   cNeg;
    color   cDim;
    bool    show;
+   bool    compact;       // TODAY-first, six rows. See PB_Draw.
 };
 
 //==================== per-position ledger ==========================
@@ -99,6 +100,7 @@ struct PBStrat
    long   magic;
    string label;
    int    n, wins;
+   int    nDay;                 // today only - the compact box leads with it
    double pts, money, ptsDay;
 };
 PBStrat g_pbS[];
@@ -117,7 +119,7 @@ void PB_AddStrategy(long magic, string label)
    ArrayResize(g_pbS, n + 1);
    g_pbS[n].magic = magic;
    g_pbS[n].label = label;
-   g_pbS[n].n = 0; g_pbS[n].wins = 0;
+   g_pbS[n].n = 0; g_pbS[n].wins = 0; g_pbS[n].nDay = 0;
    g_pbS[n].pts = 0; g_pbS[n].money = 0; g_pbS[n].ptsDay = 0;
 }
 
@@ -136,7 +138,7 @@ int PB_BoxH() { return 20 + g_pbMaxRows * (g_pb.fontSize + 7); }
 double g_pbPts, g_pbPtsDay, g_pbFill, g_pbMoney, g_pbMoneyDay;
 int    g_pbNFill;   // trades that carried an arm-price note
 double g_pbBest, g_pbWorst, g_pbMaxDD, g_pbLong, g_pbShort;
-int    g_pbN, g_pbNDay, g_pbWins, g_pbNLong, g_pbNShort;
+int    g_pbN, g_pbNDay, g_pbWins, g_pbWinsDay, g_pbNLong, g_pbNShort;
 datetime g_pbFirst;
 
 //+------------------------------------------------------------------+
@@ -231,12 +233,14 @@ void PB_Scan()
    g_pbPts = 0; g_pbPtsDay = 0; g_pbFill = 0; g_pbNFill = 0;
    g_pbMoney = 0; g_pbMoneyDay = 0;
    g_pbBest = 0; g_pbWorst = 0; g_pbMaxDD = 0; g_pbLong = 0; g_pbShort = 0;
-   g_pbN = 0; g_pbNDay = 0; g_pbWins = 0; g_pbNLong = 0; g_pbNShort = 0;
+   g_pbN = 0; g_pbNDay = 0; g_pbWins = 0; g_pbWinsDay = 0;
+   g_pbNLong = 0; g_pbNShort = 0;
    g_pbFirst = 0;
    for(int i = 0; i < ArraySize(g_pbS); i++)
    {
       g_pbS[i].n = 0; g_pbS[i].wins = 0;
       g_pbS[i].pts = 0; g_pbS[i].money = 0; g_pbS[i].ptsDay = 0;
+      g_pbS[i].nDay = 0;
    }
 
    if(!HistorySelect(0, TimeCurrent() + 86400)) return;
@@ -329,6 +333,7 @@ void PB_Scan()
       if(today)
       {
          g_pbNDay++;
+         if(pts > 0) g_pbWinsDay++;
          g_pbPtsDay   += pts;
          g_pbMoneyDay += g_pbT[i].money;
       }
@@ -340,7 +345,7 @@ void PB_Scan()
          if(pts > 0) g_pbS[si].wins++;
          g_pbS[si].pts   += pts;
          g_pbS[si].money += g_pbT[i].money;
-         if(today) g_pbS[si].ptsDay += pts;
+         if(today) { g_pbS[si].ptsDay += pts; g_pbS[si].nDay++; }
       }
    }
    g_pbLastScan = TimeCurrent();
@@ -480,6 +485,71 @@ void PB_Draw()
           oDir == 0 ? g_pb.cDim : (oDir > 0 ? g_pb.cPos : g_pb.cNeg), r, 2);
    r++;
 
+   // ================== COMPACT: TODAY FIRST ==============================
+   // Veer: "make sure itss for the day only so from 12 am till live", and
+   // "nothing overboard". The full box below is fifteen rows and leads with an
+   // all-time total, so the first number his eye lands on is the wrong one -
+   // that is why a four-day panel read as one session in his screenshot.
+   //
+   // This layout puts TODAY at the top in the largest type the box has, keeps
+   // the open position visible, and files everything cumulative under one
+   // "since" line. Six rows. The per-strategy split only appears when more than
+   // one magic is actually registered, because a "by strategy" header over a
+   // single row is furniture.
+   //
+   // The day boundary is the broker's calendar day on the deal's CLOSE time
+   // (PB_Scan), which is the midnight his account rolls over on.
+   if(g_pb.compact)
+   {
+      int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
+      g_pbMaxRows = 7 + extra;
+
+      PB_Row(r++, "TODAY", PB_Num(g_pbPtsDay, 1) + " pts",
+             g_pbPtsDay >= 0 ? g_pb.cPos : g_pb.cNeg,
+             PB_Num(g_pbMoneyDay, 2) + " " + cur);
+      PB_Row(r++, "trades", IntegerToString(g_pbNDay), g_pb.cVal,
+             g_pbNDay > 0 ? IntegerToString(g_pbWinsDay) + "W "
+                            + IntegerToString(g_pbNDay - g_pbWinsDay) + "L  "
+                            + DoubleToString(100.0 * g_pbWinsDay
+                                             / MathMax(g_pbNDay, 1), 0) + "%"
+                          : "none yet today");
+      PB_Row(r++, oDir == 0 ? "open" : "open " + (oDir > 0 ? "LONG" : "SHORT"),
+             oDir == 0 ? "-" : PB_Num(oPts, 1) + " pts",
+             oDir == 0 ? g_pb.cDim : (oPts >= 0 ? g_pb.cPos : g_pb.cNeg),
+             oDir == 0 ? "flat" : PB_Num(oMoney, 2) + " " + cur
+                                  + "  " + DoubleToString(oLots, 2) + " lots");
+
+      if(extra > 0)
+      {
+         PB_Sep(r++, "-- today, by strategy --");
+         for(int i = 0; i < ArraySize(g_pbS); i++)
+            PB_Row(r++, g_pbS[i].label, PB_Num(g_pbS[i].ptsDay, 1),
+                   g_pbS[i].nDay == 0 ? g_pb.cDim
+                       : (g_pbS[i].ptsDay >= 0 ? g_pb.cPos : g_pb.cNeg),
+                   g_pbS[i].nDay == 0 ? "-"
+                       : IntegerToString(g_pbS[i].nDay) + " tr");
+      }
+
+      PB_Sep(r++, "-- since " + (g_pbFirst > 0
+             ? TimeToString(g_pbFirst, TIME_DATE) : "start") + " --");
+      PB_Row(r++, "points", PB_Num(g_pbPts, 1),
+             g_pbPts >= 0 ? g_pb.cPos : g_pb.cNeg,
+             IntegerToString(g_pbN) + " tr  "
+             + DoubleToString(winPc, 0) + "%W  " + PB_Num(g_pbMoney, 2));
+      PB_Row(r++, "max DD", DoubleToString(-g_pbMaxDD, 1), g_pb.cNeg,
+             "spread " + DoubleToString(SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                                      - SymbolInfoDouble(_Symbol, SYMBOL_BID), 2));
+
+      for(int i = r; i < r + 14; i++)
+      {
+         ObjectDelete(0, g_pb.prefix + "r" + IntegerToString(i) + "a");
+         ObjectDelete(0, g_pb.prefix + "r" + IntegerToString(i) + "b");
+         ObjectDelete(0, g_pb.prefix + "r" + IntegerToString(i) + "c");
+      }
+      ChartRedraw(0);
+      return;
+   }
+
    // POINTS FIRST. E-074.
    PB_Row(r++, "points", PB_Num(g_pbPts, 1),
           g_pbPts >= 0 ? g_pb.cPos : g_pb.cNeg,
@@ -566,6 +636,7 @@ void PB_Init(string prefix, string title, long magic, bool show,
    g_pb.corner   = corner;
    g_pb.x        = x;
    g_pb.y        = y;
+   g_pb.compact  = true;      // six rows, today first. false = the full box.
    g_pb.fontSize = 9;
    g_pb.font     = "Consolas";
    g_pb.cBg      = C'14,22,33';
