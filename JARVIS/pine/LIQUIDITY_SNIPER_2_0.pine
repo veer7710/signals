@@ -290,7 +290,8 @@ showLegs = input.bool(true, "Draw the legs and score them", group = gL)
 legMin   = input.float(3.0, "Only draw legs bigger than (ATR)", group = gL,
      step = 0.5, minval = 0.0,
      tooltip = "Small legs are noise and there are hundreds of them. Raise this until only the moves you would actually want are drawn - that is the set the indicator is being judged against.")
-legLbl   = input.bool(true, "Label each leg with its size", group = gL)
+legLbl   = input.bool(false, "Label each leg with its size", group = gL,
+     tooltip = "OFF by default: a label on every leg is the busiest thing on the chart. The line already tells you - solid and coloured means a signal fired inside it, dotted grey means we missed it.")
 
 gD = "9 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
@@ -1520,7 +1521,7 @@ if barstate.islast and showPanel
     // zeros. Veer: "nothing overboard".
     nSigOn   = (useSweep ? 1 : 0) + (useBR ? 1 : 0) + (useOB ? 1 : 0)
     showSplit = nSigOn > 1
-    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (mtfOn ? 1 : 0) + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 9 : 0)
+    nRows = 1 + 4 + (showSplit ? 1 + nSigOn : 0) + 3 + (mtfOn ? 1 : 0) + (htfOn ? 3 : 0) + (showLegs ? 3 : 0) + (panelBig ? 10 : 0)
     tp := table.new(pos, 3, nRows, border_width = 1,
          bgcolor = color.new(#0E1621, 8), border_color = color.new(#2A3A4D, 40),
          frame_color = color.new(#2A3A4D, 20), frame_width = 1)
@@ -1606,32 +1607,25 @@ if barstate.islast and showPanel
     // applied. Where they disagree is where the turn is.
     // THE CHECKLIST, live. Seven confluences, all knowable at the signal bar.
     if showCheck
-        f_sep(r, "── checklist ──   grade " + (ckScore >= 6 ? "A++"
-                      : ckScore >= 4 ? "A+" : "A") + "  (" + str.tostring(ckScore) + "/7)")
+        f_sep(r, "── checklist " + str.tostring(ckScore) + "/7 ──   grade "
+                  + (ckScore >= 6 ? "A++" : ckScore >= 4 ? "A+" : "A"))
         r += 1
-        f_row(r, "sweep / order block", f_tick(ckSweep) + " / " + f_tick(ckOB),
-                 "the setup itself", ckSweep or ckOB ? cPos : cVal)
+        f_row(r, "sweep OB vol bias",
+                 f_tick(ckSweep) + " " + f_tick(ckOB) + " " + f_tick(ckVol) + " " + f_tick(ckBias),
+                 "sess " + f_tick(ckSess) + "  room " + f_tick(ckDOL) + "  tight " + f_tick(ckTight),
+                 ckScore >= 4 ? cPos : cVal)
         r += 1
-        f_row(r, "volume / bias", f_tick(ckVol) + " / " + f_tick(ckBias),
-                 "push, and the " + htfTf + " clock", ckVol or ckBias ? cPos : cVal)
-        r += 1
-        f_row(r, "overlap / room / tight",
-                 f_tick(ckSess) + " / " + f_tick(ckDOL) + " / " + f_tick(ckTight),
-                 "session, next level, stop", ckSess or ckDOL or ckTight ? cPos : cVal)
-        r += 1
-        f_sep(r, "── what each grade actually did TODAY ──")
-        r += 1
-        f_row(r, "A++  (6-7)", f_num(pApp, "0.0") + "pt",
+        f_row(r, "A++  6-7", f_num(pApp, "0.0") + "pt",
                  str.tostring(nApp) + " tr  " +
                  (nApp > 0 ? str.tostring(100.0 * wApp / nApp, "0") + "%W" : "-"),
                  pApp >= 0 ? cPos : cNeg)
         r += 1
-        f_row(r, "A+   (4-5)", f_num(pAp, "0.0") + "pt",
+        f_row(r, "A+   4-5", f_num(pAp, "0.0") + "pt",
                  str.tostring(nAp) + " tr  " +
                  (nAp > 0 ? str.tostring(100.0 * wAp / nAp, "0") + "%W" : "-"),
                  pAp >= 0 ? cPos : cNeg)
         r += 1
-        f_row(r, "A    (0-3)", f_num(pA, "0.0") + "pt",
+        f_row(r, "A    0-3", f_num(pA, "0.0") + "pt",
                  str.tostring(nA) + " tr  " +
                  (nA > 0 ? str.tostring(100.0 * wA / nA, "0") + "%W" : "-"),
                  pA >= 0 ? cPos : cNeg)
@@ -1642,19 +1636,6 @@ if barstate.islast and showPanel
                  "M1  M5  M15  H1",
                  (b1 == b5 and b5 == b15 and b15 == b60)
                       ? (nz(b1) > 0 ? cPos : cNeg) : cVal)
-        r += 1
-    if htfOn
-        f_sep(r, "── with the " + htfTf + " bias, or against it ──")
-        r += 1
-        f_row(r, "with trend", f_num(pWith, "0.0") + "pt",
-                 str.tostring(nWith) + " tr  " +
-                 (nWith > 0 ? str.tostring(100.0 * wWith / nWith, "0") + "%W" : "-"),
-                 pWith >= 0 ? cPos : cNeg)
-        r += 1
-        f_row(r, "against trend", f_num(pAgainst, "0.0") + "pt",
-                 str.tostring(nAgainst) + " tr  " +
-                 (nAgainst > 0 ? str.tostring(100.0 * wAgainst / nAgainst, "0") + "%W" : "-"),
-                 pAgainst >= 0 ? cPos : cNeg)
         r += 1
     if showLegs
         f_sep(r, "── the legs, and how many we flagged ──")
@@ -1684,6 +1665,14 @@ if barstate.islast and showPanel
         // M1 the simulation is in a trade most of the time, so most setups
         // cannot be booked - and that is a fact about one-account simulation,
         // not about the signals. Veer trades by hand and can take them.
+        // E-170 tested this split on history and REJECTED it - the with-trend
+        // and against-trend halves shared a sign in 22 of 25 cells. It stays in
+        // the full panel only so the counters are not computed and thrown away,
+        // which is a habit this file has been caught in before.
+        f_row(r, "with / against bias",
+                 f_num(pWith, "0.0") + " / " + f_num(pAgainst, "0.0") + "pt",
+                 str.tostring(nWith) + " / " + str.tostring(nAgainst) + " tr", cVal)
+        r += 1
         f_row(r, "missed while busy", str.tostring(nMissed),
                  "shown, not booked", nMissed > 0 ? cNeg : cVal)
         r += 1
