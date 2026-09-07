@@ -238,6 +238,40 @@ var int   nTp     = 0
 var int   nGate   = 0
 var int   firstT  = 0
 
+// ---------------------------------------------------------- TODAY ONLY -----
+// Veer: "in terms of the panel make sure itss for the day only so from 12 am
+// till live". Without this the panel reads the whole loaded history, which is
+// a different question from "how is today going" and is the reason the live
+// panel he screenshotted showed 304 trades over four days as though they were
+// one session.
+//
+// The boundary is the DATE in `tzSess`, not `dayofmonth`: the chart's own
+// timezone and the session timezone are not the same thing, and using the
+// wrong one silently shifts the reset by hours.
+todayKey = str.format_time(time, "yyyyMMdd", tzSess)
+newDay   = todayKey != todayKey[1]
+if newDay
+    nTrades  := 0
+    nWins    := 0
+    sumPts   := 0.0
+    bestPts  := 0.0
+    worstPts := 0.0
+    peakEq   := 0.0
+    maxDD    := 0.0
+    nLong    := 0
+    nShort   := 0
+    ptsLong  := 0.0
+    ptsShort := 0.0
+    nStop    := 0
+    nTrail   := 0
+    nStall   := 0
+    nAged    := 0
+    nFlip    := 0
+    nTp      := 0
+    nGate    := 0
+    firstT   := 0
+    shPts    := 0.0
+
 if refuseB or refuseS
     nGate += 1
 
@@ -525,13 +559,21 @@ plot(showDema ? dema : na, "DEMA", color = color.new(#8FA3B8, 55), linewidth = 1
 // SIGNALS ARE plotshape ON CONFIRMED BARS. plotshape output cannot be deleted
 // or moved after the fact, so these can never vanish from history.
 wordSig = sigStyle == "Word labels"
-plotshape(takeBuy and wordSig, "BUY", shape.labelup, location.belowbar,
+// SIGNALS ARE DRAWN FROM buySig / sellSig, NOT takeBuy / takeSell.
+// Veer: "make sure like signals dont disappear some indictors do that to scam
+// u". take* carries "posDir == 0" - the SIMULATED book being flat - so drawing
+// from it means a signal vanishes because a simulated trade happened to be
+// open. On this system the two are equivalent today, because a flip always
+// closes the opposite position on the same bar before the entry block runs;
+// this is hardening, not a bug fix. It costs nothing and it means a future
+// edit to the exit logic cannot silently delete signals off his chart.
+plotshape(buySig and wordSig, "BUY", shape.labelup, location.belowbar,
      color = cBuy,  text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(takeSell and wordSig, "SELL", shape.labeldown, location.abovebar,
+plotshape(sellSig and wordSig, "SELL", shape.labeldown, location.abovebar,
      color = cSell, text = "SELL", textcolor = color.white, size = size.tiny)
-plotshape(takeBuy and not wordSig, "BUY (triangle)", shape.triangleup,
+plotshape(buySig and not wordSig, "BUY (triangle)", shape.triangleup,
      location.belowbar, color = cBuy,  size = size.small)
-plotshape(takeSell and not wordSig, "SELL (triangle)", shape.triangledown,
+plotshape(sellSig and not wordSig, "SELL (triangle)", shape.triangledown,
      location.abovebar, color = cSell, size = size.small)
 // a flip the DEMA gate refused. Off by default: it is something that did NOT
 // happen, and the count belongs in the panel rather than on the candles.
@@ -691,6 +733,6 @@ plot(bull ? 1 : -1, "SuperTrend (1 bull)", display = display.status_line)
 plot(dema, "DEMA value", display = display.status_line)
 plot(atr,  "ATR(14)", display = display.status_line)
 
-alertcondition(takeBuy,   "ST BUY",   "SuperTrend Sniper BUY")
-alertcondition(takeSell,  "ST SELL",  "SuperTrend Sniper SELL")
+alertcondition(buySig,   "ST BUY",   "SuperTrend Sniper BUY")
+alertcondition(sellSig,  "ST SELL",  "SuperTrend Sniper SELL")
 alertcondition(closedNow, "ST CLOSE", "SuperTrend Sniper trade closed")

@@ -597,10 +597,14 @@ if not na(lvlB) and na(swB) and low <= lvlB - sweepAtr * atrB and barstate.iscon
     r = high - low
     dispB := r > 0 ? math.abs(close - open) / r : 1.0
 
-// after a sweep the run can keep extending, and the stop goes with it
-if not na(swS) and bar_index > swS and posDir == 0
+// After a sweep the run can keep extending, and the stop goes with it. The
+// `posDir == 0` that used to be here froze the extreme for as long as a
+// simulated trade was open, so a setup that filled later got a stop measured
+// from a stale extreme. It also disagreed with the research, which extends the
+// extreme right up to the bar before the fill.
+if not na(swS) and bar_index > swS
     extS := math.max(extS, high)
-if not na(swB) and bar_index > swB and posDir == 0
+if not na(swB) and bar_index > swB
     extB := math.min(extB, low)
 
 // a setup that never came back is not a signal
@@ -616,9 +620,20 @@ if not na(bornB) and bar_index - bornB > lifeBars
 dispOkB = not useDisp or (low - high[2]) / atr >= -1.4909
 dispOkS = not useDisp or (low[2] - high) / atr >= -1.4909
 
-readyS = posDir == 0 and not na(swS) and bar_index > swS and low <= lvlS
+// THE GATE THAT SURVIVED THE FIX BELOW. The sig*/take* split at line ~1013
+// was supposed to stop the simulated book deleting signals off the chart, and
+// it did - one layer too late. `posDir == 0` was ALSO sitting here, upstream of
+// everything: with it, readyS was false while a trade was open, so fillS was
+// false, so sigSweepS was false, so nothing was drawn. Since useSweep is the
+// only signal ON by default, that meant the sweep marks - the ones Veer kept
+// telling me were missing - were still being suppressed after the fix that was
+// supposed to stop exactly that.
+//
+// The book's one-position rule lives in take* and NOWHERE ELSE. Anything that
+// decides what is DRAWN must be blind to whether a simulated trade is open.
+readyS = not na(swS) and bar_index > swS and low <= lvlS
      and dispS <= wickCut and dispOkS and barstate.isconfirmed
-readyB = posDir == 0 and not na(swB) and bar_index > swB and high >= lvlB
+readyB = not na(swB) and bar_index > swB and high >= lvlB
      and dispB <= wickCut and dispOkB and barstate.isconfirmed
 
 // THE RISK CAP. A stop wider than maxRisk ATR is refused outright - 0.01 lots
@@ -1211,23 +1226,33 @@ if anyBuy or anySell
     posBar   := bar_index
     tgtRuler = tgtMode == "N x risk" and tgtR > 0 ? posEntry + posDir * tgtR * math.abs(posEntry - posInit) : na
     posTgt  := tgtMode == "next liquidity level" ? f_nextLevel(posDir, posEntry) : tgtRuler
-    // consume the setup that fired, so it cannot fire twice
-    if sigSweepB
-        lvlB := na
-        swB  := na
-    if sigSweepS
-        lvlS := na
-        swS  := na
-    if sigBrB
-        rState := 0
-        rLvl := na
-    if sigBrS
-        sState := 0
-        sLvl := na
-    if sigObB
-        obBullTop := na
-    if sigObS
-        obBearBot := na
+
+// ---- CONSUMING THE SETUP, AND WHY IT IS NOT INSIDE THE BLOCK ABOVE --------
+// This used to sit inside `if anyBuy or anySell`, i.e. it only ran when the
+// SIMULATED book took the trade. That was harmless only while sig* was itself
+// gated on the book being flat. Now that a signal is drawn whether or not the
+// book is busy, a setup left unconsumed would re-fire its mark on every later
+// bar that touched the same level and bury the chart in duplicates.
+//
+// So the setup is spent when the SIGNAL fires. One mark per setup, drawn
+// always; the book still takes it only when flat. It runs after the block
+// above because that block reads lvlB / swB / extBf to build the stop.
+if sigSweepB
+    lvlB := na
+    swB  := na
+if sigSweepS
+    lvlS := na
+    swS  := na
+if sigBrB
+    rState := 0
+    rLvl := na
+if sigBrS
+    sState := 0
+    sLvl := na
+if sigObB
+    obBullTop := na
+if sigObS
+    obBearBot := na
 
 // ----------------------------------------------------------- the exit ------
 // E-110: the bar that filled us may not book a FAVOURABLE exit. The stop IS
@@ -1487,9 +1512,12 @@ if posDir != 0 and showLive and not na(pEnt)
 // ---------------------------------------------------------------- drawing --
 // SIGNALS ARE plotshape ON CONFIRMED BARS. plotshape output cannot be deleted
 // or moved after the fact, so these can never vanish from history.
-plot(showLvl and posDir == 0 and not na(lvlS) ? lvlS : na, "Sell-side level",
+// Veer: "we need clear levels like smc idniactor amrekd out". The level is a
+// fact about price; whether a simulated trade is open is not a reason to take
+// it off his chart, and `posDir == 0` here used to do exactly that.
+plot(showLvl and not na(lvlS) ? lvlS : na, "Sell-side level",
      color = color.new(cSell, 45), style = plot.style_linebr, linewidth = 1)
-plot(showLvl and posDir == 0 and not na(lvlB) ? lvlB : na, "Buy-side level",
+plot(showLvl and not na(lvlB) ? lvlB : na, "Buy-side level",
      color = color.new(cBuy, 45), style = plot.style_linebr, linewidth = 1)
 
 // WITH the bias: the full label. AGAINST it: a small dot, still permanent.

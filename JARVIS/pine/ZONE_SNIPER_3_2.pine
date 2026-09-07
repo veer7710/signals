@@ -103,6 +103,8 @@ lots     = input.float(0.01, "Lots", group = gM, step = 0.01, minval = 0.01)
 gbpPoint = input.float(0.787,"Account currency per point at 0.01 lots", group = gM, step = 0.001,
      tooltip = "E-081: 0.01 lots on XAUUSD is about GBP 0.787 per point and cannot go lower. This is why the TIMEFRAME sets the risk, not the account size.")
 ccy      = input.string("£", "Currency symbol", group = gM)
+tzSess   = input.string("Etc/UTC", "Timezone for the day boundary", group = gM,
+     tooltip = "The panel resets at midnight in THIS timezone. It is a date comparison, not dayofmonth, because the chart's own timezone and this one are not the same thing and using the wrong one silently shifts the reset by hours.")
 
 gD = "5 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
@@ -183,6 +185,29 @@ var int   nShort  = 0
 var float ptsLong = 0.0
 var float ptsShort= 0.0
 
+// ---------------------------------------------------------- TODAY ONLY -----
+// Veer: "make sure itss for the day only so from 12 am till live". Without
+// this the panel reads the whole loaded history, which is a different question
+// from "how is today going".
+todayKey = str.format_time(time, "yyyyMMdd", tzSess)
+newDay   = todayKey != todayKey[1]
+if newDay
+    nTrades  := 0
+    nWins    := 0
+    sumPts   := 0.0
+    sumFill  := 0.0
+    shPts    := 0.0
+    shN      := 0
+    bestPts  := 0.0
+    worstPts := 0.0
+    peakEq   := 0.0
+    maxDD    := 0.0
+    firstT   := 0
+    nLong    := 0
+    nShort   := 0
+    ptsLong  := 0.0
+    ptsShort := 0.0
+
 dirOkBuy  = not useStDir or bull
 dirOkSell = not useStDir or not bull
 
@@ -190,6 +215,49 @@ rawLow  = not na(pl) and dirOkBuy
 rawHigh = not na(ph) and dirOkSell
 newLow  = rawLow  and posDir == 0
 newHigh = rawHigh and posDir == 0
+
+// ---- WHAT VEER SEES vs WHAT THE BOOK TRADES -------------------------------
+// Veer: "make sure like signals dont disappear some indictors do that to scam
+// u", and "we need clear levels like smc idniactor amrekd out".
+//
+// newLow/newHigh carry "posDir == 0" - the SIMULATED book being flat - and the
+// levels and fill markers used to be drawn from them. That meant that while
+// one simulated trade was open, NO level was drawn and NO fill was marked, so
+// a level price genuinely reacted at simply was not on his chart. The book is
+// one position at a time on purpose (that is how it was measured) but the
+// CHART must show every level and every touch.
+//
+// So: this display pair is armed off the RAW pivot and nothing suppresses it.
+// The book below keeps its own busy-gated pair - that is accounting, and it is
+// deliberately separate from what is drawn.
+var float dArmBuy   = na
+var int   dArmBuyB  = na
+var float dArmSell  = na
+var int   dArmSellB = na
+
+if rawLow
+    dArmBuy  := pl - pastAtr * atr
+    dArmBuyB := bar_index
+if rawHigh
+    dArmSell  := ph + pastAtr * atr
+    dArmSellB := bar_index
+
+// an untouched limit is not a signal: it expires on the same clock as the book's
+if not na(dArmBuyB) and bar_index - dArmBuyB > waitBar
+    dArmBuy  := na
+    dArmBuyB := na
+if not na(dArmSellB) and bar_index - dArmSellB > waitBar
+    dArmSell  := na
+    dArmSellB := na
+
+sigFillBuy  = not na(dArmBuy)  and low  <= dArmBuy  and barstate.isconfirmed
+sigFillSell = not na(dArmSell) and high >= dArmSell and barstate.isconfirmed
+if sigFillBuy
+    dArmBuy  := na
+    dArmBuyB := na
+if sigFillSell
+    dArmSell  := na
+    dArmSellB := na
 
 // The shadow arms off the RAW signal, not off newLow/newHigh - those carry
 // "posDir == 0", so gating the shadow on them would let the real book's busy
@@ -448,14 +516,16 @@ if posDir != 0 and showLive and not na(pBox)
 // ---- what is on the candles, and this is the complete list -----------------
 plot(stLine, "SuperTrend trail", color = color.new(cTrail, 45), linewidth = 1)
 
-plotshape(filledBuy,  "BUY",  shape.labelup,   location.belowbar, color = cBuy,
+// Drawn from the DISPLAY pair, so nothing the simulated book is doing can
+// delete a level or a touch off the chart.
+plotshape(sigFillBuy,  "BUY",  shape.labelup,   location.belowbar, color = cBuy,
      text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(filledSell, "SELL", shape.labeldown, location.abovebar, color = cSell,
+plotshape(sigFillSell, "SELL", shape.labeldown, location.abovebar, color = cSell,
      text = "SELL", textcolor = color.white, size = size.tiny)
 
-plot(showLevels and posDir == 0 and not na(armBuy)  ? armBuy  : na, "Buy limit",
+plot(showLevels and not na(dArmBuy)  ? dArmBuy  : na, "Buy limit",
      color = color.new(cBuy, 25),  style = plot.style_linebr, linewidth = 2)
-plot(showLevels and posDir == 0 and not na(armSell) ? armSell : na, "Sell limit",
+plot(showLevels and not na(dArmSell) ? dArmSell : na, "Sell limit",
      color = color.new(cSell, 25), style = plot.style_linebr, linewidth = 2)
 
 // ============================== THE PROFIT BOX =============================
@@ -546,6 +616,6 @@ plot(posDir != 0 ? math.abs(close - posStop) / atr : na, "Stop distance (ATR)",
 plot(atr, "ATR(14)",                          display = display.status_line)
 plot(bull ? 1 : -1, "SuperTrend (1 bull)",    display = display.status_line)
 
-alertcondition(filledBuy,  "ZS BUY",   "Zone Sniper 3.2 BUY filled")
-alertcondition(filledSell, "ZS SELL",  "Zone Sniper 3.2 SELL filled")
+alertcondition(sigFillBuy,  "ZS BUY",   "Zone Sniper 3.2 BUY filled")
+alertcondition(sigFillSell, "ZS SELL",  "Zone Sniper 3.2 SELL filled")
 alertcondition(closedNow,  "ZS CLOSE", "Zone Sniper 3.2 trade closed")
