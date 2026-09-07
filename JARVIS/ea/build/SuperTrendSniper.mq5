@@ -2683,6 +2683,13 @@ void ManagePosition()
       {
          double be = NormalizeDouble(open, dg);
          bool better = (dir > 0) ? (be > sl) : (be < sl);
+         // E-151's class on the broker side. This is gated on the trade already
+         // being InpBreakEvenAtR in profit, so price is normally past `open`
+         // and the move is safe - but "safe because of a condition thirty lines
+         // up" stops being true after an edit, and a rejected modify leaves the
+         // stop where it was while the log says it moved. check_ea_stops.py
+         // enforces the explicit test.
+         if(dir * (price - be) <= 0.0) better = false;
          // F13. Announced success it never checked.
          if(better)
          {

@@ -1311,6 +1311,14 @@ void TrailStop()
       // not a stop.
       if(sl != 0.0 && ((dir > 0 && want <= sl) || (dir < 0 && want >= sl))) continue;
 
+      // E-151's class on the broker side: a stop on the wrong side of the
+      // CURRENT price is rejected, and a rejected modify leaves the stop
+      // where it was while the log reports a trail that is running. The
+      // ratchet above compares to the OLD stop and the distance test
+      // rejects levels too CLOSE in either direction - neither of them
+      // asks this question. check_ea_stops.py enforces it.
+      if(dir * (px - want) <= 0.0) continue;
+
       if(!trade.PositionModify(tk, want, PositionGetDouble(POSITION_TP)))
          Log(StringFormat("trail modify failed: %d %s", trade.ResultRetcode(),
                           trade.ResultRetcodeDescription()));

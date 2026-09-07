@@ -34,6 +34,9 @@ CHECKS = [
      "PARITY OK"),
     ("hand-rolled cost scales", ["python3", "JARVIS/tools/check_cost.py"],
      "clean:"),
+    ("EA stop placement",       ["python3", "JARVIS/tools/check_ea_stops.py"],
+     "0 call(s) worth reading."),
+    ("hand-rolled trails",      ["python3", "JARVIS/tools/check_trails.py"], None),
 ]
 
 
