@@ -7873,3 +7873,82 @@ with a spread attached.
 problem. M15 is UNPROVEN and not distinguishable from zero.** Do not run
 SUPERTREND_SNIPER on M1 or M5 expecting money. Its value on demo is as an
 execution probe: it fills often, so it measures spread and slippage fast.
+
+---
+
+## E-176 — E-175 IS WITHDRAWN. IT MEASURED JANUARY–JUNE 2018, NOT SUPERTREND.
+
+Veer: *"ur telling me it loses on m1 when ive tested it for months seeing profit
+on m1 dude what m1 is what worked for jt well."*
+
+He is right and E-175 is retracted. It was wrong in three separate ways, and
+each one is my error, not a limitation of the data.
+
+**1. THE SAMPLE.** The entire M1 data set in this repo is `GOLD_M1_2018.json`:
+**1 Jan to 19 Jun 2018**, gold ranging around 1300, efficiency ratio 0.113.
+That is five and a half months of a rangebound market. I published DISPROVEN on
+a trend-following system after testing it exclusively on the one regime it is
+built to lose in. Veer's months of live testing are on 2025–26 gold, which is
+one of the strongest trends in the metal's history.
+
+**2. THE UNITS.** E-175 reported points per trade and compared across regimes.
+Median 1h ATR was **2.47 in 2018 and 12.14 in 2025–26**. Comparing a move in a
+quiet market with one in a violent market and calling the second better for
+being bigger is not a comparison. Everything below is per trade in ATR.
+
+**3. THE LOGIC.** E-175 stripped the DEMA filter and the whole exit stack and
+then asserted *"no filter can fix a negative gross."* **That is false, and it
+contradicts this repo's own standing rule** — a filter earns its place when the
+trades it REFUSES are worse than the ones it allows. I tested a strategy Veer
+does not run and generalised the result to the one he does.
+
+### Same code, same clock, two different golds — GROSS, no cost, no filter
+```
+  sample                        bars  trendy  medATR     n     gross   /trade      t
+  2018 Jan-Jun, M1 -> 1h        2617   0.113    2.47   232     -38.2   -0.165  -0.43
+  2024-2026, real 1h           13725   0.125   12.14  1067   +3242.5   +3.039  +2.27
+    ... FIRST half              6862   0.133    7.49   532    +408.0   +0.767  +0.75
+    ... SECOND half             6863   0.122   18.65   535   +2838.9   +5.306  +2.15
+```
+**Both halves positive, the second unseen by the first.**
+
+### In ATR units, with the DEMA filter he actually runs
+```
+  sample                  n all  ATR/trd     t  |  n took  ATR/trd     t  | refused  ATR/trd  filter earns it?
+  2018 Jan-Jun  M1        16134   -0.011 -0.53  |    7218   -0.005 -0.15  |    8916   -0.016  YES
+  2018 Jan-Jun  M1->5m     2929   +0.010 +0.20  |    1339   +0.014 +0.19  |    1590   +0.005  YES
+  2018 Jan-Jun  M1->15m     883   +0.090 +1.03  |     395   +0.118 +0.80  |     488   +0.068  YES
+  2026 Jun-Aug  real 15m    390   -0.142 -1.18  |     185   +0.011 +0.06  |     205   -0.280  YES
+  2026 Jun-Aug  15m->1h      95   +0.197 +0.82  |      44   +0.323 +0.81  |      51   +0.089  YES
+  2024-2026     real 1h    1067   +0.166 +2.07  |     505   +0.374 +2.91  |     562   -0.020  YES
+  2024-2026     1h->4h      266   +0.279 +1.96  |     116   +0.506 +2.20  |     150   +0.104  YES
+```
+
+**`2024-2026 real 1h, filter on: +0.374 ATR per trade at t = +2.91 over 505
+trades` is the strongest result in this project.** The filter earns its place in
+seven of eight cells, and on 2026 15m it turns −0.142 into +0.011 by refusing
+trades worth −0.280 — which is precisely the mechanism E-175 declared
+impossible.
+
+**M1 in ATR units is −0.011 at t = −0.53: zero, not negative.** The
+"−0.0078/trade" headline in E-175 was points in a market whose ATR was 0.246,
+which made ~nothing look like a loss.
+
+### What is now true, stated exactly
+* **SUPPORTED:** SuperTrend + DEMA slope on 2024–26 gold at 1h, +0.374 ATR/trade,
+  t +2.91, both halves positive, filter validated by its refusals.
+* **UNPROVEN:** the same system on M1. **There is no recent M1 gold data in this
+  repo**, so Veer's actual claim has never been tested — not confirmed and not
+  denied. The 2018 M1 sample says zero, and it is the wrong regime to ask.
+* **RETRACTED:** every "DISPROVEN" in E-175.
+
+### The one action that resolves it
+Export **recent M1 XAUUSD** from MT5 (`JARVIS/tools/export_mt5_data.py`,
+instructions in `JARVIS/tools/GET_M1_DATA.md`). Until that file exists this
+project cannot answer the only question Veer has actually asked about M1, and
+should stop pretending otherwise.
+
+**METHOD RULE ADDED:** no verdict on a directional system may be published from
+a single regime. Every future result reports the sample's efficiency ratio
+alongside it, and per-trade numbers are in ATR, never points, whenever two
+samples are compared.
