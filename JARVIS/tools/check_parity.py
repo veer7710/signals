@@ -68,6 +68,7 @@ PINE_ONLY = {
     "htfDim": "how against-trend signals are drawn",
     "showLegs": "the leg scoreboard - drawing and panel only",
     "mtfOn": "the trend stack row - panel only",
+    "showCheck": "the confluence checklist - panel only",
     "volPush": "volume push marks - drawing only",
     "volPushX": "volume push threshold - drawing only",
     "acctSize": "sizing readout - panel only",

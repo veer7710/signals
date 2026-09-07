@@ -307,6 +307,8 @@ showLive  = input.bool(true, "Position box",  group = gD, inline = "s2")
 showHist  = input.bool(false, "Finished trades", group = gD, inline = "s2",
      tooltip = "OFF by default. On M1 this is a P&L label on every closed trade - thousands of them, capped at the last 500 by TradingView - and it is the single biggest source of clutter on the chart. It is also the most misleading thing here now that E-165 has shown the edge is not proven. Switch it on to study the history, not to read the market.")
 showPanel = input.bool(true, "Panel",         group = gD, inline = "s2")
+showCheck = input.bool(true, "Confluence checklist and grade", group = gD,
+     tooltip = "Seven things knowable at the signal bar: the sweep, an order block, a volume push, agreement with the higher-timeframe clock, the London/NY overlap, a clear opposing level to run at, and a stop under 0.70 ATR. THE GRADE IS A COUNT, NOT A CLAIM - not one of these has been shown to predict anything in this repo, and several were tested and rejected. So the panel counts them and then MEASURES what each grade actually did on your chart. If A++ does not beat A on your own data, it will say so. That is the point of building it this way rather than selling you the grade.")
 showRefused = input.bool(false, "Mark refused setups", group = gD,
      tooltip = "OFF by default because it is chart noise. A refused setup is one where the stop would have been wider than the risk cap allows, so the trade was declined - there is nothing to act on and there are a lot of them. The count is still in the full panel under 'refused'.")
 panelPos  = input.string("Top right", "Panel position", group = gD,
@@ -926,6 +928,7 @@ brFillS = useBR and sState == 2 and bar_index > sBar and low <= sTrig
 var int   posSrc = 0          // 1 sweep, 2 break+retest, 3 order block
 var float posTgt = na
 var bool  posWith = true
+var int   posGrade = 0
 
 // per-source books, so the panel can show which one is carrying
 var int   nS = 0
@@ -1007,6 +1010,32 @@ takeDetS   = sigDetS and posDir == 0 and not takeSweepB and not takeSweepS
 anyBuy  = takeSweepB or takeBrB or takeObB or takeDetB
 anySell = takeSweepS or takeBrS or takeObS or takeDetS
 
+// ==================== THE CONFLUENCE CHECKLIST =============================
+// The shape Veer showed me from a real trader's tool: a list of confluences,
+// a GRADE, and the win rate per grade. Seven things that are all knowable at
+// the signal bar and none of which uses a later bar.
+//
+// THE GRADE IS A COUNT, NOT A CLAIM. Nothing here has been shown to predict
+// anything - E-159 found stop width monotone but unusable, E-162 found the
+// overlap best per trade but not per pound, E-167 found volume worth t 1.68,
+// E-170 found the trend split worth nothing. So the panel does NOT tell you a
+// grade is good. It COUNTS the confluences and then MEASURES what each grade
+// actually did on your own chart. If A++ does not beat A on your data, the
+// panel will say so, and that is the point of building it this way.
+ckSweep = sigSweepB or sigSweepS
+ckOB    = not na(obBullTop) or not na(obBearBot)
+ckVol   = pushUp or pushDn or pushUp[1] or pushDn[1]
+ckBias  = (sigSweepB or sigBrB or sigObB or sigDetB) ? withB : withS
+ckSess  = inLSess and inNSess
+ckDOL   = not na(f_nextLevel(anyBuy or sigSweepB or sigBrB or sigObB or sigDetB ? 1 : -1, close))
+ckTight = not na(atr) and atr > 0 and
+     ((sigSweepB ? math.abs(lvlB - (extBf - stopBuf * atrB)) :
+       sigSweepS ? math.abs(lvlS - (extSf + stopBuf * atrS)) : na) <= 0.70 * atr)
+ckScore = (ckSweep ? 1 : 0) + (ckOB ? 1 : 0) + (ckVol ? 1 : 0) + (ckBias ? 1 : 0)
+     + (ckSess ? 1 : 0) + (ckDOL ? 1 : 0) + (ckTight ? 1 : 0)
+f_tick(b) =>
+    b ? "yes" : "-"
+
 // how many setups the chart showed you that the panel could not book
 var int nMissed = 0
 // The open question of E-169, kept as two separate books so Veer's own live
@@ -1014,6 +1043,15 @@ var int nMissed = 0
 // behave differently from the one that fights it? Pooling the two is what
 // produced a flat result in the research, and pooling them here would hide the
 // same thing on the chart.
+var int   nA    = 0
+var int   nAp   = 0
+var int   nApp  = 0
+var float pA    = 0.0
+var float pAp   = 0.0
+var float pApp  = 0.0
+var int   wA    = 0
+var int   wAp   = 0
+var int   wApp  = 0
 var int   nWith    = 0
 var int   nAgainst = 0
 var float pWith    = 0.0
@@ -1022,6 +1060,15 @@ var int   wWith    = 0
 var int   wAgainst = 0
 if newDay
     nMissed := 0
+    nA := 0
+    nAp := 0
+    nApp := 0
+    pA := 0.0
+    pAp := 0.0
+    pApp := 0.0
+    wA := 0
+    wAp := 0
+    wApp := 0
     nWith := 0
     nAgainst := 0
     pWith := 0.0
@@ -1133,6 +1180,7 @@ if anyBuy or anySell
     isObRet   = takeObB or takeObS
     posStop  := isSweep ? stopSweep : isBr ? stopBr : isObRet ? stopObRet : stopObDet
     posWith  := anyBuy ? withB : withS
+    posGrade := ckScore
     posInit  := posStop
     posPeak  := posEntry
     posBar   := bar_index
@@ -1234,6 +1282,18 @@ if posDir != 0 and barstate.isconfirmed
         else
             nShort   += 1
             ptsShort += pts
+        if posGrade >= 6
+            nApp += 1
+            pApp += pts
+            wApp += pts > 0 ? 1 : 0
+        else if posGrade >= 4
+            nAp += 1
+            pAp += pts
+            wAp += pts > 0 ? 1 : 0
+        else
+            nA += 1
+            pA += pts
+            wA += pts > 0 ? 1 : 0
         if posWith
             nWith += 1
             pWith += pts
@@ -1544,6 +1604,38 @@ if barstate.islast and showPanel
     // from m1" - the lower clock makes the new trend first, so an H1 downtrend
     // is where the M15 buy lives. Four directions, one row, no interpretation
     // applied. Where they disagree is where the turn is.
+    // THE CHECKLIST, live. Seven confluences, all knowable at the signal bar.
+    if showCheck
+        f_sep(r, "── checklist ──   grade " + (ckScore >= 6 ? "A++"
+                      : ckScore >= 4 ? "A+" : "A") + "  (" + str.tostring(ckScore) + "/7)")
+        r += 1
+        f_row(r, "sweep / order block", f_tick(ckSweep) + " / " + f_tick(ckOB),
+                 "the setup itself", ckSweep or ckOB ? cPos : cVal)
+        r += 1
+        f_row(r, "volume / bias", f_tick(ckVol) + " / " + f_tick(ckBias),
+                 "push, and the " + htfTf + " clock", ckVol or ckBias ? cPos : cVal)
+        r += 1
+        f_row(r, "overlap / room / tight",
+                 f_tick(ckSess) + " / " + f_tick(ckDOL) + " / " + f_tick(ckTight),
+                 "session, next level, stop", ckSess or ckDOL or ckTight ? cPos : cVal)
+        r += 1
+        f_sep(r, "── what each grade actually did TODAY ──")
+        r += 1
+        f_row(r, "A++  (6-7)", f_num(pApp, "0.0") + "pt",
+                 str.tostring(nApp) + " tr  " +
+                 (nApp > 0 ? str.tostring(100.0 * wApp / nApp, "0") + "%W" : "-"),
+                 pApp >= 0 ? cPos : cNeg)
+        r += 1
+        f_row(r, "A+   (4-5)", f_num(pAp, "0.0") + "pt",
+                 str.tostring(nAp) + " tr  " +
+                 (nAp > 0 ? str.tostring(100.0 * wAp / nAp, "0") + "%W" : "-"),
+                 pAp >= 0 ? cPos : cNeg)
+        r += 1
+        f_row(r, "A    (0-3)", f_num(pA, "0.0") + "pt",
+                 str.tostring(nA) + " tr  " +
+                 (nA > 0 ? str.tostring(100.0 * wA / nA, "0") + "%W" : "-"),
+                 pA >= 0 ? cPos : cNeg)
+        r += 1
     if mtfOn
         f_row(r, "trend stack",
                  f_arrow(b1) + " " + f_arrow(b5) + " " + f_arrow(b15) + " " + f_arrow(b60),
