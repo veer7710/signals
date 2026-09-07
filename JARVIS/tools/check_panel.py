@@ -110,9 +110,66 @@ def main():
     print("  PINE PANEL ROW COUNT — a cell past the table's size is a runtime error")
     print("=" * 74)
     bad = sum(check(p) for p in paths)
+    check_profitbox()
     print()
     print(f"  {bad} definite overflow(s).")
     return 1 if (bad and "--strict" in sys.argv) else 0
+
+
+
+
+# ---------------------------------------------------------------------------
+# The MT5 side of the same question. ProfitBox.mqh draws OBJ_LABEL rows inside a
+# background rectangle whose HEIGHT comes from g_pbMaxRows, so writing more rows
+# than that reserves does not error - it draws text below the frame, which just
+# looks broken. Same class of bug, different symptom, worth the same check.
+def check_profitbox():
+    """ProfitBox.mqh's compact layout, counted properly.
+
+    The first version of this check was wrong and said OVERFLOWS on a layout
+    that is fine - it counted the per-strategy PB_Row once for the source line
+    AND again for every strategy. A checker that cries wolf is worse than no
+    checker, so this one separates the rows written unconditionally from the
+    single row inside the `for` loop, and states its own arithmetic.
+    """
+    import os as _os
+    p = _os.path.join(_os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))),
+                      "ea", "include", "ProfitBox.mqh")
+    if not _os.path.exists(p):
+        return
+    src = open(p).read()
+    if "if(g_pb.compact)" not in src:
+        return
+    body = src[src.index("if(g_pb.compact)"):]
+    body = body[:body.index("ChartRedraw(0);")]
+
+    # the strategy block: everything inside `if(extra > 0)`, which contains one
+    # PB_Sep and one PB_Row that runs once PER STRATEGY
+    blk_start = body.index("if(extra > 0)")
+    blk_end = body.index("PB_Sep(r++, \"-- since ")
+    block = body[blk_start:blk_end]
+    rest = body[:blk_start] + body[blk_end:]
+
+    fixed = rest.count("PB_Row(r++") + rest.count("PB_Sep(r++")
+    blk_fixed = block.count("PB_Sep(r++")          # the header, drawn once
+    blk_per = block.count("PB_Row(r++")            # per strategy
+
+    m = re.search(r"g_pbMaxRows = (\d+) \+ extra", body)
+    print("\n  ProfitBox.mqh, compact layout (MT5)")
+    if not m:
+        print("      could not read the reserved count")
+        return
+    base = int(m.group(1))
+    print(f"      1 title + {fixed} fixed rows"
+          f" + (header {blk_fixed} + {blk_per} per strategy when >1 registered)")
+    for n in (1, 4):
+        extra = n + 1 if n > 1 else 0
+        written = 1 + fixed + (blk_fixed + blk_per * n if extra else 0)
+        reserved = base + extra
+        ok = written <= reserved
+        print(f"      {n} EA(s) registered   writes {written:>3}  "
+              f"reserves {reserved:>3}   "
+              f"{'OK, ' + str(reserved - written) + ' spare' if ok else '*** OVERFLOWS ***'}")
 
 
 if __name__ == "__main__":

@@ -506,7 +506,10 @@ void PB_Draw()
       // is the screenshot: one row per EA, today's points and trade count, on
       // whichever chart he happens to be looking at.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
-      g_pbMaxRows = 7 + extra;
+      // +1 so the frame has bottom padding. With four EAs registered the rows
+      // written come to exactly 7 + extra, which drew the border flush against
+      // the last line of text.
+      g_pbMaxRows = 8 + extra;
 
       PB_Row(r++, "TODAY", PB_Num(g_pbPtsDay, 1) + " pts",
              g_pbPtsDay >= 0 ? g_pb.cPos : g_pb.cNeg,
