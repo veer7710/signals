@@ -101,3 +101,30 @@ available answer to Veer's question and they are not a promise.
 **The single blocking item for live or funded money is a demo run that measures
 real stop-fill slippage.** E-155 shows M1 dies at 0.10 points of slippage and
 survives 0.05. Which world we are in is not knowable from here.
+
+
+---
+
+## 2026-09-07 — cost bug, M3, SuperTrend disproven, demo build shipped
+
+E-173  cost scale was re-derived per timeframe, charging M5 2.5x and M15 4.6x
+       what they pay. engine.cost_scale() is now the only implementation;
+       22 sites route through it; tools/check_cost.py --strict guards it.
+E-174  M3 measured for the first time (built from real M1 bars). M2 at 1R wins
+       49.9%, the best cell in the project, and it is noise: M2/M3/M4 are the
+       same bars grouped three ways and disagree in sign. No cell reaches |t|=2.
+E-175  SuperTrend has NEGATIVE GROSS on M1 (-0.0078, t -1.42) and M5 (-0.0543,
+       t -1.76) with no cost and no exit rules at all. Not a churn problem.
+       M15 +0.0814 at t +0.80, which is zero.
+
+SHIPPED FOR DEMO (JARVIS/DEMO_TODAY.md)
+  * execution journal in all four EAs: asked price vs filled price, spread and
+    ATR per fill. read_exec.py turns a week of demo into the two numbers the
+    whole research stack assumes and nobody has ever measured.
+  * F14 (netting DEAL_ENTRY_INOUT) was live in three more EAs. Fixed.
+  * the missing-signal bug was STILL LIVE in LIQUIDITY one layer upstream of
+    the fix that was supposed to end it: readyS/readyB carried posDir == 0.
+    Levels also vanished mid-trade in Liquidity and Zone. Panels on SuperTrend
+    and Zone are now today-only.
+
+NEXT: Veer runs demo today. The deliverable back is JARVIS_exec_*.csv, not P&L.
