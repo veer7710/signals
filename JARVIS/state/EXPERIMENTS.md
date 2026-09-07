@@ -7766,3 +7766,57 @@ pass rates, E-169's HTF grid, every M5 column above) was measured through the
 wrong cost and is pessimistic by roughly 0.04 pts/trade on M5 and 0.10 on M15;
 re-run before quoting any of them. **The bug was overstating how bad the slower
 clocks are — it was not hiding an edge in them.**
+
+---
+
+## E-174 — M3, THE CLOCK NOBODY HAD EVER MEASURED, AND WHY ITS GOOD NUMBERS ARE NOISE
+
+Veer named three timeframes: *"we targeting m3 m5 m15"*. M1, M5 and M15 have
+data files. **M3 has never been tested once in this project** — it was quietly
+assumed to sit between M1 and M5. `tf3.py` builds M2/M3/M4 from the real M1
+bars (spread taken as the WORST of the minutes inside each bar) and asks the
+E-172 fixed-target question with the E-173-corrected cost.
+
+```
+   ---- M2 ----                    ---- M3 ----                    ---- M4 ----
+  tgt    n   win%   per trade     tgt    n   win%  per trade      tgt    n   win%  per trade
+  0.50 1504  59.0%   -0.0477      0.50 1027  59.0%   -0.0666      0.50  797  59.6%   -0.0720
+  1.00 1460  49.9%   -0.0062      1.00  989  49.2%   -0.0194      1.00  765  48.1%   -0.0355
+  1.50 1408  42.7%   +0.0226      1.50  946  41.6%   +0.0123      1.50  732  40.2%   -0.0127
+  2.00 1348  35.7%   +0.0269      2.00  900  36.8%   +0.0567      2.00  692  32.9%   -0.0243
+  3.00 1241  26.3%   +0.0280      3.00  803  25.8%   +0.0091      3.00  640  24.4%   -0.0501
+```
+
+**M2 at a 1R target wins 49.9% — the closest to break-even any clock has come**
+(M1 47.4%, M5 48.1%, M15 46.5%), and M2 is positive at 1.5R, 2R and 3R, the only
+clock where three consecutive targets all print positive. That is the reading
+that would have been shipped.
+
+### It is noise, and the disproof is in the table itself
+M2, M3 and M4 are **the same M1 bars grouped three different ways.** If a clock
+effect were real, neighbours would agree. They do not: at 2R the row reads
+**+0.0269, +0.0567, −0.0243** and at 1.5R **+0.0226, +0.0123, −0.0127**. M4 is
+negative at every single target while M2 and M3 are positive at three of five.
+The disagreement between adjacent resamplings of identical data is **larger than
+the effect being claimed**, which is the definition of noise.
+
+The t-stats settle it:
+```
+  tf     tgt        n   per trade       t
+  M1     1.5     2745     -0.0038   -0.43        M4    1.5      732   -0.0127   -0.34
+  M1     2.0     2655     +0.0065   +0.63        M4    2.0      692   -0.0243   -0.55
+  M2     1.5     1408     +0.0226   +1.20        M5    1.5      571   -0.0021   -0.05
+  M2     2.0     1348     +0.0269   +1.19        M5    2.0      533   +0.0246   +0.45
+  M3     1.5      946     +0.0123   +0.43        M15   1.5      206   +0.0054   +0.04
+  M3     2.0      900     +0.0567   +1.64        M15   2.0      202   -0.0040   -0.03
+```
+**Not one cell reaches |t| = 2.** The largest is M3 at 2R, t = 1.64, and it is
+the largest of twelve cells — which is *below* what the maximum of twelve
+independent noise draws would typically be. There is no clock in this family
+whose result is distinguishable from zero.
+
+**VERDICT: M3 is UNPROVEN, and so is every other clock.** The practical finding
+for Veer's stated targets is that **choosing between M3, M5 and M15 is not the
+lever** — the six clocks span 0.5 to 15 minutes and all six sit on zero. The
+entry is the thing that is not working, exactly as he said: *"it's more about
+your producing perfect entries."*

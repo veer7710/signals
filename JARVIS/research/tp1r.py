@@ -26,8 +26,8 @@ TODAY = 7.38
 GBP_PT = TODAY * GBP
 
 
-def book(tf, tgtR, cap=1.2, buf=0.30, hold=240, cooldown=5):
-    s, SP = load(tf)
+def book(tf, tgtR, cap=1.2, buf=0.30, hold=240, cooldown=5, data=None):
+    s, SP = data if data is not None else load(tf)
     A = watr(s, 14)
     cs = cost_scale(SP, A)   # E-173: the M1 price, on every clock
     out, busy = [], -1
