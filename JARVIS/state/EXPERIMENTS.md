@@ -7466,3 +7466,56 @@ in for that reason; its cost is ASSUMED and swept 0.10–0.80 with stable rankin
 80 primary books, 81 parameter variants, 300 exit-free cells, 125 pooled cells,
 100 half-splits, ~80 folds. Bonferroni on the primary books needs |t| > 3.2.
 **The highest t on any positive book anywhere is 1.66, in sample, on n=42.**
+
+---
+
+## E-170 — THE TREND SPLIT. MY HYPOTHESIS, AND IT IS WRONG.
+
+I proposed this one with some confidence: E-169's pooled zero must be the
+with-trend and against-trend halves cancelling, because a swept low in an
+uptrend and a swept high in an uptrend are opposite trades. **It is not.**
+
+Null clean: net −0.2382, which is **1.031× the spread charged**, gross ≈ 0.
+
+```
+  exec  cell                        n   win%   gross    cost     net   net/tr      t
+  M15   LOW swept / UP    WITH    157  38.2%   +13.2    36.4   -23.2  -0.1479  -1.92
+  M15   HIGH swept/ DOWN  WITH    189  34.4%    -8.7    43.3   -52.1  -0.2754  -4.26
+  M15   LOW swept / DOWN  AGAINST 195  33.3%   -21.5    43.6   -65.1  -0.3337  -4.22
+  M15   HIGH swept/ UP    AGAINST 191  41.9%   +30.2    44.1   -13.9  -0.0726  -0.88
+```
+
+- **All 25 with-trend cells net-negative. 24 of 25 against-trend cells too.**
+- **22 of 25 cells share a sign.** Not opposite. Same.
+- Highest separation anywhere: **Welch t 2.29**, on n=62 vs 140, against a
+  Bonferroni threshold of 2.87 — and **12 of 25 diffs point the WRONG way**.
+- **The with-trend book is BELOW a matched random-entry control on four of five
+  clocks.** The best of all 30 control cells is an *against*-trend cell.
+- Both time halves negative in every well-powered cell.
+- Modern independent sample: positive in 2 of 9 books, t 0.78 and 0.84, against
+  power limits of 4.5 and 5.0 points a trade. No replication.
+- The best 2018 context (`structure`) is the WORST on modern data.
+
+**E-169's pooled zero was not an averaging artefact.** Both halves were
+near-zero-to-negative on their own. Splitting a losing book by trend gives you
+two losing books.
+
+**REJECTED on M1/M5/M15** (the clocks that can resolve an edge smaller than the
+spread). **UNPROVEN on M30/H1** — they resolve 0.30–0.69 points against a 0.228
+spread, so their positives carry no information, exactly as E-169 warned.
+
+### The methodological find, and it is worth more than the verdict
+**`priceMA` and `emaslope` trend definitions are structurally skewed:** on M5
+they split 297 with-trend against 493 against-trend, because *a sweep of a HIGH
+mostly happens while price is above its own HTF moving average.* **Any study
+that uses price-versus-MA as its trend filter is quietly running an
+against-trend book without knowing it.** SuperTrend, structure and momentum
+split roughly 50/50 and do not have this problem.
+
+### And the one the leg study caught on itself before it died
+`leg_origins.py` hit a rate limit mid-run, but not before reporting:
+*"the null is NOT flat — it produces lift too, because the post-extreme features
+overlap the label."* Features measured a few bars AFTER an extreme partly
+contain the move they are predicting, so they show lift on a random walk.
+**That study has to compare lift against lift, not lift against zero** — it
+caught its own defect before I did, and it is unfinished, not negative.
