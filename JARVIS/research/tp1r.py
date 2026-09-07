@@ -18,7 +18,7 @@ Costs push all three up. A win rate is only worth having if the money follows.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, entry_fill
+from engine import atr as watr, entry_fill, cost_scale
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 
@@ -29,8 +29,7 @@ GBP_PT = TODAY * GBP
 def book(tf, tgtR, cap=1.2, buf=0.30, hold=240, cooldown=5):
     s, SP = load(tf)
     A = watr(s, 14)
-    va = sorted(x for x in A[100:] if x)
-    cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+    cs = cost_scale(SP, A)   # E-173: the M1 price, on every clock
     out, busy = [], -1
     for (kb, px, side) in pivots(s, 5):
         a = A[kb]
@@ -84,7 +83,7 @@ def book(tf, tgtR, cap=1.2, buf=0.30, hold=240, cooldown=5):
 
 def main():
     print("=" * 92)
-    print("  E-172 — the win rate at a fixed target, with E-165-corrected fills")
+    print("  E-172/E-173 — win rate at a fixed target, E-165 fills, E-173 cost")
     print("  break-even needs: 1.0R -> 50%   0.5R -> 67%   0.25R -> 80%   (before cost)")
     print("=" * 92)
     for tf in ("M1", "M5", "M15"):

@@ -19,7 +19,7 @@ other than per-trade, and for a funded account that something is the pass rate.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
+from engine import atr as watr, trail_level, cost_scale
 from liq_m1 import load, GBP
 import combined as C
 import funded as F
@@ -35,7 +35,7 @@ def prep(tf):
         s, SP = load(tf)
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
-        cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         # generated ONCE at the widest cap; the sweep below only re-filters
         cand = [c for c in C.candidates(s, A, cs, SP, {C.SWEEP}, cap=99.0)
                 if c[1] == C.SWEEP]

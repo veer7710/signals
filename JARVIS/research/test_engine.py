@@ -288,8 +288,46 @@ def test_entry_cannot_fill_better_than_the_market():
           f"{bad} impossible fills")
 
 
+def test_cost_is_a_fixed_price_on_every_clock():
+    """E-173. The spread is a fixed PRICE. A slower clock has a larger ATR, and
+    that is exactly what makes it cheaper - so the cost charged must NOT be
+    re-derived per timeframe. The old code forced spread/ATR to 0.11 on every
+    clock, which charged M5 2.5x and M15 4.6x what it actually pays."""
+    import json, statistics
+    from engine import cost_scale, atr as watr, Series, M1_SPREAD_ATR
+
+    def med_sp_atr(tf):
+        rows = json.load(open(f"/home/user/signals/data/GOLD_{tf}_2018.json"))
+        rows.sort(key=lambda r: r[0])
+        s = Series([r[0] for r in rows], [r[1] for r in rows],
+                   [r[2] for r in rows], [r[3] for r in rows],
+                   [r[4] for r in rows])
+        SP = [r[5] for r in rows]
+        A = watr(s, 14)
+        va = sorted(x for x in A[100:] if x)
+        return statistics.median(SP), va[len(va) // 2], SP, A
+
+    sp1, a1, SP1, A1 = med_sp_atr("M1")
+    check("the M1_SPREAD_ATR constant still matches the data file",
+          abs(sp1 / a1 - M1_SPREAD_ATR) < 1e-5,
+          f"measured {sp1 / a1:.4f}, constant {M1_SPREAD_ATR}")
+
+    paid1 = sp1 * cost_scale(SP1, A1)
+    for tf in ("M5", "M15"):
+        sp, a, SP, A = med_sp_atr(tf)
+        paid = sp * cost_scale(SP, A)
+        check(f"{tf} is charged the same price as M1",
+              abs(paid - paid1) / paid1 < 0.02,
+              f"{tf} pays {paid:.4f}, M1 pays {paid1:.4f}")
+        # and the bug it replaces really did overcharge
+        bug = sp * cost_scale(SP, A, None)
+        check(f"{tf} would have been overcharged by the old per-clock scale",
+              bug > paid1 * 1.5, f"old {bug:.4f} vs {paid1:.4f}")
+
+
 test_trail_cannot_be_placed_behind_price()
 test_entry_cannot_fill_better_than_the_market()
+test_cost_is_a_fixed_price_on_every_clock()
 
 print("\n" + "=" * 66)
 print(f"  {'ALL TESTS PASSED' if not FAIL else 'FAILURES: ' + ', '.join(FAIL)}")

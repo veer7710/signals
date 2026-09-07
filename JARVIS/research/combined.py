@@ -23,7 +23,7 @@ cap, the same 25% give-back, the same cost.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level, entry_fill
+from engine import atr as watr, trail_level, entry_fill, cost_scale
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 from orderblock import blocks
@@ -193,7 +193,7 @@ def main():
         s, SP = load(tf)
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
-        cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         n = len(s)
         days = n / BPD[tf]
         print("=" * 94)

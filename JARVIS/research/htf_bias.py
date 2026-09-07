@@ -46,7 +46,7 @@ fail live.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, resample
+from engine import atr as watr, resample, cost_scale
 from liq_m1 import load, GBP
 from supertrend_rescue import st_state
 from st_context_liq_entry import swings
@@ -81,7 +81,7 @@ def main():
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x)
     med_a = va[len(va) // 2]
-    cs = 0.11 / (statistics.median(SP1) / med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     d1, fu1, fl1 = st_state(s1, 7, 1.2)
     days = len(s1) / 1440
 
@@ -264,7 +264,7 @@ def fresh():
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x)
     med_a = va[len(va) // 2]
-    cs = 0.11 / (statistics.median(SP1) / med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     d1, fu1, fl1 = st_state(s1, 7, 1.2)
     days = len(s1) / 1440
     zl = sorted((i0, px, dr) for (i0, px, dr) in swings(s1, 5))
@@ -383,7 +383,7 @@ def inverse():
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x)
     med_a = va[len(va) // 2]
-    cs = 0.11 / (statistics.median(SP1) / med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     d1, fu1, fl1 = st_state(s1, 7, 1.2)
     days = len(s1) / 1440
     zl = sorted((i0, px, dr) for (i0, px, dr) in swings(s1, 5))

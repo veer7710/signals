@@ -7675,3 +7675,94 @@ that pays for its own execution.
 at 1R with a wide stop, which is a small loss rather than a profit. **But the
 gap is now 1.2 points of win rate, not 30** — and that is a different and much
 more tractable problem than the one this project has been chasing all day.
+
+---
+
+## E-173 — THE COST WAS WRONG ON EVERY CLOCK BUT M1
+
+Veer: *"but we targeting m3 m5 m15 it's more about your producing perfect
+entries."* Those are exactly the timeframes this bug punished.
+
+Every backtest in this repo charged cost through one line, written inline in
+twenty-two separate files:
+
+```
+    cs = 0.11 / (median(spread) / median(ATR))       # and cost = spread * cs
+```
+
+`0.11` is today's ECN spread as a fraction of **M1** ATR (E-132). The line
+divides by the ratio **measured on whatever timeframe is being tested**, which
+forces spread/ATR to 0.11 on *every* clock. That is backwards. The spread is a
+fixed **price** — you pay about one spread per round trip whether you are
+looking at a 1-minute chart or a 15-minute one — and a slower clock's larger ATR
+is precisely what makes that price cheap. Forcing the ratio deletes the entire
+arithmetic advantage of a slower clock.
+
+```
+     tf   med spread   med ATR   sp/ATR      cs   CHARGED pts
+     M1       0.2294    0.2463    0.932   0.118        0.0271   <- correct
+     M5       0.2283    0.6126    0.373   0.295        0.0674   <- 2.5x too much
+    M15       0.2278    1.1448    0.199   0.553        0.1259   <- 4.6x too much
+```
+
+**M5 was charged 2.5x and M15 4.6x what they actually pay.** M1 is the
+calibration point, so M1 was right — which is why nothing caught it: the clock
+carrying almost every result in this repo was the one clock the bug did not
+touch.
+
+### The fix
+`engine.cost_scale()` is now the only implementation, and it defaults to
+`M1_SPREAD_ATR = 0.931644` — measured, not asserted — so the same PRICE is
+charged on every clock. All twenty-two sites now route through it.
+`test_engine.py::test_cost_is_a_fixed_price_on_every_clock` re-measures the
+constant from the data file on every run, asserts M5 and M15 pay the same price
+as M1 to within 2%, and asserts the old per-clock formula really did overcharge
+them by more than 1.5x. `JARVIS/tools/check_cost.py --strict` fails on a
+twenty-third hand-rolled copy (verified against a canary file).
+
+### What it changes — E-172 re-measured
+```
+  ---- M5, cost CORRECTED ----          ---- M15, cost CORRECTED ----
+   target    n   win%  need   points     target    n   win%  need   points
+     0.25  642  64.3%   80%    -90.3       0.25  229  61.1%   80%    -70.0
+     0.50  637  57.9%   67%    -62.2       0.50  226  57.5%   67%    -37.6
+     1.00  609  48.1%   50%    -25.5       1.00  217  46.5%   50%    -15.2
+     1.50  571  40.5%   40%     -1.2       1.50  206  40.8%   40%     +1.1
+     2.00  533  34.1%   33%    +13.1       2.00  202  33.2%   33%     -0.8
+     3.00  496  25.2%   25%    -13.3       3.00  186  23.7%   25%    -17.7
+```
+Per trade at a 1R target: **M5 −0.0768 → −0.0419, M15 −0.1427 → −0.0701.** The
+loss roughly halves on both. M1 is unchanged, as it must be. No fixed-target
+cell crossed break-even that was not already across, and 80% still appears
+nowhere.
+
+### And the one thing that DID change sign — read the second row before believing it
+The shipped four-signal book (E-149, `combined.py`) re-run under corrected cost:
+```
+  ---- M5, one position, cost CORRECTED ----
+  enabled                          n   /day   win%  points  per trade  maxDD GBP
+  SWEEP alone                    907    8.3  47.3%   -11.8    -0.0130     125.84
+  SWEEP + B/R + OB detection    1516   13.9  47.6%    +1.8    +0.0012     105.86
+  ALL FOUR (what ships)         2058   18.9  48.5%   +24.2    +0.0118     123.43
+
+  slippage on the combined book:   0.02 pts -> -16.9 points
+                                   0.05 pts -> -78.7 points
+```
+**The shipped M5 book is +24.2 points before slippage and −16.9 at two
+hundredths of a point of it.** Break-even slippage is 24.2/2058 = **0.012 pts,
+about a tenth of one spread.** No real execution is that good — a limit order
+that never slips still misses fills, which costs more than the slippage does.
+M1 stays negative throughout (ALL FOUR: −139.8 pts, −0.0146/trade).
+
+Inside the M5 combined book, OB-return shows +0.0493/trade over 757 trades while
+OB-return *alone* is −0.0225 over 1274. That gap is the one-position
+competition selecting which OB-returns it takes, not a better signal; it is
+exactly the shape a survivorship artefact has, and it is not evidence.
+
+**VERDICT: the defect is CONFIRMED and fixed. The corrected M5 book is
+UNPROVEN — positive by less than its own slippage sensitivity, which is another
+way of saying zero.** Every M5/M15 number recorded before today (E-156's funded
+pass rates, E-169's HTF grid, every M5 column above) was measured through the
+wrong cost and is pessimistic by roughly 0.04 pts/trade on M5 and 0.10 on M15;
+re-run before quoting any of them. **The bug was overstating how bad the slower
+clocks are — it was not hiding an edge in them.**

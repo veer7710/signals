@@ -27,7 +27,7 @@ level is contributing nothing but timing and the limit offset is theatre.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, cost_scale
 from liq_m1 import load, GBP
 from supertrend_rescue import st_state
 from st_context_liq_entry import swings
@@ -39,7 +39,7 @@ def main():
     s1, SP1 = load("M1")
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x); med_a = va[len(va) // 2]
-    cs = 0.11 / (statistics.median(SP1) / med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     d1, fu1, fl1 = st_state(s1, 7, 1.2)
     days = len(s1) / 1440
 

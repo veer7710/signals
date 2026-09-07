@@ -419,3 +419,43 @@ def entry_fill(level, open_k, d):
     if d * (open_k - level) > 0:      # already past: the stop fires at the open
         return open_k
     return level
+
+
+# ---------------------------------------------------------------------------
+# E-173. THE COST SCALE, WHICH WAS WRONG ON EVERY CLOCK BUT M1.
+#
+# Cost was computed as  cs = 0.11 / (median_spread / median_ATR)  and then
+# re-derived FOR EACH TIMEFRAME. That forces spread/ATR to 0.11 everywhere -
+# which is exactly backwards, because the spread is a fixed PRICE and a slower
+# clock's larger ATR is precisely what makes it cheaper. Forcing the ratio
+# charged M5 2.5x and M15 4.6x what they actually pay:
+#
+#     tf   med spread   med ATR   sp/ATR      cs   CHARGED
+#     M1       0.2294    0.2463    0.932   0.118    0.0271   <- correct
+#     M5       0.2283    0.6126    0.373   0.295    0.0674   <- 2.5x too much
+#    M15       0.2278    1.1448    0.199   0.553    0.1259   <- 4.6x too much
+#
+# The right model: pick the spread you actually pay TODAY, express it in the
+# file's price units, and charge that same PRICE on every clock. Calibrated on
+# M1 once, applied everywhere.
+# ---------------------------------------------------------------------------
+COST_M1_SPREAD_ATR = 0.11      # today's M1 spread as a fraction of M1 ATR (E-132)
+
+# Measured on data/GOLD_M1_2018.json: median spread 0.2294 / median ATR(14)
+# 0.2463 -> 0.931644. test_engine.py re-measures it on every run, so if the
+# data file is ever replaced the constant cannot drift silently.
+M1_SPREAD_ATR = 0.931644
+
+
+def cost_scale(spread_series, atr_series, m1_ratio=M1_SPREAD_ATR):
+    """Scale factor so that `spread * scale` is the cost ACTUALLY paid.
+
+    `m1_ratio` defaults to the measured M1 spread/ATR, which is what makes the
+    charge a fixed PRICE on every clock. Pass None to re-derive it from the
+    series given - which is the E-173 bug and is only correct for M1 itself.
+    """
+    va = sorted(x for x in atr_series[100:] if x)
+    med_atr = va[len(va) // 2]
+    med_sp = sorted(spread_series)[len(spread_series) // 2]
+    ratio = m1_ratio if m1_ratio is not None else (med_sp / med_atr)
+    return COST_M1_SPREAD_ATR / ratio

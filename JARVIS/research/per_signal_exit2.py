@@ -41,7 +41,7 @@ which is not a result, it is a coin landing the same way five times.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
+from engine import atr as watr, trail_level, cost_scale
 from liq_m1 import load
 from sweep_winrate import pivots
 import combined as C
@@ -125,7 +125,7 @@ def book(tf, src, mode, param, subset=None, cooldown=5, _cache={}):
         s, SP = load(tf)
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
-        cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         _cache[key] = (s, SP, A, cs, known_levels(s))
     s, SP, A, cs, piv = _cache[key]
     ck = (tf, src)

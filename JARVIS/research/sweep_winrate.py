@@ -48,7 +48,7 @@ of argued about.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, cost_scale
 from liq_m1 import load, GBP
 
 TODAY = 7.38
@@ -160,7 +160,7 @@ def main():
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
         med_a = va[len(va) // 2]
-        cs = 0.11 / (statistics.median(SP) / med_a)
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         bpd = {"M1": 1440, "M5": 288, "M15": 96}[tf]
         days = len(s) / bpd
         piv = pivots(s, pk)

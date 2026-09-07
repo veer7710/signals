@@ -32,7 +32,7 @@ of correctness.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
+from engine import atr as watr, trail_level, cost_scale
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 
@@ -240,7 +240,7 @@ def harness_b():
     import statistics as stt
     A = watr(s, 14)
     va = sorted(x for x in A[100:] if x)
-    cs = 0.11 / (stt.median(SP) / va[len(va) // 2])
+    cs = cost_scale(SP, A)   # E-173
     risks = []
     for _ in range(1):
         pass

@@ -28,7 +28,7 @@ the opportunity to overfit.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level, trail_apply
+from engine import atr as watr, trail_level, trail_apply, cost_scale
 from liq_m1 import load, GBP
 import combined as C
 
@@ -72,7 +72,7 @@ def book(tf, src, mode, param, subset=None, cooldown=5):
     s, SP = load(tf)
     A = watr(s, 14)
     va = sorted(x for x in A[100:] if x)
-    cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+    cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
     cand = [c for c in C.candidates(s, A, cs, SP, {src}) if c[1] == src]
     out, busy = [], -1
     for (j, _, d, entry, sl0) in cand:

@@ -24,7 +24,7 @@ from __future__ import annotations
 import os, sys, statistics, json
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
-from engine import atr as watr
+from engine import atr as watr, cost_scale
 from liq_m1 import load, build_zones, GBP
 
 TODAY = 7.38          # measured M15 ATR growth 2018 -> today (DATA_QUALITY.md)
@@ -55,7 +55,7 @@ def main():
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x); med_a = va[len(va)//2]
     med_sp = statistics.median(SP1)
-    cs = 0.11/(med_sp/med_a)                 # scale cost to today's ECN regime
+    cs = cost_scale(SP1, A1)   # E-173: today's ECN price, on every clock
     idx = {t: i for i, t in enumerate(s1.ts)}
     ts15 = {t: i for i, t in enumerate(s15.ts)}
 

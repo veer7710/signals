@@ -26,7 +26,7 @@ from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
-from engine import atr as watr
+from engine import atr as watr, cost_scale
 from liq_m1 import load, GBP
 from supertrend_rescue import st_state
 
@@ -48,7 +48,7 @@ def main():
     A1 = watr(s1, 14)
     va = sorted(x for x in A1[100:] if x); med_a = va[len(va)//2]
     med_sp = statistics.median(SP1)
-    cs = 0.11/(med_sp/med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     d1, fu1, fl1 = st_state(s1, 7, 1.2)
     days = len(s1)/1440
 

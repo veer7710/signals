@@ -24,7 +24,7 @@ from __future__ import annotations
 import os, sys, json, math, random, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
-from engine import atr as watr
+from engine import atr as watr, cost_scale
 
 GBP = 0.787
 
@@ -139,7 +139,7 @@ def main():
     med_sp = statistics.median(SP1)
     days = len(s1)/1440
     # scale 2018's spread/ATR of 0.93 down to today's ECN 0.11
-    cs = 0.11/(med_sp/med_a)
+    cs = cost_scale(SP1, A1)   # E-173
     print("="*104)
     print(f"  E-119 — M15 liquidity zones, M1 execution. {len(s1):,} M1 bars, "
           f"{len(s15):,} M15 bars")

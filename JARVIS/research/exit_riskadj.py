@@ -20,7 +20,7 @@ a drawdown cap) rather than on points, then checks the choice on unseen data.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level, trail_apply
+from engine import atr as watr, trail_level, trail_apply, cost_scale
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 import combined as C
@@ -35,7 +35,7 @@ def prep(tf):
         s, SP = load(tf)
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
-        cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         cand = [c for c in C.candidates(s, A, cs, SP, {C.SWEEP}) if c[1] == C.SWEEP]
         _C[tf] = (s, SP, A, cs, cand)
     return _C[tf]

@@ -39,7 +39,7 @@ six invalidated "validations" to learn.
 from __future__ import annotations
 import os, sys, statistics, random
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr
+from engine import atr as watr, cost_scale, M1_SPREAD_ATR
 from liq_m1 import load, GBP
 from supertrend_rescue import st_state
 
@@ -124,7 +124,7 @@ def main():
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
         med_a = va[len(va) // 2]
-        cs = 0.11 / (statistics.median(SP) / med_a)
+        cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
         d, fu, fl = st_state(s, 7, 1.2)
         bars_per_day = 1440 if tf == "M1" else 288
         days = len(s) / bars_per_day
@@ -220,7 +220,7 @@ def harsh():
         A = watr(s, 14)
         va = sorted(x for x in A[100:] if x)
         med_a = va[len(va) // 2]
-        base = statistics.median(SP) / med_a
+        base = M1_SPREAD_ATR      # E-173: the M1 ratio, on every clock
         d, fu, fl = st_state(s, 7, 1.2)
         bars_per_day = 1440 if tf == "M1" else 288
         days = len(s) / bars_per_day
@@ -231,7 +231,7 @@ def harsh():
         # ---- 1. does price actually reach the opposite edge? ---------------
         for mode, label in (("edge", "its OWN rule: target the opposite edge"),
                             ("trail", "SuperTrend trail")):
-            r = run(s, SP, A, med_a and 0.11 / base, sigs, mode, 0.60, fu, fl)
+            r = run(s, SP, A, cost_scale(SP, A), sigs, mode, 0.60, fu, fl)
             w = 100.0 * sum(1 for x in r if x > 0) / len(r)
             print(f"  {label:<42} n {len(r):>6}  win {w:>5.1f}%  "
                   f"{sum(r):>8.1f} pts")
@@ -243,7 +243,7 @@ def harsh():
             print(f"    spread/ATR {frac:.2f}   {sum(r):>8.1f} pts   "
                   f"{sum(r)/len(r):+.4f}/trade   {sum(r)*TODAY*GBP:>9.2f} GBP")
 
-        cs = 0.11 / base
+        cs = cost_scale(SP, A)   # E-173
 
         # ---- 3. out of sample ----------------------------------------------
         half = len(s) // 2

@@ -21,7 +21,7 @@ settles it, so it is measured.
 from __future__ import annotations
 import os, sys, statistics
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
+from engine import atr as watr, trail_level, cost_scale
 from liq_m1 import load, GBP
 from sweep_winrate import pivots
 
@@ -35,7 +35,7 @@ def book(tf, mode, pk=5, sweep_atr=0.10, wick=0.646, buf=0.30, cap=1.2,
     s, SP = load(tf)
     A = watr(s, 14)
     va = sorted(x for x in A[100:] if x)
-    cs = 0.11 / (statistics.median(SP) / va[len(va) // 2])
+    cs = cost_scale(SP, A)   # E-173: one PRICE on every clock - never re-derived per timeframe
     out, refused, busy = [], 0, -1
     for (kb, px, side) in pivots(s, pk):
         a = A[kb]
