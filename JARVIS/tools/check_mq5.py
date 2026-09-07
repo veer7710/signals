@@ -416,6 +416,45 @@ def check_duplicate_inputs(src, path):
     return dupes
 
 
+def check_global_used_before_declared(src):
+    """MQL5 reads a file top-down: a GLOBAL used above the line that declares it
+    is 'undeclared identifier', full stop. Functions can be forward-declared;
+    variables cannot.
+
+    This is the second compile-blocker of its class in this repo. The first was
+    a duplicate input; this one appeared the moment the per-timeframe gate
+    globals (E-178) were written next to the function that sets them, ~2400
+    lines below the function that reads them.
+
+    Only globals matching g_* are considered, which is this project's
+    convention and keeps the check free of false positives on locals.
+    """
+    depth = 0
+    decls = {}
+    lines = src.split("\n")
+    decl_pat = re.compile(r"^\s*(?:static\s+)?[A-Za-z_][\w:<>]*\s+"
+                          r"(g_\w+)\s*(?:\[[^\]]*\])?\s*(?:=|;)")
+    for i, ln in enumerate(lines, 1):
+        code = re.sub(r"//.*$", "", ln)
+        if depth == 0:
+            m = decl_pat.match(code)
+            if m and m.group(1) not in decls:
+                decls[m.group(1)] = i
+        depth += code.count("{") - code.count("}")
+        if depth < 0:
+            depth = 0
+
+    bad = []
+    for name, dline in decls.items():
+        pat = re.compile(r"\b" + re.escape(name) + r"\b")
+        for i, ln in enumerate(lines[:dline - 1], 1):
+            code = re.sub(r"//.*$", "", ln)
+            if pat.search(code):
+                bad.append((i, name, dline))
+                break
+    return bad
+
+
 def main():
     import glob
     paths = sys.argv[1:] or [f for f in sorted(glob.glob("JARVIS/ea/build/*.mq5"))
@@ -425,6 +464,10 @@ def main():
         if not os.path.exists(p):
             print("MISSING: %s" % p); total += 1; continue
         probs = check(p)
+        for (line, name, dline) in check_global_used_before_declared(io_read(p)):
+            probs.append((line, "global '%s' is used here but not declared "
+                                "until line %d - MQL5 reads top-down and this "
+                                "is 'undeclared identifier'" % (name, dline)))
         for (line, name, first) in check_duplicate_inputs(io_read(p), p):
             probs.append((line, "input '%s' is ALREADY declared at line %d - "
                                 "MQL5 rejects this outright and the file will "

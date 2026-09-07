@@ -8101,3 +8101,63 @@ M1 is the clock Veer trades. The M1/M3/M5 preset inherits the M15 numbers and
 the EA now says so in its log rather than implying the settings were measured
 there. **Exporting recent M1 from MT5 is the single thing that would let this
 question be answered instead of inherited.**
+
+---
+
+## E-179 — THE LIQUIDITY SWEEP ON RECENT GOLD. IT DOES NOT COME BACK.
+
+E-176 showed the 2018 sample was the reason SuperTrend read as dead. Every
+liquidity number in this repo — E-076, E-119, E-149, E-168, E-172 — came from
+that same Jan–Jun 2018 file, so the same question had to be asked of the sweep.
+Same setup as `combined.py`, same E-165 fill rule, cost 0.02 ATR.
+
+```
+  ---- 2024-2026 1h ----            n   win%   ATR/trd      t
+  1.0R target                     283  46.3%    -0.082  -1.15
+  2.0R target                     257  35.0%    -0.005  -0.04
+  3.0R target                     237  27.4%    -0.015  -0.11
+
+  ---- 2024-2026 4h ----
+  2.0R target                      62  37.1%    +0.183  +0.82
+  3.0R target                      61  31.1%    +0.321  +1.13
+
+  ---- 2026 15m ----
+  2.0R target                      78  39.7%    +0.126  +0.48
+  3.0R target                      72  33.3%    +0.173  +0.56
+```
+
+**Nothing reaches |t| = 1.2.** The best cell in the whole grid is 4h at a 3R
+target, t +1.13, on 61 trades.
+
+**This is the important contrast, and it is the answer to which strategy to
+put money behind.** On the same recent data, with the same cost model and the
+same fill rules:
+
+| | best measured cell | t |
+|---|---|---|
+| SuperTrend + DEMA (E-176) | 1h, +0.374 ATR/trade, 505 trades | **+2.91** |
+| Liquidity sweep (this) | 4h 3R, +0.321 ATR/trade, 61 trades | +1.13 |
+
+SuperTrend was rescued by the right sample. **The sweep was not.** It read as
+zero on 2018 and it reads as zero on 2024–2026, which is a far more robust
+negative than anything E-175 claimed.
+
+### The one real per-clock setting: pivot size
+```
+  2R target        1h        4h       15m
+  pivot 3      +0.050    +0.145    +0.208
+  pivot 5      -0.005    +0.183    +0.126
+  pivot 8      -0.027    +0.264    +0.130
+  pivot 12     -0.107    -0.052    -0.032
+```
+**A smaller pivot is better the faster the clock, and a 12-bar pivot is
+negative on every one.** That is the per-timeframe structure Veer asked for and
+it is the sensible shape: a pivot should mark a similar amount of *time*, not a
+similar number of bars. None of it is significant, so it sets a default and
+nothing more.
+
+**VERDICT: the liquidity sweep is UNPROVEN on recent gold, on every clock
+tested, and this now replicates across two eras seven years apart.** Pivot
+drops to 3 for M30 and below. It stays shipped and drawn — Veer trades these by
+hand and the levels are useful to see — but the EA's evidence is far weaker
+than SuperTrend's and the size should reflect that.

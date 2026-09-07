@@ -120,7 +120,13 @@ input long   InpMagic        = 990077;  // magic number
 input ENUM_TIMEFRAMES InpMaxTF = PERIOD_M30;  // highest chart this will start on
 
 input group "=== THE SETUP ==="
-input int    InpPivotBars    = 5;       // swing needs this many bars either side
+input int    InpPivotBars    = 3;       // swing needs this many bars either side.
+                                        // E-179: a smaller pivot is better the
+                                        // faster the clock (2R target, ATR/trade:
+                                        // 15m +0.208 at 3 vs +0.126 at 5; 1h
+                                        // +0.050 at 3 vs -0.005 at 5), and a
+                                        // 12-bar pivot is negative on every
+                                        // clock. Raise it to 8 on H4+.
 input double InpSweepAtr     = 0.10;    // sweep must clear the level by this x ATR
 input double InpWickCut      = 0.646;   // sweep body/range must be under this
 input bool   InpUseDisp      = false;   // OFF. E-139: an EA cannot execute this - see below

@@ -175,7 +175,8 @@ useOB    = input.bool(false, "ORDER BLOCK — the block, and the return to it", 
      tooltip = "OFF by default. E-151: same story as break+retest. Under achievable fills, detection is -0.0089/trade and the return is -0.0319 on M1. The order block finds real structure - it is genuinely better than a random entry - but the move it catches does not pay the spread on its own. The blocks still DRAW so you can see them behind the sweep.")
 
 gS = "2 · THE SWEEP  (measured; leave alone unless testing)"
-pvLen    = input.int(5,    "Swing needs this many bars either side", group = gS, minval = 1)
+pvLen    = input.int(3,    "Swing needs this many bars either side", group = gS, minval = 1,
+     tooltip = "E-179, measured on 2024-2026 gold at a 2R target, ATR per trade: on 15m a 3-bar pivot returns +0.208 against +0.126 at 5; on 1h +0.050 against -0.005; and a 12-bar pivot is NEGATIVE on every clock tested. A smaller pivot is better the faster the clock, which is the sensible shape - a pivot should mark a similar amount of TIME, not a similar number of bars. Raise it to 8 on H4 and above. None of this is statistically significant, so it sets a default and nothing more.")
 sweepAtr = input.float(0.10, "Sweep must clear the level by (ATR)", group = gS, step = 0.05)
 wickCut  = input.float(0.646, "Sweep body / range must be under", group = gS, step = 0.01,
      tooltip = "THE FAKEOUT FILTER. A big-bodied sweep close is a real breakout, not a rejection - and a real breakout is what BREAK+RETEST trades instead.")

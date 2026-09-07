@@ -1253,6 +1253,11 @@ input double InpRegimeChopX   = 0.70;   // multiplier in dead chop
 input double InpRegimeMixX    = 1.25;   // ...in the middle, where the money is
 input double InpRegimeTrendX  = 0.70;   // ...in an already-running trend
 
+input bool   InpAutoTune      = true;   // E-178: set the gates from the CHART's
+                                        // timeframe, using what was measured on
+                                        // that clock. Off = use the inputs as
+                                        // typed. The log prints what it chose
+                                        // and what evidence is behind it.
 input bool   InpUseChopGuard  = false;
 input int    InpChopErLen     = 50;     // BARS, never minutes - flip density is per bar
 input double InpMinEffRatio   = 0.08;   // skip below this efficiency ratio
@@ -1608,6 +1613,15 @@ bool     g_configFatal = false;  // set by CheckConfigSanity(); blocks all entri
 string   g_configWhy   = "";
 double   g_finalUpper  = 0.0;
 double   g_finalLower  = 0.0;
+// ---- the per-timeframe gate state (E-178). Declared HERE, with the other
+// globals, because TryEntry() reads them around line 1735 and MQL5 will not
+// accept a global used before it is declared. AutoTune() at OnInit sets them.
+bool   g_useAdx  = false;
+bool   g_useChop = false;
+double g_midSize = 0.25;
+double g_midLo   = 0.35;
+double g_midHi   = 0.70;
+
 int      g_stDir       = 0;      // -1 bullish, +1 bearish (Pine convention)
 int      g_stDirPrev   = 0;
 bool     g_stReady     = false;
@@ -2468,7 +2482,7 @@ void TryEntry()
    // --- ADX ceiling. The losing bucket on this strategy is entries taken when
    // the trend is ALREADY extended: ADX>35 measured -0.132R while ADX<20
    // measured +0.304R. Skipping the extended ones held out-of-sample.
-   if(InpUseAdxFilter)
+   if(g_useAdx)
    {
       double adx = ADXValue(1);
       if(adx > 0 && adx > InpMaxAdx)
@@ -2547,7 +2561,7 @@ void TryEntry()
    // CHOP GUARD. Off by default - see the input group for why the measurement
    // does not support turning it on. Left switchable so the journal can
    // settle it on Veer's own fills instead of on my 15m data.
-   if(InpUseChopGuard)
+   if(g_useChop)
    {
       double er = EfficiencyRatio(InpChopErLen);
       if(er < InpMinEffRatio)
@@ -2706,16 +2720,16 @@ void TryEntry()
    // Applied AFTER every other sizing rule, because it is the one with the
    // out-of-sample evidence behind it and it must not be diluted by them.
    double rp = RangePos();
-   if(rp >= InpMidRangeLo && rp <= InpMidRangeHi)
+   if(rp >= g_midLo && rp <= g_midHi)
    {
-      if(InpMidRangeSize <= 0.0)
+      if(g_midSize <= 0.0)
       {
          SkipLog(sdir, StringFormat("range position %.2f is mid-range - the "
                                     "flip is inside noise, not at an extreme", rp));
          return;
       }
       double step3 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
-      double cut   = lots * InpMidRangeSize;
+      double cut   = lots * g_midSize;
       if(step3 > 0) cut = MathFloor(cut / step3) * step3;
       double vmin3 = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
       cut = MathMax(vmin3, cut);
@@ -2724,7 +2738,7 @@ void TryEntry()
          Log(StringFormat("range position %.2f is mid-range (%.2f-%.2f): "
                           "sizing %.2f -> %.2f. A flip here is the market "
                           "changing its mind inside noise.",
-                          rp, InpMidRangeLo, InpMidRangeHi, lots, cut));
+                          rp, g_midLo, g_midHi, lots, cut));
          lots = cut;
       }
    }
@@ -4823,9 +4837,76 @@ void OnTimer()
    PB_Draw();
 }
 
+//==================== PER-TIMEFRAME GATES (E-178) ==================
+// Veer: "see each timeframe to have diffrent analysis on entering".
+//
+// The gates were measured on 2024-2026 gold, per clock, and then re-tested on
+// each half of that sample separately. A gate only changes a default here if
+// its REFUSALS were worse than what it kept in BOTH halves - CLAUDE.md's rule
+// plus E-150's out-of-sample rule together. What came back is that the gates
+// genuinely disagree across clocks, which is why this function exists at all:
+//
+//   1h and above    DEMA on, chop guard on, mid-range skip ON, ADX off
+//                   (mid-range: +0.246 kept vs -0.050 refused, both halves;
+//                    ADX was only good in the second half, so it stays off)
+//   M30 and below   DEMA on, chop guard on, mid-range skip OFF, ADX ON
+//                   (mid-range at 15m: -0.234 kept vs -0.027 refused - it was
+//                    refusing the BETTER trades; ADX -0.139 vs -0.281, both
+//                    halves)
+//
+// MQL5 inputs are read-only at runtime, so the gates read these globals and
+// the inputs seed them.
+void AutoTune()
+{
+   g_useAdx  = InpUseAdxFilter;
+   g_useChop = InpUseChopGuard;
+   g_midSize = InpMidRangeSize;
+   g_midLo   = InpMidRangeLo;
+   g_midHi   = InpMidRangeHi;
+   if(!InpAutoTune)
+   {
+      Print("[STS] AutoTune OFF - the gates are exactly as typed in the inputs.");
+      return;
+   }
+
+   int mins = PeriodSeconds((ENUM_TIMEFRAMES)_Period) / 60;
+   g_useChop = true;                      // measured KEEP on every clock tested
+
+   if(mins >= 60)
+   {
+      g_useAdx = false;                   // good in the second half only
+      g_midLo  = InpMidRangeLo;           // mid-range skip stays ON
+      g_midHi  = InpMidRangeHi;
+      Print("[STS] AutoTune: 1h+ preset. DEMA on, chop guard ON, mid-range "
+            "skip ON, ADX off. Measured on 2024-2026 gold at 1h: mid-range "
+            "kept +0.246 vs refused -0.050 ATR/trade in both halves.");
+   }
+   else
+   {
+      g_useAdx = true;                    // 15m: -0.139 kept vs -0.281 refused
+      // Turn the mid-range band OFF by making it empty rather than by adding
+      // another flag: at 15m it refused the BETTER trades (-0.234 kept against
+      // -0.027 refused), so leaving it on costs money on every signal it blocks.
+      g_midLo  = 2.0;
+      g_midHi  = 2.0;
+      Print("[STS] AutoTune: M30-and-below preset. DEMA on, chop guard ON, "
+            "ADX ceiling ON, mid-range skip OFF. Measured at 15m: mid-range "
+            "was refusing the BETTER trades (-0.234 kept vs -0.027 refused).");
+   }
+
+   if(mins <= 5)
+      Print("[STS] WARNING, read this: there is NO recent M1/M5 gold data in "
+            "this project, so this preset is INHERITED from the M15 "
+            "measurement, not measured on this chart's timeframe. Export "
+            "recent M1 from MT5 (JARVIS/tools/GET_M1_DATA.md) and these gates "
+            "can be settled on the clock you actually trade instead of "
+            "assumed from a slower one.");
+}
+
 int OnInit()
 {
    if(!TfGuard("STS", InpMaxTF)) return INIT_FAILED;
+   AutoTune();          // before anything reads a gate
    if(InpDemoOnly && AccountInfoInteger(ACCOUNT_TRADE_MODE) != ACCOUNT_TRADE_MODE_DEMO)
    {
       Print("REFUSING TO START: InpDemoOnly is true and this is not a demo "
