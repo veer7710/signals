@@ -8017,3 +8017,87 @@ of whether gold is trending, not of how it is tuned. That is why Veer's months
 of live M1 testing show profit — he has been trading the strongest gold trend on
 record — and it is also the warning: the 2018 sample that produced E-175's wrong
 verdict is what a flat regime looks like from the inside.
+
+---
+
+## E-178 — ELEVEN WAYS TO REFUSE A TRADE, AND WHICH OF THEM EARN IT
+
+Veer, for the third time: *"entries are just shit"*, *"we catch every trend not
+ever volume candle"*, *"only errors in entry exit now youve missed it all up and
+not improved the errors"*. He has been pointing at the entry path the whole
+time and I kept answering with regime research. So: the entry path.
+
+`TryEntry()` in SuperTrendSniper.mq5 has **eleven separate ways to refuse a
+valid flip**, and three more that shrink it:
+
+```
+  HasPending · RiskAllowsEntry · DEMA slope · ADX ceiling · no-fade candle ·
+  re-entry cooldown · StackAllows · chop efficiency · chop flip count ·
+  session · cost gate · no-room-to-the-level
+      then TrendRisk, RegimeSize and MidRange cut the size, and MidRange can
+      refuse outright.
+```
+
+**That is the mechanical explanation of "we miss trends".** A trend that begins
+on a bar where any one of eleven conditions is unhappy is never entered at all.
+And not one of these had been measured against CLAUDE.md's own standing rule —
+*a filter earns its place only if the trades it REFUSES are worse than the ones
+it allows* — on the market he actually trades.
+
+### The gates, on 2024-2026 gold, per clock
+```
+  ---- 1h, 1058 signals, ungated +0.148 ATR/trade ----
+  gate                              kept  ATR/trd      t  refused  ATR/trd   earns it?
+  DEMA slope must agree              501   +0.364  +2.81      557   -0.047   YES
+  ADX <= 35 (SHIPS OFF)              828   +0.205  +2.14      230   -0.058   YES
+  efficiency >= 0.08 (SHIPS OFF)     711   +0.210  +2.07      347   +0.020   YES
+  skip mid-range 0.35-0.70           706   +0.246  +2.47      352   -0.050   YES
+
+  ---- 4h, 261 signals, ungated +0.274 ----
+  efficiency >= 0.08                 191   +0.060  +0.42       70   +0.857   NO
+  skip mid-range                     162   +0.239  +1.36       99   +0.330   NO
+
+  ---- 15m, 389 signals, ungated -0.165 ----
+  DEMA slope must agree              184   -0.015  -0.08      205   -0.300   YES
+  ADX <= 35 (SHIPS OFF)              318   -0.139  -1.03       71   -0.281   YES
+  efficiency >= 0.08 (SHIPS OFF)     268   +0.019  +0.12      121   -0.572   YES
+  skip mid-range 0.35-0.70           260   -0.234  -1.85      129   -0.027   NO
+```
+**The gates do not agree across clocks.** That is the evidence for what Veer
+asked for — *"see each timeframe to have diffrent analysis on entering"* — and
+it is measured, not assumed.
+
+### Out of sample: worse in BOTH halves, or it does not change a default
+```
+  ---- 2024-2026 1h ----          H1 kept  H1 ref     H2 kept  H2 ref
+  DEMA slope                       +0.140  +0.033      +0.596  -0.113   KEEP
+  ADX <= 35                        +0.070  +0.143      +0.366  -0.208   not reliable
+  efficiency >= 0.08               +0.160  -0.083      +0.277  +0.118   KEEP
+  skip mid-range                   +0.202  -0.159      +0.313  +0.050   KEEP
+
+  ---- 2026 15m ----
+  DEMA slope                       -0.100  -0.346      +0.013  -0.258   KEEP
+  ADX <= 35                        -0.222  -0.262      -0.100  -0.297   KEEP
+  efficiency >= 0.08               -0.062  -0.660      +0.057  -0.496   KEEP
+  skip mid-range                   -0.189  -0.314      -0.255  +0.099   not reliable
+```
+
+### What ships, and why
+| gate | shipped | measured | change |
+|---|---|---|---|
+| DEMA slope | ON | KEEP on both clocks | **no change** |
+| chop / efficiency | **OFF** | KEEP on both clocks, both halves | **turn ON** |
+| ADX <= 35 | **OFF** | KEEP on 15m; unreliable on 1h | **ON at M30 and below only** |
+| skip mid-range | ON everywhere | KEEP on 1h; unreliable on 15m | **OFF at M30 and below** |
+| no-fade, cooldown, flip count | ON | fire too rarely to judge | left alone, near-inert |
+
+**The three near-inert gates matter as a finding of their own:** no-fade, the
+re-entry cooldown and the flip count never split the population enough to
+measure, which means they are complexity with no measurable effect in either
+direction.
+
+**M1 IS ABSENT FROM ALL OF THIS.** There is no recent M1 gold in this repo and
+M1 is the clock Veer trades. The M1/M3/M5 preset inherits the M15 numbers and
+the EA now says so in its log rather than implying the settings were measured
+there. **Exporting recent M1 from MT5 is the single thing that would let this
+question be answered instead of inherited.**
