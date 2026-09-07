@@ -7616,3 +7616,62 @@ Every trailed book negative on every clock: M1 −0.1924/trade (t −15.74), M5
 **The signals are not missing top-to-bottom because the filter is wrong. Half
 the move is structurally unavailable to any non-repainting swing marker, and the
 extremes that begin the big legs are the ones that did NOT sweep liquidity.**
+
+---
+
+## E-172 — THE WIN RATE AT A FIXED TARGET, MEASURED
+
+Veer: *"80% winrate at tp 1 btw rest is just luck icl as long as we hit
+consistent profits that's all that matters."* A concrete question that had never
+been asked with the E-165-corrected entry fill. Asked.
+
+```
+  M1     target      n    win%   need    points  per trade   GBP @0.01
+           0.25   2966   61.4%    80%    -209.3    -0.0706       -1216
+           0.50   2940   56.6%    67%    -140.2    -0.0477        -814
+           1.00   2849   47.4%    50%     -54.2    -0.0190        -315
+           1.50   2745   40.5%    40%     -10.4    -0.0038         -60
+           2.00   2655   35.1%    33%     +17.3    +0.0065        +101
+           3.00   2457   26.7%    25%      +8.9    +0.0036         +52
+```
+M5 and M15 look the same in shape and are worse in money.
+
+**At a 1R target the win rate is 47.4% and break-even needs 50%. He is 2.6
+points of win rate short — much closer than any headline in this project has
+been — but short.** And 80% never appears at any target: the closest is 61.4% at
+0.25R, where break-even needs 80%.
+
+**Only the 2R and 3R columns are positive, and they win 35% and 27% of the
+time.** The two things he wants — a high win rate and a positive book — sit at
+opposite ends of the same table.
+
+### WHY, and it is one number
+```
+  M1 median spread 0.2294 pts, median ATR 0.2463  ->  spread/ATR = 0.932
+     at a 1.2 ATR risk cap the round trip is 0.78R OF YOUR WIN
+     at 2.0 ATR: 0.47R      at 3.0 ATR: 0.31R      at 4.0 ATR: 0.23R
+```
+**On M1 gold, with the shipped 1.2 ATR risk cap, the round-trip spread is 78% of
+a 1R win.** A 0.25R target is a third of the spread — it is not a target, it is
+a rounding error. That single ratio explains every negative fixed-target column
+above, and it is why the 61.4% win rate at 0.25R is nowhere near the ~80% the
+geometry alone would give.
+
+### Does widening the stop rescue it? Almost, and not enough.
+```
+  M1, target 1.0R:  cap 1.2 -> 47.4%, -0.0190/trade
+                    cap 2.0 -> 47.9%, -0.0184
+                    cap 3.0 -> 48.4%, -0.0156
+                    cap 4.0 -> 48.7%, -0.0125
+                    cap 6.0 -> 48.8%, -0.0105
+```
+Widening the stop shrinks the spread from 0.78R to 0.23R and the win rate rises
+**47.4% → 48.8%**, monotonically, and the loss shrinks by two thirds. **It is
+converging on about 49% and it never crosses 50.** The spread was the drag, not
+the whole story: with the cost nearly removed the entry is still a coin flip
+that pays for its own execution.
+
+**VERDICT: 80% at 1R is DISPROVEN on this setup.** The honest ceiling is ~49%
+at 1R with a wide stop, which is a small loss rather than a profit. **But the
+gap is now 1.2 points of win rate, not 30** — and that is a different and much
+more tractable problem than the one this project has been chasing all day.
