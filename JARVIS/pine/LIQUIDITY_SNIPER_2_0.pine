@@ -301,6 +301,22 @@ legLbl   = input.bool(false, "Label each leg with its size", group = gL,
 gD = "9 · CHART"
 cBuy   = input.color(#00B0FF, "Buy",  group = gD, inline = "c1")
 cSell  = input.color(#FF3B5C, "Sell", group = gD, inline = "c1")
+// ============================ CLEAN CHART ==================================
+// Veer, looking at his own screenshot: "wtf why is my chart soo so messy random
+// lines massive profit box and just overall aesthics is bad".
+//
+// He is right, and the cause is that every layer defaults ON: legs, BOS/CHoCH,
+// order zones, swing levels, session shading, volume pushes, the forming block,
+// the R-ladder, the breakeven line, the target line. Each was reasonable on its
+// own and together they bury the price.
+//
+// ONE switch. On (the default) the chart shows only the four things he actually
+// trades from: the BUY/SELL marks, the live levels, the order blocks, and the
+// live position. Everything else is available by turning this off - nothing is
+// deleted, and no SIGNAL is ever hidden by it.
+cleanChart = input.bool(true, "CLEAN CHART — signals, levels, blocks and the live position only",
+     group = gD,
+     tooltip = "Turns off the layers that are useful for studying the system and noisy for trading it: the leg scoreboard lines, BOS/CHoCH labels, every-swing level marks, session shading, volume-push arrows, the forming order block, refused setups, finished-trade labels. Turn it OFF to get all of them back. It never hides a BUY or SELL mark - Veer's rule is that a signal, once printed, is never taken away.")
 showLvl   = input.bool(true, "Live levels",   group = gD, inline = "s1")
 showLevels = input.bool(true, "Mark out every swing level", group = gD,
      tooltip = "The SMC level layer: every confirmed swing drawn as a line and carried forward. A level price CLOSES through is not deleted - it turns dotted and stays, because a broken level is exactly what you watch for the pullback back into it. This is the analysis done for you; the entry is still your call.")
@@ -326,6 +342,19 @@ panelPos  = input.string("Top right", "Panel position", group = gD,
      options = ["Top right", "Bottom right", "Bottom left"])
 panelBig  = input.bool(false, "Show the full panel", group = gD,
      tooltip = "Off: profit, trades, win rate, which signal is paying, and the enter-by price. On: adds the risk block and the session row.")
+
+// The effective flags. Pine inputs are read-only, so the master switch is
+// applied here once and every draw site reads the *Eff name below it.
+showLegsEff   = showLegs   and not cleanChart
+showSmcEff    = showSmc    and not cleanChart
+showLevelsEff = showLevels and not cleanChart
+showSessEff   = showSess   and not cleanChart
+showBreakEff  = showBreak  and not cleanChart
+showHistEff   = showHist   and not cleanChart
+showRefEff    = showRefused and not cleanChart
+volPushEff    = volPush    and not cleanChart
+obRealtimeEff = obRealtime and not cleanChart
+legLblEff     = legLbl     and not cleanChart
 
 f_num(x, d) =>
     (x >= 0 ? "+" : "") + str.tostring(x, d)
@@ -396,11 +425,11 @@ f_trimLn(la, kp) =>
     while array.size(la) > kp
         line.delete(array.shift(la))
 
-if showLevels and not na(ph)
+if showLevelsEff and not na(ph)
     array.push(lnHi, line.new(bar_index - pvLen, ph, bar_index, ph,
          color = color.new(cSell, 55), width = 1))
     f_trimLn(lnHi, maxLvl)
-if showLevels and not na(pl)
+if showLevelsEff and not na(pl)
     array.push(lnLo, line.new(bar_index - pvLen, pl, bar_index, pl,
          color = color.new(cBuy, 55), width = 1))
     f_trimLn(lnLo, maxLvl)
@@ -415,7 +444,7 @@ if barstate.isconfirmed and array.size(lnHi) > 0
             line.set_style(ln, line.style_dotted)
             array.remove(lnHi, i)
             array.push(lnBk, ln)
-            if showBreak
+            if showBreakEff
                 label.new(bar_index, line.get_y1(ln), "broken",
                      style = label.style_label_down, size = size.tiny,
                      color = color.new(chart.bg_color, 100),
@@ -429,7 +458,7 @@ if barstate.isconfirmed and array.size(lnLo) > 0
             line.set_style(ln, line.style_dotted)
             array.remove(lnLo, i)
             array.push(lnBk, ln)
-            if showBreak
+            if showBreakEff
                 label.new(bar_index, line.get_y1(ln), "broken",
                      style = label.style_label_up, size = size.tiny,
                      color = color.new(chart.bg_color, 100),
@@ -500,9 +529,9 @@ sessFilter = input.bool(false, "Trade the London/New York overlap only",
 inASess = not na(time(timeframe.period, sessA, tzSess))
 inLSess = not na(time(timeframe.period, sessL, tzSess))
 inNSess = not na(time(timeframe.period, sessN, tzSess))
-inA = showSess and inASess
-inL = showSess and inLSess
-inN = showSess and inNSess
+inA = showSessEff and inASess
+inL = showSessEff and inLSess
+inN = showSessEff and inNSess
 sessOk = not sessFilter or (inLSess and inNSess)
 sessTint = inN ? color.new(#F5A623, 95) : inL ? color.new(#4A90D9, 96) : inA ? color.new(#7B68EE, 97) : na
 bgcolor(sessTint, title = "Sessions")
@@ -681,8 +710,8 @@ if not na(pl)
     smcL  := pl
     smcLb := bar_index - pvLen
 
-bosUp = showSmc and not na(smcH) and close > smcH and barstate.isconfirmed
-bosDn = showSmc and not na(smcL) and close < smcL and barstate.isconfirmed
+bosUp = showSmcEff and not na(smcH) and close > smcH and barstate.isconfirmed
+bosDn = showSmcEff and not na(smcL) and close < smcL and barstate.isconfirmed
 if bosUp
     label.new(bar_index, smcH, smcTrend < 0 ? "CHoCH" : "BOS",
          style = label.style_label_down, color = color.new(chart.bg_color, 100),
@@ -764,10 +793,10 @@ if newVolBear and showZones
 // Participation arriving WITH direction: volume well above its own recent
 // median and a bar that is mostly body. Tick volume, so broker-dependent.
 volMed  = ta.median(volume, 50)
-pushUp  = volPush and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
+pushUp  = volPushEff and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
      and volume >= volPushX * volMed and close > open
      and (high - low) > 0 and (close - open) / (high - low) >= 0.55
-pushDn  = volPush and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
+pushDn  = volPushEff and volOk and not na(volMed) and volMed > 0 and barstate.isconfirmed
      and volume >= volPushX * volMed and close < open
      and (high - low) > 0 and (open - close) / (high - low) >= 0.55
 
@@ -791,9 +820,9 @@ if obLen > 1
         formDns += close[i] < open[i] ? 1 : 0
 formP    = obLen                       // the candle one bar closer than obp
 formMove = close[formP] != 0 ? math.abs(close[formP] - close[1]) / close[formP] * 100.0 : 0.0
-formBull = showZones and obRealtime and obLen > 1 and formMove >= obThr
+formBull = showZones and obRealtimeEff and obLen > 1 and formMove >= obThr
      and close[formP] < open[formP] and formUps == obLen - 1
-formBear = showZones and obRealtime and obLen > 1 and formMove >= obThr
+formBear = showZones and obRealtimeEff and obLen > 1 and formMove >= obThr
      and close[formP] > open[formP] and formDns == obLen - 1
 
 var box fBull = na
@@ -1013,7 +1042,12 @@ ckOB    = not na(obBullTop) or not na(obBearBot)
 ckVol   = pushUp or pushDn or pushUp[1] or pushDn[1]
 ckBias  = rawB ? withB : withS
 ckSess  = inLSess and inNSess
-ckDOL   = not na(f_nextLevel(rawB ? 1 : -1, close))
+// f_nextLevel walks a 300-entry array. This ran on EVERY bar, signal or not -
+// about 6M interpreted iterations over a 20k-bar M1 chart, before anything else
+// in the script - and when no setup was live it scanned for a level nobody had
+// asked about. That is a realistic "calculation timeout" on the clock Veer
+// trades. Only ask when there is a signal to ask about.
+ckDOL   = (rawB or rawS) and not na(f_nextLevel(rawB ? 1 : -1, close))
 ckTight = not na(atr) and atr > 0 and
      ((fillB ? math.abs(lvlB - (extBf - stopBuf * atrB)) :
        fillS ? math.abs(lvlS - (extSf + stopBuf * atrS)) : na) <= 0.70 * atr)
@@ -1137,11 +1171,36 @@ if newDay
     ptsLegAll := 0.0
     ptsLegHit := 0.0
 
-// a signal counts for the leg it is INSIDE, in that leg's direction
-if legDir > 0 and (sigSweepB or sigBrB or sigObB or sigDetB)
-    legHit := true
-if legDir < 0 and (sigSweepS or sigBrS or sigObS or sigDetS)
-    legHit := true
+// WHY THIS USED TO PRINT 0 / 74 ON EVERY CHART, AND WHY THAT WAS A LIE.
+//
+// It used to read "a signal counts for the leg it is INSIDE, in that leg's
+// direction" - `if legDir > 0 and sigSweepB -> legHit := true`. For THIS
+// strategy that condition is structurally unreachable:
+//
+//   * a rising leg only becomes legDir > 0 when a pivot LOW CONFIRMS, which is
+//     pvLen bars AFTER the low formed
+//   * a sweep BUY fires when price sweeps BELOW that low and returns - i.e. AT
+//     the low, while the leg still in progress is the FALLING one, legDir = -1
+//   * so when the buy fires, legDir > 0 is false
+//   * then the low confirms, and the reset block below sets legHit := false,
+//     wiping anything that had been recorded
+//   * during the rising leg no new low is swept, so no further buy fires
+//
+// The entry is a TURN entry. It is supposed to fire at the end of one leg and
+// the start of the next. The scoreboard only credited signals fired in the
+// MIDDLE of an already-confirmed leg, so it could only ever print zero - and
+// it printed "0 / 74, +0.0pt of +572.4pt on offer" on Veer's live chart, which
+// reads as "this system catches nothing" and is a measurement artefact.
+//
+// The honest question is "was there a signal, this leg's way, anywhere from
+// just before it started to the bar it ended". pvLen of slack at the front is
+// exactly the pivot's confirmation lag - the signal fires inside it by design.
+var int lastBuySigB  = -1
+var int lastSellSigB = -1
+if sigSweepB or sigBrB or sigObB or sigDetB
+    lastBuySigB := bar_index
+if sigSweepS or sigBrS or sigObS or sigDetS
+    lastSellSigB := bar_index
 
 // Pine CANNOT modify a global inside a user function, so this is written
 // inline rather than as f_closeLeg(). It was a function first and that is a
@@ -1160,17 +1219,21 @@ if barstate.isconfirmed and not na(pl) and legDir <= 0 and not na(legFrom)
 
 if legClose
     legSize = math.abs(legToPx - legFrom)
+    // Caught = a signal this leg's way, between pvLen bars before the leg
+    // started and the bar it ended on.
+    sigB = legDir > 0 ? lastBuySigB : lastSellSigB
+    legHit := sigB >= legFromB - pvLen and sigB <= legToBar and sigB >= 0
     if legSize >= legMin * atr
         nLegAll += 1
         ptsLegAll += legSize
         if legHit
             nLegHit += 1
             ptsLegHit += legSize
-        if showLegs
+        if showLegsEff
             legCol = legHit ? (legDir > 0 ? cBuy : cSell) : color.new(#8FA3B8, 30)
             line.new(legFromB, legFrom, legToBar, legToPx, color = legCol,
                  width = 1, style = legHit ? line.style_solid : line.style_dotted)
-            if legLbl
+            if legLblEff
                 label.new(math.round((legFromB + legToBar) / 2),
                      (legFrom + legToPx) / 2,
                      f_num(legDir * (legToPx - legFrom), "0.0") + "pt"
@@ -1184,12 +1247,10 @@ if barstate.isconfirmed and not na(ph)
     legFrom  := ph
     legFromB := bar_index - pvLen
     legDir   := -1
-    legHit   := false
 if barstate.isconfirmed and not na(pl)
     legFrom  := pl
     legFromB := bar_index - pvLen
     legDir   := 1
-    legHit   := false
 
 // ---------------------------------------------------------- open a trade ---
 if anyBuy or anySell
@@ -1373,7 +1434,7 @@ if posDir != 0 and barstate.isconfirmed
             nO += 1
             pO += pts
             wO += pts > 0 ? 1 : 0
-        if showHist
+        if showHistEff
             label.new(bar_index, posDir > 0 ? math.max(posEntry, exitPx) : math.min(posEntry, exitPx),
                  f_num(pts, "0.0") + "pt " + f_ccy(pts),
                  style = posDir > 0 ? label.style_label_lower_left : label.style_label_upper_left,
@@ -1428,9 +1489,13 @@ f_killLive() =>
 if (anyBuy or anySell) and showLive and posDir != 0
     f_killLive()
     col = posDir > 0 ? cBuy : cSell
+    // Veer: "massive profit box". On M1 a trade can hold 240 bars, so this box
+    // is genuinely four hours wide - the fix is not to shrink it but to stop it
+    // shouting. Border only, and a fill faint enough that the candles inside it
+    // stay the brightest thing on the chart.
     pBox := box.new(posBar, posEntry, bar_index, close,
-         border_color = color.new(col, 60), border_width = 1,
-         bgcolor = color.new(col, 93))
+         border_color = color.new(col, 45), border_width = 1,
+         bgcolor = color.new(col, 97))
     pEnt := line.new(posBar, posEntry, bar_index, posEntry,
          color = color.new(#B0BEC5, 20), width = 1)
     pSl  := line.new(posBar, posStop, bar_index, posStop,
@@ -1549,9 +1614,9 @@ plotshape(sigDetB, "BUY  OB at detection",  shape.circle, location.belowbar,
      color = cBuy,  size = size.tiny)
 plotshape(sigDetS, "SELL OB at detection",  shape.circle, location.abovebar,
      color = cSell, size = size.tiny)
-plotshape(showRefused and tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
+plotshape(showRefEff and tooWideB, "risk cap refused (buy)",  shape.xcross, location.belowbar,
      color = color.new(cBuy, 70),  size = size.tiny)
-plotshape(showRefused and tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
+plotshape(showRefEff and tooWideS, "risk cap refused (sell)", shape.xcross, location.abovebar,
      color = color.new(cSell, 70), size = size.tiny)
 
 // ================================ THE PANEL ================================
@@ -1599,7 +1664,7 @@ if barstate.islast and showPanel
          + 2                                   // cost paid / enter by
          + (showCheck ? 5 : 0)                  // -- checklist -- + 4 grade rows
          + (mtfOn ? 1 : 0)                      // trend stack
-         + (showLegs ? 3 : 0)                   // -- legs -- + 2
+         + (showLegsEff ? 3 : 0)                   // -- legs -- + 2
          + 1                                   // the separator before the tail
          + (panelBig ? 10 : 0)                  // the full panel
     tp := table.new(pos, 3, nRows, border_width = 1,
@@ -1717,7 +1782,7 @@ if barstate.islast and showPanel
                  (b1 == b5 and b5 == b15 and b15 == b60)
                       ? (nz(b1) > 0 ? cPos : cNeg) : cVal)
         r += 1
-    if showLegs
+    if showLegsEff
         f_sep(r, "── the legs, and how many we flagged ──")
         r += 1
         f_row(r, "legs caught", str.tostring(nLegHit) + " / " + str.tostring(nLegAll),

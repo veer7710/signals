@@ -938,7 +938,12 @@ bool     g_stReady     = false;
 // many, and an overflow degrades to "not tracked" rather than to corruption.
 #define MAX_TRACK 64
 ulong    g_tkId[MAX_TRACK];        // position ticket
-double   g_tkPeakPx[MAX_TRACK];    // best favourable excursion, in price
+double   g_tkPeakPx[MAX_TRACK];    // best favourable excursion, as a
+                                   // DISTANCE in points from the entry -
+                                   // NOT a price level. "in price" used to
+                                   // say "in price units" and it read as
+                                   // "is a price", which is exactly the
+                                   // mistake the give-back trail made.
 // The peak as it stood BEFORE this tick. E-051 deliberately computed its
 // trigger from the previous bar's peak, because using the same bar's high to
 // place a trigger inside that bar assumes the high printed before the
@@ -1110,7 +1115,6 @@ double   g_sdSum = 0.0;
 int      g_altN   = 0;                // alternating ones
 int      g_altWin = 0;
 double   g_altSum = 0.0;
-int      g_lastEntryDir = 0;
 bool     g_sameAsLast = false;
 int      g_thisDir = 0;               // direction of the position now open
 void   SaveStats();
@@ -1735,8 +1739,14 @@ void UpdateTwoPole()
    int total = len + warm + 5;
    double c[];
    if(CopyClose(_Symbol, _Period, 1, total, c) < total) return;
-   // c[0] is the newest closed bar; walk oldest -> newest so the recursion
-   // runs in bar order, exactly as Pine and v19.18 do it.
+   // CopyClose into a dynamic array leaves AS_SERIES FALSE, so c[0] is the
+   // OLDEST bar, not the newest. The comment here used to claim the opposite
+   // and the loop below trusted it, which ran the EMA recursion backwards and
+   // then read g_tpNow off the oldest bars in the window - about 65 bars stale
+   // with the slope sign inverted. UpdateSuperTrend() at ~1414 does this
+   // correctly and says why; this call was the only Copy* in the file missing
+   // it. Set AFTER the copy, which is what guarantees index 0 is newest.
+   ArraySetAsSeries(c, true);
    int maxIdx = total - len;
    if(maxIdx < 5) return;
    double raw[];
@@ -2723,7 +2733,16 @@ void ManagePosition()
          double t;
          if(InpGiveBack > 0.0 && pti >= 0 && g_tkPeakPx[pti] > 0.0)
          {
-            double up = dir * (g_tkPeakPx[pti] - open);
+            // g_tkPeakPx IS ALREADY THE RUN-UP, NOT A PRICE LEVEL.
+            // UpdatePeaks stores `fav = (px - open) * dir` - a distance in
+            // points. I read it as a price and wrote `dir * (peak - open)`,
+            // which on XAUUSD gives about -2645 for a long (so `up <= 0` and
+            // the trail returns) and +2645 for a short (so the level lands
+            // ~1000 points away and the placeability guard returns). Either
+            // way THIS TRAIL NEVER MOVED A STOP, on any trade, since I added
+            // it. Every other reader in this file has it right - line 3549
+            // even says "best excursion, in PRICE" meaning price UNITS.
+            double up = g_tkPeakPx[pti];
             if(up <= 0.0) continue;                 // no run-up yet, no trail
             t = open + dir * up * (1.0 - InpGiveBack);
          }
@@ -3634,17 +3653,14 @@ void ProtectPositions()
       double gb    = GiveBackAllowed(peakR, stall, g_tkPeakImp[ti]);
       double keep  = peakR * (1.0 - gb);
 
-      // If the trade armed on MONEY rather than on R, the R-space floor above
-      // can sit below zero and never trigger. Protect the money peak directly
-      // as well, and act on whichever floor is hit first.
-      bool moneyBreach = false;
-      if(armedMoney && g_tkPeakMoney[ti] > 0.0)
-      {
-         double mNow = PositionGetDouble(POSITION_PROFIT)
-                     + PositionGetDouble(POSITION_SWAP);
-         moneyBreach = (mNow <= g_tkPeakMoney[ti] * (1.0 - gb));
-      }
-      if(rNow > keep && !moneyBreach) continue;
+      // There was a `moneyBreach` branch here guarded on `armedMoney`, an
+      // identifier that is declared NOWHERE in this file - it would not
+      // compile. Its intent was "this trade armed on the money floor rather
+      // than on R", but the `if(peakR < InpGbArmR) continue;` above refuses
+      // every trade whose R-peak is short, so there is no money-armed path for
+      // it to catch. Deleted rather than given a definition that could only
+      // ever be false.
+      if(rNow > keep) continue;
 
       // One close REQUEST at a time. Without this a requote produced a fresh
       // close attempt, a Log line and a full FileOpen/Write/Close journal row
@@ -4023,8 +4039,6 @@ void RegisterEntry(int dir)
    // is this the same way as the last trade we took?
    g_thisDir = dir;
    g_sameAsLast = (g_lastEntryDir != 0 && dir == g_lastEntryDir);
-   g_lastEntryDir = dir;
-
    g_lastEntryDir = dir;
    g_lastEntryBar = iTime(_Symbol, _Period, 0);
 }

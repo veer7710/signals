@@ -571,8 +571,19 @@ void PB_Draw()
    if(g_pbFirst > 0)
       days = MathMax(1.0, (double)(TimeCurrent() - g_pbFirst) / 86400.0);
 
-   // 15 fixed rows plus one per registered strategy
-   g_pbMaxRows = 15 + ArraySize(g_pbS);
+   // THE BACKDROP IS DRAWN BELOW FROM g_pbMaxRows, so the compact layout has
+   // to set it HERE - it used to set it 55 lines further down, after the
+   // rectangle had already been sized for the full 15-row panel. With four
+   // magics registered that made the backdrop 324px tall while the rows were
+   // laid out for 212px, and because the box anchors from a corner the rows
+   // sat about 112px inside their own frame.
+   if(g_pb.compact)
+   {
+      int extraNow = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
+      g_pbMaxRows = 8 + extraNow;
+   }
+   else
+      g_pbMaxRows = 15 + ArraySize(g_pbS);   // 15 fixed plus one per strategy
 
    // ---- background ---------------------------------------------------
    string bg = g_pb.prefix + "bg";
@@ -626,11 +637,9 @@ void PB_Draw()
       // screenshot that". Every EA now registers all four magics, so this block
       // is the screenshot: one row per EA, today's points and trade count, on
       // whichever chart he happens to be looking at.
+      // g_pbMaxRows is already set above, BEFORE the backdrop was drawn.
+      // +1 over the rows written so the frame has bottom padding.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
-      // +1 so the frame has bottom padding. With four EAs registered the rows
-      // written come to exactly 7 + extra, which drew the border flush against
-      // the last line of text.
-      g_pbMaxRows = 8 + extra;
 
       PB_Row(r++, "TODAY", PB_Num(g_pbPtsDay, 1) + " pts",
              g_pbPtsDay >= 0 ? g_pb.cPos : g_pb.cNeg,
@@ -1606,7 +1615,7 @@ void TryArm()
    for(int pass = 0; pass < 2 && InpUseSweep; pass++)
    {
       bool sellSide = (pass == 0);
-      Setup s = sellSide ? g_sell : g_buy;
+      Setup s; if(sellSide) s = g_sell; else s = g_buy;   // no struct ternary in MQL5
       if(!s.live || s.swept < 0 || bar <= s.swept) continue;
       if(s.disp > InpWickCut) continue;              // THE FAKEOUT FILTER
 
@@ -1887,7 +1896,13 @@ void TrailStop()
          double gd   = MathMax(MinStopDist(), FreezeDist());
          if(bett && safe && (gd <= 0.0 || dir * (px - beLv) >= gd))
          {
-            if(trade.PositionModify(tk, beLv, 0.0))
+            // PASS THE CURRENT TP, NOT 0.0. CTrade::PositionModify sets BOTH,
+            // so 0.0 ERASES the take profit. With InpHiWinR > 0 the sequence
+            // was: TP placed at arm time, then the first tick this trade
+            // reached InpBeAtR deleted it, and the position ran with no target
+            // at all - the exact opposite of what "high win rate mode" says it
+            // does. Dormant at InpHiWinR = 0, live the moment it is switched on.
+            if(trade.PositionModify(tk, beLv, PositionGetDouble(POSITION_TP)))
                { sl = beLv; g_lastSl = beLv; Log("stop to breakeven"); }
             else
                Log(StringFormat("BREAKEVEN MODIFY REJECTED %d %s - stop still %.*f",
@@ -1940,7 +1955,7 @@ void TrailStop()
          bool moved = (MathAbs(cand - g_lastSl) >= _Point);
          if(better && room && moved)
          {
-            if(trade.PositionModify(tk, cand, 0.0))
+            if(trade.PositionModify(tk, cand, PositionGetDouble(POSITION_TP)))
                g_lastSl = cand;
             else
                Log(StringFormat("TRAIL MODIFY REJECTED %d %s - the stop is "

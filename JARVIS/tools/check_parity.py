@@ -70,6 +70,7 @@ OB_PINE, OB_EA = "useOB", ("InpUseObDetect", "InpUseObReturn")
 
 # Deliberately unpaired, with the reason. Anything else unpaired is a finding.
 PINE_ONLY = {
+    "cleanChart": "the master drawing switch - the EA draws nothing",
     "showLvl": "drawing", "showSmc": "drawing", "showZones": "drawing",
     "showLive": "drawing", "showHist": "drawing", "showPanel": "drawing",
     "showSess": "drawing", "showRefused": "drawing", "panelBig": "drawing",

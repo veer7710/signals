@@ -8257,3 +8257,72 @@ There is still no recent M1 gold in this repo.
   of every peak. It now measures from the PEAK (`g_tkPeakPx`, already tracked
   and never read by the trail). E-177: MAE 1.824 → 0.803, win rate 44.6% →
   50.7%, same return per unit of drawdown. `InpGiveBack = 0.60`.
+
+---
+
+## E-182 — "legs caught 0 / 74" WAS A BROKEN RULER, NOT A VERDICT
+
+Veer's live M1 panel, screenshotted: **`legs caught 0 / 74`, `points in legs
++0.0pt of +572.4pt on offer`**, alongside 37 trades and a 48.6% win rate. Read
+literally that says the system caught none of the day's moves. It was the
+measurement, not the strategy.
+
+Traced through the file's own single-pass order:
+```
+  line 1141  if legDir > 0 and (sigSweepB or ...) -> legHit := true
+  line 1183  when a pivot confirms: legFrom/legDir reset AND legHit := false
+```
+* a rising leg only becomes `legDir > 0` when a pivot **low confirms**, which is
+  `pvLen` bars AFTER that low formed
+* a sweep BUY fires when price sweeps **below** that low and returns — i.e. **at**
+  the low, while the leg in progress is still the falling one, `legDir = -1`
+* so at the instant the signal fires, `legDir > 0` is false
+* the low then confirms, and the reset sets `legHit := false`, wiping it
+* during the rising leg no new low is swept, so no further buy fires
+
+**The entry is a TURN entry — it fires at the end of one leg and the start of
+the next, by design. The scoreboard only credited signals fired in the MIDDLE of
+an already-confirmed leg, so for this strategy it could only ever print zero.**
+
+Fixed: the last buy- and sell-signal bar are tracked, and a leg counts as caught
+if a signal its way fell between `legFromB - pvLen` and `legToBar`. The `pvLen`
+of slack at the front is exactly the pivot's confirmation lag — the window the
+signal fires in by construction.
+
+**This is the second time a panel row has answered the wrong question in the
+flattering-to-my-code direction** (the first: "missed while busy" could never
+count a sweep, E-149's fix). A panel row that CANNOT print a non-zero value is
+worse than no row.
+
+---
+
+## E-183 — ZONE_SNIPER's TRAIL WAS BOOKING EXITS AT PRICES THE BAR NEVER TRADED
+
+```pine
+posStop := posDir > 0 ? math.max(posStop, stLine) : math.min(posStop, stLine)
+hitStop = posDir > 0 ? low <= posStop : high >= posStop
+exitPx  := hitStop ? posStop : ...
+```
+`ta.supertrend` returns only the **active** band. On the bar the trend flips
+bull→bear, `stLine` stops being the lower band under price and becomes the
+**upper band above it** — so `math.max` moved a long's stop above that same
+bar's high, `low <= posStop` was trivially true, and the exit was booked there.
+The flip bar *is* the bar the trail should exit on, so it fired on essentially
+every trail exit.
+
+Replicated on this repo's 157,051 M1 bars:
+```
+  as shipped   4072 trades   +1068.6 pts   89.8% win   3963 exits (97.3%) at a
+                                                        price the bar had passed
+  with clamp   3964 trades    -237.3 pts   46.3% win   0 fabricated
+```
+**+1320.7 points and 43 points of win rate were invented.** The shadow book had
+the identical defect, so the panel's "the level adds" row was a difference of
+two fabrications.
+
+An 89.8% win rate on a system whose own header quotes 55% was the tell, and
+nobody — me included — looked at it.
+
+Both books now carry SUPERTREND_SNIPER's existing E-151 clamp: a level already
+on the wrong side of this bar's close cannot be rested at, so the honest exit is
+the close.

@@ -535,8 +535,19 @@ void PB_Draw()
    if(g_pbFirst > 0)
       days = MathMax(1.0, (double)(TimeCurrent() - g_pbFirst) / 86400.0);
 
-   // 15 fixed rows plus one per registered strategy
-   g_pbMaxRows = 15 + ArraySize(g_pbS);
+   // THE BACKDROP IS DRAWN BELOW FROM g_pbMaxRows, so the compact layout has
+   // to set it HERE - it used to set it 55 lines further down, after the
+   // rectangle had already been sized for the full 15-row panel. With four
+   // magics registered that made the backdrop 324px tall while the rows were
+   // laid out for 212px, and because the box anchors from a corner the rows
+   // sat about 112px inside their own frame.
+   if(g_pb.compact)
+   {
+      int extraNow = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
+      g_pbMaxRows = 8 + extraNow;
+   }
+   else
+      g_pbMaxRows = 15 + ArraySize(g_pbS);   // 15 fixed plus one per strategy
 
    // ---- background ---------------------------------------------------
    string bg = g_pb.prefix + "bg";
@@ -590,11 +601,9 @@ void PB_Draw()
       // screenshot that". Every EA now registers all four magics, so this block
       // is the screenshot: one row per EA, today's points and trade count, on
       // whichever chart he happens to be looking at.
+      // g_pbMaxRows is already set above, BEFORE the backdrop was drawn.
+      // +1 over the rows written so the frame has bottom padding.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
-      // +1 so the frame has bottom padding. With four EAs registered the rows
-      // written come to exactly 7 + extra, which drew the border flush against
-      // the last line of text.
-      g_pbMaxRows = 8 + extra;
 
       PB_Row(r++, "TODAY", PB_Num(g_pbPtsDay, 1) + " pts",
              g_pbPtsDay >= 0 ? g_pb.cPos : g_pb.cNeg,
@@ -1102,6 +1111,18 @@ input bool   InpVerboseLog    = true;   // log every decision
 input bool   InpJournal       = true;   // CSV of every fill: asked vs got
 
 //==================== STATE ========================================
+// Moved up from line ~691. The prototypes for PushGap/AgeGaps at ~423 name
+// this type, and MQL5 will not accept a type that has not been declared
+// yet even inside a forward declaration.
+struct Gap
+{
+   double top;
+   double bot;
+   int    born;
+   int    dir;        // +1 bullish (support), -1 bearish (resistance)
+   bool   dead;
+};
+
 struct Zone
 {
    double px;        // centre
@@ -1436,14 +1457,6 @@ void ExpireZones(Zone &Z[], int bar)
 // more money - better on every axis, which is rare enough to be suspicious of,
 // so it was checked out of sample (+0.598 / +0.377) and block by block.
 
-struct Gap
-{
-   double top;
-   double bot;
-   int    born;
-   int    dir;        // +1 bullish (support), -1 bearish (resistance)
-   bool   dead;
-};
 
 Gap g_fvg[];
 Gap g_ob[];
@@ -1539,7 +1552,7 @@ double BestLevel(int dir, double px, double a, string &src)
                        : NearestZone(g_zB, bar, px, true);
    if(idx >= 0)
    {
-      Zone z = (dir > 0) ? g_zS[idx] : g_zB[idx];
+      Zone z; if(dir > 0) z = g_zS[idx]; else z = g_zB[idx];   // no struct ternary in MQL5
       double lvl = EntryLevel(z, a);
       if((dir > 0 && lvl < px) || (dir < 0 && lvl > px))
       { best = lvl; have = true; src = "zone"; }
@@ -1552,7 +1565,7 @@ double BestLevel(int dir, double px, double a, string &src)
       int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
       for(int i = 0; i < cnt; i++)
       {
-         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         Gap g; if(pass == 0) g = g_fvg[i]; else g = g_ob[i];   // no struct ternary in MQL5
          if(g.dir != dir) continue;
          double mid = (g.top + g.bot) / 2.0;
          if(dir > 0 && mid >= px) continue;
@@ -1594,7 +1607,7 @@ double NextLevel(int dir, double px, double a)
       int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
       for(int i = 0; i < cnt; i++)
       {
-         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         Gap g; if(pass == 0) g = g_fvg[i]; else g = g_ob[i];   // no struct ternary in MQL5
          double L = (g.top + g.bot) / 2.0;
          if((L - px) * dir < minD) continue;
          if(!have || (L - px) * dir < (best - px) * dir) { best = L; have = true; }

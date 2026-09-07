@@ -155,6 +155,9 @@ input bool   InpJournal       = true;   // CSV of every fill: asked vs got
 //==================== STATE ========================================
 struct Zone { double px; int dir; datetime born; datetime dead; bool used; };
 Zone     g_zones[];
+// Which zone the resting order was armed from, so ONE fill consumes ONE zone
+// rather than the whole book. -1 = nothing armed.
+int      g_armZone = -1;
 int      g_atrM1 = INVALID_HANDLE;
 datetime g_lastM1  = 0;
 datetime g_lastM15 = 0;
@@ -486,6 +489,7 @@ void ArmSide(int dir)
    double px = (dir > 0) ? ask : bid;
    double lvl; int zi;
    if(!BestZone(dir, px, a, lvl, zi)) return;
+   g_armZone = zi;          // remember it for the fill
 
    int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    lvl = NormalizeDouble(lvl, dg);
@@ -726,8 +730,15 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          g_tradesToday++;
          // one side filled: the other is now a trade we do not want
          KillAll("filled on the other side");
-         // mark the zone consumed so it is not re-armed
-         for(int i = 0; i < ArraySize(g_zones); i++) g_zones[i].used = true;
+         // ONE FILL USED TO CONSUME THE ENTIRE ZONE BOOK.
+         // The comment said "the zone", singular; the loop marked EVERY zone
+         // used, and BuildZones() then deletes every used zone. BuildZones adds
+         // at most ONE zone per bar, so after each fill the EA went blind until
+         // it had rebuilt the whole book - up to InpMaxZones*2 bars of setups
+         // missed against a backtest that had every zone available.
+         if(g_armZone >= 0 && g_armZone < ArraySize(g_zones))
+            g_zones[g_armZone].used = true;
+         g_armZone = -1;
          // move the arm-price note from the order ticket onto the position it
          // became. If the note is missing the trade simply reads as entered at
          // market, which is the honest answer rather than a guess.

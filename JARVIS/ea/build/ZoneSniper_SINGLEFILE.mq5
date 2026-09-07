@@ -507,8 +507,19 @@ void PB_Draw()
    if(g_pbFirst > 0)
       days = MathMax(1.0, (double)(TimeCurrent() - g_pbFirst) / 86400.0);
 
-   // 15 fixed rows plus one per registered strategy
-   g_pbMaxRows = 15 + ArraySize(g_pbS);
+   // THE BACKDROP IS DRAWN BELOW FROM g_pbMaxRows, so the compact layout has
+   // to set it HERE - it used to set it 55 lines further down, after the
+   // rectangle had already been sized for the full 15-row panel. With four
+   // magics registered that made the backdrop 324px tall while the rows were
+   // laid out for 212px, and because the box anchors from a corner the rows
+   // sat about 112px inside their own frame.
+   if(g_pb.compact)
+   {
+      int extraNow = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
+      g_pbMaxRows = 8 + extraNow;
+   }
+   else
+      g_pbMaxRows = 15 + ArraySize(g_pbS);   // 15 fixed plus one per strategy
 
    // ---- background ---------------------------------------------------
    string bg = g_pb.prefix + "bg";
@@ -562,11 +573,9 @@ void PB_Draw()
       // screenshot that". Every EA now registers all four magics, so this block
       // is the screenshot: one row per EA, today's points and trade count, on
       // whichever chart he happens to be looking at.
+      // g_pbMaxRows is already set above, BEFORE the backdrop was drawn.
+      // +1 over the rows written so the frame has bottom padding.
       int extra = ArraySize(g_pbS) > 1 ? ArraySize(g_pbS) + 1 : 0;
-      // +1 so the frame has bottom padding. With four EAs registered the rows
-      // written come to exactly 7 + extra, which drew the border flush against
-      // the last line of text.
-      g_pbMaxRows = 8 + extra;
 
       PB_Row(r++, "TODAY", PB_Num(g_pbPtsDay, 1) + " pts",
              g_pbPtsDay >= 0 ? g_pb.cPos : g_pb.cNeg,
@@ -902,6 +911,9 @@ input bool   InpJournal       = true;   // CSV of every fill: asked vs got
 //==================== STATE ========================================
 struct Zone { double px; int dir; datetime born; datetime dead; bool used; };
 Zone     g_zones[];
+// Which zone the resting order was armed from, so ONE fill consumes ONE zone
+// rather than the whole book. -1 = nothing armed.
+int      g_armZone = -1;
 int      g_atrM1 = INVALID_HANDLE;
 datetime g_lastM1  = 0;
 datetime g_lastM15 = 0;
@@ -1233,6 +1245,7 @@ void ArmSide(int dir)
    double px = (dir > 0) ? ask : bid;
    double lvl; int zi;
    if(!BestZone(dir, px, a, lvl, zi)) return;
+   g_armZone = zi;          // remember it for the fill
 
    int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    lvl = NormalizeDouble(lvl, dg);
@@ -1473,8 +1486,15 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          g_tradesToday++;
          // one side filled: the other is now a trade we do not want
          KillAll("filled on the other side");
-         // mark the zone consumed so it is not re-armed
-         for(int i = 0; i < ArraySize(g_zones); i++) g_zones[i].used = true;
+         // ONE FILL USED TO CONSUME THE ENTIRE ZONE BOOK.
+         // The comment said "the zone", singular; the loop marked EVERY zone
+         // used, and BuildZones() then deletes every used zone. BuildZones adds
+         // at most ONE zone per bar, so after each fill the EA went blind until
+         // it had rebuilt the whole book - up to InpMaxZones*2 bars of setups
+         // missed against a backtest that had every zone available.
+         if(g_armZone >= 0 && g_armZone < ArraySize(g_zones))
+            g_zones[g_armZone].used = true;
+         g_armZone = -1;
          // move the arm-price note from the order ticket onto the position it
          // became. If the note is missing the trade simply reads as entered at
          // market, which is the honest answer rather than a guess.

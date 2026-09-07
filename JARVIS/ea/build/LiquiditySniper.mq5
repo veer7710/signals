@@ -354,6 +354,18 @@ input bool   InpVerboseLog    = true;   // log every decision
 input bool   InpJournal       = true;   // CSV of every fill: asked vs got
 
 //==================== STATE ========================================
+// Moved up from line ~691. The prototypes for PushGap/AgeGaps at ~423 name
+// this type, and MQL5 will not accept a type that has not been declared
+// yet even inside a forward declaration.
+struct Gap
+{
+   double top;
+   double bot;
+   int    born;
+   int    dir;        // +1 bullish (support), -1 bearish (resistance)
+   bool   dead;
+};
+
 struct Zone
 {
    double px;        // centre
@@ -688,14 +700,6 @@ void ExpireZones(Zone &Z[], int bar)
 // more money - better on every axis, which is rare enough to be suspicious of,
 // so it was checked out of sample (+0.598 / +0.377) and block by block.
 
-struct Gap
-{
-   double top;
-   double bot;
-   int    born;
-   int    dir;        // +1 bullish (support), -1 bearish (resistance)
-   bool   dead;
-};
 
 Gap g_fvg[];
 Gap g_ob[];
@@ -791,7 +795,7 @@ double BestLevel(int dir, double px, double a, string &src)
                        : NearestZone(g_zB, bar, px, true);
    if(idx >= 0)
    {
-      Zone z = (dir > 0) ? g_zS[idx] : g_zB[idx];
+      Zone z; if(dir > 0) z = g_zS[idx]; else z = g_zB[idx];   // no struct ternary in MQL5
       double lvl = EntryLevel(z, a);
       if((dir > 0 && lvl < px) || (dir < 0 && lvl > px))
       { best = lvl; have = true; src = "zone"; }
@@ -804,7 +808,7 @@ double BestLevel(int dir, double px, double a, string &src)
       int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
       for(int i = 0; i < cnt; i++)
       {
-         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         Gap g; if(pass == 0) g = g_fvg[i]; else g = g_ob[i];   // no struct ternary in MQL5
          if(g.dir != dir) continue;
          double mid = (g.top + g.bot) / 2.0;
          if(dir > 0 && mid >= px) continue;
@@ -846,7 +850,7 @@ double NextLevel(int dir, double px, double a)
       int cnt = (pass == 0) ? ArraySize(g_fvg) : ArraySize(g_ob);
       for(int i = 0; i < cnt; i++)
       {
-         Gap g = (pass == 0) ? g_fvg[i] : g_ob[i];
+         Gap g; if(pass == 0) g = g_fvg[i]; else g = g_ob[i];   // no struct ternary in MQL5
          double L = (g.top + g.bot) / 2.0;
          if((L - px) * dir < minD) continue;
          if(!have || (L - px) * dir < (best - px) * dir) { best = L; have = true; }

@@ -859,7 +859,7 @@ void TryArm()
    for(int pass = 0; pass < 2 && InpUseSweep; pass++)
    {
       bool sellSide = (pass == 0);
-      Setup s = sellSide ? g_sell : g_buy;
+      Setup s; if(sellSide) s = g_sell; else s = g_buy;   // no struct ternary in MQL5
       if(!s.live || s.swept < 0 || bar <= s.swept) continue;
       if(s.disp > InpWickCut) continue;              // THE FAKEOUT FILTER
 
@@ -1140,7 +1140,13 @@ void TrailStop()
          double gd   = MathMax(MinStopDist(), FreezeDist());
          if(bett && safe && (gd <= 0.0 || dir * (px - beLv) >= gd))
          {
-            if(trade.PositionModify(tk, beLv, 0.0))
+            // PASS THE CURRENT TP, NOT 0.0. CTrade::PositionModify sets BOTH,
+            // so 0.0 ERASES the take profit. With InpHiWinR > 0 the sequence
+            // was: TP placed at arm time, then the first tick this trade
+            // reached InpBeAtR deleted it, and the position ran with no target
+            // at all - the exact opposite of what "high win rate mode" says it
+            // does. Dormant at InpHiWinR = 0, live the moment it is switched on.
+            if(trade.PositionModify(tk, beLv, PositionGetDouble(POSITION_TP)))
                { sl = beLv; g_lastSl = beLv; Log("stop to breakeven"); }
             else
                Log(StringFormat("BREAKEVEN MODIFY REJECTED %d %s - stop still %.*f",
@@ -1193,7 +1199,7 @@ void TrailStop()
          bool moved = (MathAbs(cand - g_lastSl) >= _Point);
          if(better && room && moved)
          {
-            if(trade.PositionModify(tk, cand, 0.0))
+            if(trade.PositionModify(tk, cand, PositionGetDouble(POSITION_TP)))
                g_lastSl = cand;
             else
                Log(StringFormat("TRAIL MODIFY REJECTED %d %s - the stop is "
