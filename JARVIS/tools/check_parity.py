@@ -20,6 +20,26 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PINE = os.path.join(ROOT, "pine", "LIQUIDITY_SNIPER_2_0.pine")
 EA   = os.path.join(ROOT, "ea", "build", "SweepSniper.mq5")
 
+# THE SECOND PAIR, WHICH THIS TOOL WAS NOT WATCHING.
+# It only ever compared the liquidity Pine against SweepSniper. The SuperTrend
+# pair was uncovered, and that is exactly how a trail change landed in
+# SuperTrendSniper.mq5 (give back a fraction of the run-up) while the Pine kept
+# a fixed ATR distance - two different exits, no tool saying so, and a panel
+# measuring a system that was not the one trading.
+ST_PINE = os.path.join(ROOT, "pine", "SUPERTREND_SNIPER_5_0.pine")
+ST_EA   = os.path.join(ROOT, "ea", "build", "SuperTrendSniper.mq5")
+ST_PAIRS = {
+    "stLen":    "InpStAtrLen",
+    "stMult":   "InpStMult",
+    "useDema":  "InpUseDemaFilter",
+    "stopAtr":  "InpStopAtrMult",
+    "trailAtr": "InpTrailAtrMult",
+    "giveBack": "InpGiveBack",
+    "useTrail": "InpUseTrail",
+    "tpR":      "InpTargetR",
+    "maxStall": "InpMaxStall",
+}
+
 # Pine name -> EA name. Anything not in here is reported as unpaired, so adding
 # an input to one file and not the other is caught rather than assumed benign.
 PAIRS = {
@@ -110,6 +130,29 @@ def norm(v):
         return v
 
 
+def compare(label, pine_path, ea_path, pairs, strict_extra=True):
+    """One Pine/EA pair. Returns the number of mismatches."""
+    P, E = pine_inputs(open(pine_path).read()), ea_inputs(open(ea_path).read())
+    print(f"\n  ---- {label} ----")
+    bad = 0
+    for pn, en in sorted(pairs.items()):
+        if pn not in P:
+            print(f"  not in the Pine: {pn}  (rename it here or in the file)")
+            bad += 1
+            continue
+        if en not in E:
+            print(f"  not in the EA:   {en}")
+            bad += 1
+            continue
+        a, b = norm(P[pn]), norm(E[en])
+        if a != b:
+            print(f"  DIFFERENT  {pn} = {a}   but   {en} = {b}")
+            bad += 1
+        else:
+            print(f"  ok         {pn:<12} = {a:<8} == {en}")
+    return bad
+
+
 def main():
     p = open(PINE).read()
     e = open(EA).read()
@@ -117,6 +160,7 @@ def main():
     print("=" * 74)
     print("  PINE / EA PARITY — shared parameters must have the same default")
     print("=" * 74)
+    print("\n  ---- liquidity: LIQUIDITY_SNIPER_2_0.pine <-> SweepSniper.mq5 ----")
     bad = 0
     for pn, en in sorted(PAIRS.items()):
         if pn not in P:
@@ -146,6 +190,35 @@ def main():
             print(f"    {k} = {P[k]}")
         print("  Either pair it in PAIRS, or list it in PINE_ONLY with why.")
         bad += len(extra)
+
+    bad += compare("supertrend: SUPERTREND_SNIPER_5_0.pine <-> "
+                   "SuperTrendSniper.mq5", ST_PINE, ST_EA, ST_PAIRS)
+
+    # THE DEMA LENGTH IS THE SAME BEHAVIOUR ENCODED TWO DIFFERENT WAYS, so
+    # comparing the raw numbers reports a mismatch that is not one:
+    #   Pine  demaLen = 0             means "per clock: 60 on M1, 100 on M3, else 200"
+    #   EA    InpDemaPerClock = true  means the same thing, with InpDemaLen = 200
+    #         as the "else" value
+    # What has to agree is the BEHAVIOUR, so that is what is checked. If either
+    # file ever pins a fixed length, the other must pin the same one.
+    SP = pine_inputs(open(ST_PINE).read())
+    SE = ea_inputs(open(ST_EA).read())
+    pineAuto = norm(SP.get("demaLen", "")) == "0"
+    eaAuto   = norm(SE.get("InpDemaPerClock", "")) == "true"
+    if pineAuto != eaAuto:
+        print(f"  DIFFERENT  the DEMA length rule: Pine per-clock={pineAuto}, "
+              f"EA InpDemaPerClock={eaAuto}")
+        bad += 1
+    elif pineAuto:
+        print("  ok         DEMA length   = per clock on BOTH "
+              "(60 M1 / 100 M3 / else the fixed length)")
+    elif norm(SP.get("demaLen", "")) != norm(SE.get("InpDemaLen", "")):
+        print(f"  DIFFERENT  demaLen = {norm(SP.get('demaLen',''))}   but   "
+              f"InpDemaLen = {norm(SE.get('InpDemaLen',''))}")
+        bad += 1
+    else:
+        print(f"  ok         demaLen      = {norm(SP.get('demaLen',''))} "
+              f"       == InpDemaLen")
 
     print("\n  " + ("PARITY OK" if not bad else f"{bad} MISMATCH(ES)"))
     print("  This checks DEFAULTS, not logic. Signal parity is P92 / E-139.")

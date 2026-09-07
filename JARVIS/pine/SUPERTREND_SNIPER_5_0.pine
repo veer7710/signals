@@ -94,7 +94,10 @@ demaLen = input.int(0,     "DEMA length (0 = per-clock: 60 on M1, 100 on M3, els
 gE = "2 · RISK / EXIT"
 stopAtr  = input.float(2.0, "Initial stop (ATR)", group = gE, step = 0.5)
 useTrail = input.bool(true, "ATR trail", group = gE)
-trailAtr = input.float(3.0, "Trail distance (ATR)", group = gE, step = 0.5,
+giveBack = input.float(0.60, "Give back this much of the run-up (0 = use the ATR distance below)",
+     group = gE, step = 0.05, minval = 0.0, maxval = 0.95,
+     tooltip = "PARITY: this is what SuperTrendSniper.mq5 now does, and the two must agree or the panel is measuring a different system from the one trading. The ATR-distance trail below hands back the SAME distance from every peak, however far the trade ran - Veer, live: 'it didn't even close at peaks meaning it missed even more profit'. A give-back is proportional instead: a trade that ran 10 ATR keeps 4 of them, a trade that ran 1 ATR is not stopped out by noise. E-177, 2024-2026 gold 1h over 505 trades: hold-to-flip +0.354 ATR/trade at mean MAE 1.824 and 44.6% wins; give back 60% is +0.158 at MAE 0.803 and 50.7% wins. Return per unit of drawdown is the same either way (0.194 against 0.197), so at equal drawdown the give-back carries 2.27x the size for the same money - and half the excursion is what stops a small account being margin called.")
+trailAtr = input.float(3.0, "Trail distance (ATR), used only when give-back is 0", group = gE, step = 0.5,
      tooltip = "Wide on purpose, and inherited from the EA - it has NOT been optimised on this system, so there is no number here to quote. What has been measured, on the sweep system rather than this one (E-154), is the shape of the trade-off: a 3 ATR trail there banked the most points and drew down 3.4x as deep as a give-back, which at 0.01 lots was the whole of a GBP 60 account. Widen it in the knowledge that the drawdown widens faster than the profit.")
 useSt    = input.bool(false, "Trail on the SuperTrend band instead", group = gE,
      tooltip = "E-125 measured the band against a fixed give-back on the liquidity system and it won 39.6 points to 11.0, with E-126's out-of-sample result exceeding in-sample. That was measured on M15 zones, NOT on this flip system, so it is a switch to test with the panel rather than a default to trust.")
@@ -361,8 +364,15 @@ if posDir != 0 and barstate.isconfirmed and bar_index > posBar
             posPeak  := posDir > 0 ? high : low
             stallBar := bar_index
         if useTrail
+            // The give-back is measured from the ENTRY against the run-up,
+            // exactly as engine.trail_level and SuperTrendSniper.mq5 do it.
+            // Falling back to the ATR distance when giveBack is 0 keeps the
+            // old behaviour available for comparison.
+            runUp = posDir > 0 ? posPeak - posEntry : posEntry - posPeak
             cand = useSt ? stLine :
-                 posDir > 0 ? posPeak - trailAtr * atr : posPeak + trailAtr * atr
+                 giveBack > 0 and runUp > 0
+                     ? posEntry + posDir * runUp * (1 - giveBack)
+                     : posDir > 0 ? posPeak - trailAtr * atr : posPeak + trailAtr * atr
             if posDir > 0 ? cand > posStop : cand < posStop
                 // THE E-151 CLAMP. The new level comes from this bar, so it
                 // cannot be placed until this bar has closed - and if price
