@@ -863,6 +863,7 @@ input double InpMaxDDPct      = 6.0;
 input int    InpMaxTradesDay  = 60;     // it runs ~19/day; this is a circuit breaker
 input bool   InpFlattenOnBreach = true; // close open trades when a limit breaks
 input bool   InpVerbose       = true;
+input bool   InpJournal       = true;    // CSV of every fill: asked vs got
 
 input group "=== THE PROFIT BOX ==="
 input bool   InpShowProfitBox = true;
@@ -921,6 +922,7 @@ int      g_atr = INVALID_HANDLE;
 datetime g_lastBar = 0;
 ulong    g_pend = 0;        // the resting limit
 int      g_pendDir = 0;
+double   g_pendPx = 0.0;    // the price we ASKED for, for the slippage column
 
 double   g_peakPrice = 0.0; // best excursion of the open position
 datetime g_posBarTime = 0;  // F10: a TIME, because Bars() plateaus and jumps
@@ -936,6 +938,79 @@ ulong    g_lastPosId = 0;   // F20: count trades, not fills
 bool     g_lockDay = false, g_lockPerm = false;
 
 void Log(string s) { if(InpVerbose) Print("[SS] ", s); }
+
+//==================== EXECUTION JOURNAL ============================
+// THE MEASUREMENT THIS PROJECT HAS NEVER HAD.
+//
+// Every backtest in this repo charges cost through one assumed number -
+// spread/ATR = 0.11 (E-132, E-173) - and assumes slippage is exactly zero.
+// Neither has ever been measured on Veer's broker, and both are load-bearing:
+// E-149's whole M5 book is +24.2 points and dies at 0.02 points of slippage,
+// so the difference between an edge and a fantasy is a quantity nobody in this
+// project has ever observed.
+//
+// One row per fill and per close, with the price we ASKED for, the price we
+// GOT, and the spread at that instant. A week on demo turns the biggest
+// assumption in the research into a fact. Read it with
+// JARVIS/research/read_exec.py.
+//
+// FILE_SHARE_READ|FILE_SHARE_WRITE so it can be opened in Excel while running.
+// Which signal armed the trade, so the journal can be split by source later -
+// E-149 showed the four sources behave very differently from each other.
+string SrcName(int src)
+{
+   if(src == 1) return "sweep";
+   if(src == 2) return "break+retest";
+   if(src == 3) return "ob-detect";
+   if(src == 4) return "ob-return";
+   return "unknown";
+}
+
+// One file PER EA. Four EAs on four charts sharing one handle is a corrupt
+// CSV the first time two of them fill in the same second.
+string JournalName() { return "JARVIS_exec_SweepSniper_" + _Symbol + ".csv"; }
+
+// The price we ASKED for, read off the order rather than off a global: a
+// global is wrong for an order adopted after a restart and wrong again after
+// a requote. g_pendPx is kept only as the fallback when the lookup fails.
+double AskedPrice(ulong dealTicket)
+{
+   ulong ord = (ulong)HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+   if(ord == 0 || !HistoryOrderSelect(ord)) return g_pendPx;
+   double p = HistoryOrderGetDouble(ord, ORDER_PRICE_OPEN);
+   return p > 0.0 ? p : g_pendPx;
+}
+
+void JRow(string event, int dir, double reqPx, double fillPx, double lots,
+          double sl, double tp, double profit, ulong posId, string note)
+{
+   if(!InpJournal) return;
+   int h = FileOpen(JournalName(), FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI
+                    |FILE_SHARE_READ|FILE_SHARE_WRITE, ',');
+   if(h == INVALID_HANDLE) return;
+   if(FileSize(h) == 0)
+      FileWrite(h, "utc", "ea", "symbol", "tf", "event", "dir", "req_px",
+                   "fill_px", "slip_pts", "spread_pts", "atr", "lots",
+                   "sl", "tp", "profit", "pos_id", "note");
+   FileSeek(h, 0, SEEK_END);
+   int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // Signed so that POSITIVE always means WORSE than asked, for both
+   // directions: a buy filled above its level and a sell filled below it both
+   // read positive. Averaging a column that mixes the two signs would report
+   // roughly zero slippage on a broker that slips every fill.
+   double slip = (reqPx > 0.0 && fillPx > 0.0) ? dir * (fillPx - reqPx) : 0.0;
+   FileWrite(h, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+             "SweepSniper", _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+             event, (string)dir, DoubleToString(reqPx, dg),
+             DoubleToString(fillPx, dg), DoubleToString(slip, dg),
+             DoubleToString(ask - bid, dg), DoubleToString(ATR(), dg),
+             DoubleToString(lots, 2), DoubleToString(sl, dg),
+             DoubleToString(tp, dg), DoubleToString(profit, 2),
+             (string)posId, note);
+   FileClose(h);
+}
 
 double ATR()
 {
@@ -1404,8 +1479,11 @@ bool Place(int dir, int otype, double price, double stop, double atrRef,
    {
       g_pend    = trade.ResultOrder();
       g_pendDir = dir;
+      g_pendPx  = price;          // what we ASKED for, for the slippage column
       PB_NoteOrder(g_pend, (bid + ask) / 2.0);
    }
+   else
+      g_pendPx = price;           // a market order: the price we saw when we sent
    Log(StringFormat("%s %s at %.*f, stop %.*f (%.2f ATR), %.2f lots",
                     tag, dir > 0 ? "BUY" : "SELL", dg, price, dg, stop,
                     risk / atrRef, lots));
@@ -1501,6 +1579,7 @@ void TryArm()
       {
          g_pend = trade.ResultOrder();
          g_pendDir = dir;
+         g_pendPx  = lvl;         // what we ASKED for, for the slippage column
          PB_NoteOrder(g_pend, (bid + ask) / 2.0);
          // E-164. The setup used to be RESET here, which froze its extreme at
          // the moment of arming. The research keeps extending the extreme
@@ -1967,6 +2046,7 @@ int OnInit()
       g_pend    = tk;
       g_pendDir = (OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_STOP
                 || OrderGetInteger(ORDER_TYPE) == ORDER_TYPE_BUY_LIMIT) ? 1 : -1;
+      g_pendPx  = OrderGetDouble(ORDER_PRICE_OPEN);
       Log(StringFormat("adopted resting order %I64u on start", tk));
    }
    if(PosCount() > 0)
@@ -2103,6 +2183,18 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       PB_PromoteOrder((ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER),
                       pid, HistoryDealGetDouble(trans.deal, DEAL_PRICE));
       PersistGuards();
+      // The slippage row. g_pendPx is what we asked for; DEAL_PRICE is what
+      // the broker gave us. Written BEFORE g_pendPx is cleared.
+      // The stop as the BROKER now holds it, not g_lastSl - that global is
+      // the last stop we ASKED for and is stale or zero at the moment of fill.
+      double fillSl = PositionSelectByTicket(pid)
+                    ? PositionGetDouble(POSITION_SL) : 0.0;
+      JRow("FILL", (int)(HistoryDealGetInteger(trans.deal, DEAL_TYPE)
+                         == DEAL_TYPE_BUY ? 1 : -1),
+           AskedPrice(trans.deal), HistoryDealGetDouble(trans.deal, DEAL_PRICE),
+           HistoryDealGetDouble(trans.deal, DEAL_VOLUME),
+           fillSl, 0.0, 0.0, pid, SrcName(g_armSrc));
+      g_pendPx = 0.0;
       Log("FILLED");
       return;
    }
@@ -2120,6 +2212,15 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
          g_posInit = 0.0;
       }
       g_pbDirty = true;
+      // An exit has no "asked" price - a stop or a trail is filled wherever
+      // the market was - so req_px is left empty and slip_pts reads 0. The
+      // spread column is still the point of the row.
+      JRow("EXIT", (int)(HistoryDealGetInteger(trans.deal, DEAL_TYPE)
+                         == DEAL_TYPE_BUY ? -1 : 1),
+           0.0, HistoryDealGetDouble(trans.deal, DEAL_PRICE),
+           HistoryDealGetDouble(trans.deal, DEAL_VOLUME), 0.0, 0.0,
+           HistoryDealGetDouble(trans.deal, DEAL_PROFIT), pid,
+           PositionSelectByTicket(pid) ? "partial" : "flat");
       Log(StringFormat("closed, profit %.2f",
                        HistoryDealGetDouble(trans.deal, DEAL_PROFIT)));
    }

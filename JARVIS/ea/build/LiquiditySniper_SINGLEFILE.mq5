@@ -1019,6 +1019,7 @@ input bool   InpTrailingDD    = false;  // does the drawdown floor follow the pe
 input group "=== READOUT ==="
 input bool   InpComment       = true;   // the chart readout
 input bool   InpVerboseLog    = true;   // log every decision
+input bool   InpJournal       = true;   // CSV of every fill: asked vs got
 
 //==================== STATE ========================================
 struct Zone
@@ -1115,6 +1116,67 @@ int    PosCount();
 void Log(string m)
 {
    if(InpVerboseLog) Print(m);
+}
+
+//==================== EXECUTION JOURNAL ============================
+// THE MEASUREMENT THIS PROJECT HAS NEVER HAD.
+//
+// Every backtest in this repo charges cost through one assumed number -
+// spread/ATR = 0.11 (E-132, E-173) - and assumes slippage is exactly zero.
+// Neither has ever been measured on Veer's broker, and both are load-bearing:
+// E-149's whole M5 book is +24.2 points and dies at 0.02 points of slippage,
+// so the difference between an edge and a fantasy is a quantity nobody in this
+// project has ever observed.
+//
+// One row per fill and per close, carrying the price we ASKED for, the price
+// we GOT, and the spread at that instant. A week on demo turns the biggest
+// assumption in the research into a fact. Read it with
+// JARVIS/research/read_exec.py.
+//
+// The asked-for price is read off the ORDER, not off a global: a global is
+// wrong for an order adopted after a restart and wrong again after a requote.
+// FILE_SHARE_READ|FILE_SHARE_WRITE so it opens in Excel while the EA runs, and
+// one file PER EA because four EAs sharing one handle is a corrupt CSV the
+// first time two of them fill in the same second.
+string JournalName() { return "JARVIS_exec_LiquiditySniper_" + _Symbol + ".csv"; }
+
+double AskedPrice(ulong dealTicket)
+{
+   ulong ord = (ulong)HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+   if(ord == 0 || !HistoryOrderSelect(ord)) return 0.0;
+   double p = HistoryOrderGetDouble(ord, ORDER_PRICE_OPEN);
+   return p;
+}
+
+void JRow(string event, int dir, double reqPx, double fillPx, double lots,
+          double sl, double tp, double profit, ulong posId, string note)
+{
+   if(!InpJournal) return;
+   int h = FileOpen(JournalName(), FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI
+                    |FILE_SHARE_READ|FILE_SHARE_WRITE, ',');
+   if(h == INVALID_HANDLE) return;
+   if(FileSize(h) == 0)
+      FileWrite(h, "utc", "ea", "symbol", "tf", "event", "dir", "req_px",
+                   "fill_px", "slip_pts", "spread_pts", "atr", "lots",
+                   "sl", "tp", "profit", "pos_id", "note");
+   FileSeek(h, 0, SEEK_END);
+   int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // Signed so POSITIVE always means WORSE than asked, for both directions: a
+   // buy filled above its level and a sell filled below it both read positive.
+   // Averaging a column that mixed the two signs would report roughly zero
+   // slippage on a broker that slips every single fill.
+   double slip = (reqPx > 0.0 && fillPx > 0.0) ? dir * (fillPx - reqPx) : 0.0;
+   FileWrite(h, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+             "LiquiditySniper", _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+             event, (string)dir, DoubleToString(reqPx, dg),
+             DoubleToString(fillPx, dg), DoubleToString(slip, dg),
+             DoubleToString(ask - bid, dg), DoubleToString(ATRv(1), dg),
+             DoubleToString(lots, 2), DoubleToString(sl, dg),
+             DoubleToString(tp, dg), DoubleToString(profit, 2),
+             (string)posId, note);
+   FileClose(h);
 }
 
 string Money(double v)
@@ -2365,7 +2427,11 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    // THE FILL. g_tradesToday used to be incremented where the EA sent the
    // order; now the broker owns the order, so the only honest place to count a
    // trade is where one actually opened.
-   if(entry == DEAL_ENTRY_IN)
+   // F14. DEAL_ENTRY_INOUT is what a NETTING account produces when an
+   // opposite order fills while a position is open, and several prop firms
+   // run netting. It was dropped on the floor: the trade was never counted,
+   // the level was never marked used and the other side was left resting.
+   if(entry == DEAL_ENTRY_IN || entry == DEAL_ENTRY_INOUT)
    {
       PB_PromoteOrder((ulong)HistoryDealGetInteger(trans.deal, DEAL_ORDER),
                       (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID),
@@ -2377,13 +2443,21 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
       // one side filled, so the other must go: the measurement counted one
       // position at a time and two open would be a different strategy.
       KillAll("the other side filled");
+      ulong pid = (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID);
+      JRow("FILL", (int)(HistoryDealGetInteger(trans.deal, DEAL_TYPE)
+                         == DEAL_TYPE_BUY ? 1 : -1),
+           AskedPrice(trans.deal), HistoryDealGetDouble(trans.deal, DEAL_PRICE),
+           HistoryDealGetDouble(trans.deal, DEAL_VOLUME),
+           PositionSelectByTicket(pid) ? PositionGetDouble(POSITION_SL) : 0.0,
+           PositionSelectByTicket(pid) ? PositionGetDouble(POSITION_TP) : 0.0,
+           0.0, pid, "zone limit");
       Log(StringFormat("FILLED at %.*f   %d trades today",
                        _Digits, HistoryDealGetDouble(trans.deal, DEAL_PRICE),
                        g_tradesToday));
       return;
    }
    g_pbDirty = true;
-   if(entry != DEAL_ENTRY_OUT) return;
+   if(entry != DEAL_ENTRY_OUT && entry != DEAL_ENTRY_OUT_BY) return;
 
    double p = HistoryDealGetDouble(trans.deal, DEAL_PROFIT)
             + HistoryDealGetDouble(trans.deal, DEAL_SWAP)
@@ -2394,6 +2468,13 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    g_dayRealized += p;
    if(p > 0.0) g_dayProfit += p;   // the consistency guard counts PROFIT only
    FundedSave();
+   // An exit has no "asked" price - a stop is filled wherever the market was -
+   // so req_px is empty and slip_pts reads 0. The spread column is the point.
+   JRow("EXIT", (int)(HistoryDealGetInteger(trans.deal, DEAL_TYPE)
+                      == DEAL_TYPE_BUY ? -1 : 1),
+        0.0, HistoryDealGetDouble(trans.deal, DEAL_PRICE),
+        HistoryDealGetDouble(trans.deal, DEAL_VOLUME), 0.0, 0.0, p,
+        (ulong)HistoryDealGetInteger(trans.deal, DEAL_POSITION_ID), "exit");
    Log(StringFormat("CLOSED %s   running %s over %d trades, %.1f%% won",
                     Money(p), Money(g_realized), g_nTrades,
                     100.0 * g_nWins / MathMax(g_nTrades, 1)));

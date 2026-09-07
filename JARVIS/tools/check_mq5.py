@@ -74,7 +74,9 @@ OrdersTotal OrderGetTicket OrderGetDouble OrderGetInteger OrderGetString
 OrderSelect OrderSend OrderSendAsync OrderCalcMargin OrderCalcProfit
 OrderCheck HistorySelect HistoryDealsTotal HistoryDealGetTicket
 HistoryDealGetDouble HistoryDealGetInteger HistoryDealGetString
-HistoryDealSelect HistoryOrderSelect
+HistoryDealSelect HistoryOrderSelect HistoryOrderGetDouble
+HistoryOrderGetInteger HistoryOrderGetString HistoryOrdersTotal
+HistoryOrderGetTicket HistoryDealsTotal HistoryDealGetTicket
 iTime iOpen iHigh iLow iClose iVolume iBars iBarShift iHighest iLowest
 Bars CopyRates CopyBuffer CopyTime CopyClose CopyHigh CopyLow CopyOpen
 iATR iADX iMA iRSI iMACD iStochastic iBands iCustom IndicatorRelease
@@ -393,7 +395,9 @@ def io_read(p):
 
 
 def main():
-    paths = sys.argv[1:] or ["JARVIS/ea/build/SuperTrendSniper.mq5"]
+    import glob
+    paths = sys.argv[1:] or [f for f in sorted(glob.glob("JARVIS/ea/build/*.mq5"))
+                             if "_SINGLEFILE" not in f]
     total = 0
     for p in paths:
         if not os.path.exists(p):

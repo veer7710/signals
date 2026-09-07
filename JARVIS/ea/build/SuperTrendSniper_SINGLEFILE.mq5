@@ -2795,6 +2795,68 @@ string JournalName()
                        EnumToString((ENUM_TIMEFRAMES)_Period));
 }
 
+
+//==================== EXECUTION JOURNAL ============================
+// THE MEASUREMENT THIS PROJECT HAS NEVER HAD.
+//
+// Every backtest in this repo charges cost through one assumed number -
+// spread/ATR = 0.11 (E-132, E-173) - and assumes slippage is exactly zero.
+// Neither has ever been measured on Veer's broker, and both are load-bearing:
+// E-149's whole M5 book is +24.2 points and dies at 0.02 points of slippage,
+// so the difference between an edge and a fantasy is a quantity nobody in this
+// project has ever observed.
+//
+// One row per fill and per close, carrying the price we ASKED for, the price
+// we GOT, and the spread at that instant. A week on demo turns the biggest
+// assumption in the research into a fact. Read it with
+// JARVIS/research/read_exec.py.
+//
+// The asked-for price is read off the ORDER, not off a global: a global is
+// wrong for an order adopted after a restart and wrong again after a requote.
+// FILE_SHARE_READ|FILE_SHARE_WRITE so it opens in Excel while the EA runs, and
+// one file PER EA because four EAs sharing one handle is a corrupt CSV the
+// first time two of them fill in the same second.
+string ExecName() { return "JARVIS_exec_SuperTrendSniper_" + _Symbol + ".csv"; }
+
+double AskedPrice(ulong dealTicket)
+{
+   ulong ord = (ulong)HistoryDealGetInteger(dealTicket, DEAL_ORDER);
+   if(ord == 0 || !HistoryOrderSelect(ord)) return 0.0;
+   double p = HistoryOrderGetDouble(ord, ORDER_PRICE_OPEN);
+   return p;
+}
+
+void JRow(string event, int dir, double reqPx, double fillPx, double lots,
+          double sl, double tp, double profit, ulong posId, string note)
+{
+   if(!InpJournal) return;
+   int h = FileOpen(ExecName(), FILE_READ|FILE_WRITE|FILE_CSV|FILE_ANSI
+                    |FILE_SHARE_READ|FILE_SHARE_WRITE, ',');
+   if(h == INVALID_HANDLE) return;
+   if(FileSize(h) == 0)
+      FileWrite(h, "utc", "ea", "symbol", "tf", "event", "dir", "req_px",
+                   "fill_px", "slip_pts", "spread_pts", "atr", "lots",
+                   "sl", "tp", "profit", "pos_id", "note");
+   FileSeek(h, 0, SEEK_END);
+   int    dg  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   // Signed so POSITIVE always means WORSE than asked, for both directions: a
+   // buy filled above its level and a sell filled below it both read positive.
+   // Averaging a column that mixed the two signs would report roughly zero
+   // slippage on a broker that slips every single fill.
+   double slip = (reqPx > 0.0 && fillPx > 0.0) ? dir * (fillPx - reqPx) : 0.0;
+   FileWrite(h, TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+             "SuperTrendSniper", _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+             event, (string)dir, DoubleToString(reqPx, dg),
+             DoubleToString(fillPx, dg), DoubleToString(slip, dg),
+             DoubleToString(ask - bid, dg), DoubleToString(ATR(1), dg),
+             DoubleToString(lots, 2), DoubleToString(sl, dg),
+             DoubleToString(tp, dg), DoubleToString(profit, 2),
+             (string)posId, note);
+   FileClose(h);
+}
+
 void Journal(string ev, string dir, double px, double lots,
              double sl, double tp, double money, string note)
 {
@@ -3118,15 +3180,28 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    // the profit box needs BOTH halves of a trade, and the guard below throws
    // away everything that is not a close, so this comes first.
    long pbEntry = HistoryDealGetInteger(d, DEAL_ENTRY);
-   if(pbEntry == DEAL_ENTRY_IN)
+   // F14. DEAL_ENTRY_INOUT is what a NETTING account raises when an opposite
+   // order fills while a position is open, and this EA REVERSES on every
+   // SuperTrend flip - so on a netting account INOUT is not an edge case, it
+   // is the normal path, and the profit box was blind to every one of them.
+   if(pbEntry == DEAL_ENTRY_IN || pbEntry == DEAL_ENTRY_INOUT)
    {
-      PB_PromoteOrder((ulong)HistoryDealGetInteger(d, DEAL_ORDER),
-                      (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID),
+      ulong pid = (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID);
+      PB_PromoteOrder((ulong)HistoryDealGetInteger(d, DEAL_ORDER), pid,
                       HistoryDealGetDouble(d, DEAL_PRICE));
-      return;
+      // the slippage row: what we asked for against what we got
+      JRow("FILL", (int)(HistoryDealGetInteger(d, DEAL_TYPE)
+                         == DEAL_TYPE_BUY ? 1 : -1),
+           AskedPrice(d), HistoryDealGetDouble(d, DEAL_PRICE),
+           HistoryDealGetDouble(d, DEAL_VOLUME),
+           PositionSelectByTicket(pid) ? PositionGetDouble(POSITION_SL) : 0.0,
+           PositionSelectByTicket(pid) ? PositionGetDouble(POSITION_TP) : 0.0,
+           0.0, pid, "supertrend flip");
+      if(pbEntry == DEAL_ENTRY_IN) return;
    }
    g_pbDirty = true;
-   if(pbEntry != DEAL_ENTRY_OUT) return;
+   if(pbEntry != DEAL_ENTRY_OUT && pbEntry != DEAL_ENTRY_OUT_BY
+      && pbEntry != DEAL_ENTRY_INOUT) return;
 
    double px    = HistoryDealGetDouble(d, DEAL_PRICE);
    double vol   = HistoryDealGetDouble(d, DEAL_VOLUME);
@@ -3146,6 +3221,8 @@ void OnTradeTransaction(const MqlTradeTransaction &trans,
    else if(rsn == DEAL_REASON_SO) why = "STOP OUT - margin";
 
    Journal("EXIT", dir, px, vol, 0, 0, money, why);
+   JRow("EXIT", (type == DEAL_TYPE_SELL) ? 1 : -1, 0.0, px, vol, 0.0, 0.0,
+        money, (ulong)HistoryDealGetInteger(d, DEAL_POSITION_ID), why);
    Log(StringFormat("closed %s %.2f at %s for %.2f (%s)",
                     dir, vol, DoubleToString(px, _Digits), money, why));
 

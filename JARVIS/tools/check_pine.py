@@ -627,5 +627,6 @@ def check(path):
 
 
 if __name__ == "__main__":
-    sys.exit(check(sys.argv[1] if len(sys.argv) > 1
-                   else "JARVIS/pine/LiquiditySniper_v1.pine"))
+    import glob
+    args = sys.argv[1:] or sorted(glob.glob("JARVIS/pine/*.pine"))
+    sys.exit(max(check(a) for a in args))

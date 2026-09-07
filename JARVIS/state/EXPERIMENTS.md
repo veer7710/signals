@@ -7820,3 +7820,56 @@ for Veer's stated targets is that **choosing between M3, M5 and M15 is not the
 lever** — the six clocks span 0.5 to 15 minutes and all six sit on zero. The
 entry is the thing that is not working, exactly as he said: *"it's more about
 your producing perfect entries."*
+
+---
+
+## E-175 — THE SUPERTREND EA HAS NO GROSS EDGE. THE CHURN IS NOT THE PROBLEM.
+
+Veer's live panel, four days: **304 trades, 62.8/day, −117.1 points, 88% of it
+transaction cost**, and the row *"exit adds −32.1pt"* — the whole exit stack
+banked LESS than simply holding to the opposite flip. The obvious reading is
+"a good signal ruined by churn, so slow it down." That reading is wrong and this
+is the test that says so.
+
+Strip everything. Enter on the flip, leave on the opposite flip. No stop, no
+trail, no stall, no DEMA filter, no cost. If the raw signal is negative there is
+nothing for any exit rule or any cooldown to save.
+
+```
+    tf  len  mult      n   /day     gross     cost      net  cost%  per trade
+    M1    7   1.2  16134  147.9    -126.3   -443.1   -569.4    78%    -0.0353
+    M1    7   2.0   8745   80.2    -104.1   -241.3   -345.4    70%    -0.0395
+    M1   10   3.0   4974   45.6    -150.0   -138.1   -288.1    48%    -0.0579
+    M1   20   4.0   3142   28.8     -48.5    -87.7   -136.3    64%    -0.0434
+    M5    7   1.2   2976   27.3    -161.5    -81.7   -243.2    34%    -0.0817
+    M5   20   4.0    508    4.7      +2.2    -13.8    -11.6   119%    -0.0229
+   M15    7   1.2    886    8.1     +72.1    -24.2    +47.9    51%    +0.0541
+   M15   14   3.0    262    2.4     +24.1     -7.0    +17.0    41%    +0.0650
+   M15   20   4.0    190    1.7     -77.7     -5.1    -82.7     6%    -0.4355
+```
+```
+  the shipped setting (7, 1.2), GROSS only:
+      M1  n 16134  gross  -126.3 pts  -0.0078/trade  t -1.42
+      M5  n  2976  gross  -161.5 pts  -0.0543/trade  t -1.76
+     M15  n   886  gross   +72.1 pts  +0.0814/trade  t +0.80
+```
+
+**On M1 and M5 the SuperTrend signal loses money BEFORE a single penny of cost
+is charged.** Cost then triples the damage. Slowing the clock, lengthening the
+ATR, raising the multiplier, adding a cooldown — none of it can help, because
+there is no gross to protect. That is also the honest explanation of *"exit adds
+−32.1pt"*: the exit stack was trying to rescue a signal that has nothing in it.
+
+M15 is the only non-negative cell, at **+0.0814/trade with t = +0.80** over 886
+trades — indistinguishable from zero, and the (20, 4.0) row on the same clock is
+−0.4355, which is what an unstable cell looks like.
+
+At the shipped (7, 1.2) on M1 the raw signal **flips 147.9 times a day.** The
+live panel showed 62.8 because the DEMA filter and cost gate refuse about 58% of
+them. A signal that fires 148 times a day on M1 gold is a coin-flip generator
+with a spread attached.
+
+**VERDICT: SuperTrend on M1 and M5 is DISPROVEN — negative gross, not a cost
+problem. M15 is UNPROVEN and not distinguishable from zero.** Do not run
+SUPERTREND_SNIPER on M1 or M5 expecting money. Its value on demo is as an
+execution probe: it fills often, so it measures spread and slippage fast.
