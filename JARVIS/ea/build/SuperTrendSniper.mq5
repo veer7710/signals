@@ -793,7 +793,10 @@ input group "=== BASKET (manage the TOTAL, not one trade) ==="
 // closed at breakeven; four positions reached ~GBP4 and still closed in loss".
 // Four positions each individually behaving reasonably can still hand back
 // the whole basket, because nothing was watching the total. Now something is.
-input bool   InpUseBasket     = true;   // protect total floating profit
+input bool   InpUseBasket     = false;  // OFF. It capped every winner at under
+                                        // one spread of profit - see the note
+                                        // above ProtectBasket(). Turn it on
+                                        // only after measuring it.
 // Same retune. Veer's basket peaked at GBP 2.50 and the old floor of GBP 2.00
 // meant it barely armed before the money was gone.
 input double InpBasketArmPct  = 0.40;   // arm once the basket is this % of equity green
@@ -827,7 +830,17 @@ input bool   InpBasketCloseAll= true;   // false = only close the losers, keep t
 // downside is removed, and a trade still finding its feet is left alone.
 input double InpLockPosR      = 1.0;    // lock a POSITION out of loss once this good in R
 input double InpLockPosMoney  = 0.30;   // AND at least this much money (noise floor)
-input double InpLockAtMoney   = 1.20;   // once the BASKET is this green, stops go to break-even+
+input double InpLockAtMoney   = 0.0;    // 0 = OFF. At 0.01 lots GBP 1.20 is
+                                        // 1.5 points, about 0.28R on an M1
+                                        // stop - a break-even move at a
+                                        // quarter of R, through a different
+                                        // door from InpUseBreakEven, which
+                                        // this file ships FALSE because it
+                                        // measured as the worst rule on all
+                                        // four markets. LockPositions() does
+                                        // the same job correctly at 1R peak.
+input double InpLockAtPeakR   = 1.0;    // ...and if you switch it on, it also
+                                        // has to be this many R in peak first.
 input bool   InpLockOnlyOnce  = true;   // and are never pulled back afterwards
 // STACKING IS OFF AND SHOULD STAY OFF.
 // Veer, from the live account: "scale adds are making us profit but also loss
@@ -1839,7 +1852,18 @@ bool CanAfford(int dir, double lots, double price, string &why)
    }
    double need = 0.0;
    ENUM_ORDER_TYPE t = (dir > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-   if(!OrderCalcMargin(t, _Symbol, lots, price, need)) return true;   // unknown: try
+   // FAIL CLOSED. This returned TRUE - permission - when OrderCalcMargin could
+   // not compute, which happens on a desynced or not-fully-selected symbol and
+   // on an unsupported order type: precisely the reconnect conditions where the
+   // margin check is most needed. The whole reason this function exists is a
+   // margin call. A check that grants permission when it cannot answer is not a
+   // check.
+   if(!OrderCalcMargin(t, _Symbol, lots, price, need))
+   {
+      why = "OrderCalcMargin failed - refusing rather than guessing. If this "
+            "persists the symbol is not fully selected in Market Watch.";
+      return false;
+   }
    double freeM = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    if(freeM <= 0.0)
    {
@@ -2137,6 +2161,11 @@ void TryEntry()
       }
    }
 
+   // Prime g_lotClampX BEFORE anything reads it. RiskAllowsEntry() at the top
+   // of this function tests `g_lotClampX > 3.0`, but the global is only ever
+   // written inside LotFor() - which was not called until here. On the first
+   // signal after every attach the guard read its initialiser of 1.0 and could
+   // not fire; after that it was always one entry stale.
    double lots = LotFor(stopDist);
    if(lots <= 0) { SkipLog(sdir, "lot size rounded to zero"); return; }
 
@@ -2752,7 +2781,7 @@ void ManagePosition()
          t = NormalizeDouble(t, dg);
          // E-151: unplaceable means DO NOT PLACE, not "place it anyway".
          if(dir * (t - price) >= 0.0) continue;
-         bool better = (dir > 0) ? (t > sl) : (t < sl);
+         bool better = (sl == 0.0) || ((dir > 0) ? (t > sl) : (t < sl));
          // A modify inside the broker's stop level is rejected, silently and
          // repeatedly. Leave the stop where it is rather than spam the server.
          // F6: the freeze band refuses a modify AND an EA close, and it was
@@ -3756,7 +3785,7 @@ void LockPositions()
                               : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
       double lock = NormalizeDouble(open + dir * cost, dg);
-      bool better = (dir > 0) ? (lock > sl) : (lock < sl);
+      bool better = (sl == 0.0) || ((dir > 0) ? (lock > sl) : (lock < sl));
       bool room   = (mn <= 0.0) || (MathAbs(px - lock) >= mn);
       bool safe   = (dir > 0) ? (lock < px) : (lock > px);
       if(better && room && safe && trade.PositionModify(tk, lock, tp))
@@ -3802,7 +3831,7 @@ void LockBasket()
       // break-even PLUS the round trip, so the exit is not itself a loss
       double lock = NormalizeDouble(open + dir * cost, dg);
 
-      bool better = (dir > 0) ? (lock > sl) : (lock < sl);
+      bool better = (sl == 0.0) || ((dir > 0) ? (lock > sl) : (lock < sl));
       bool room   = (mn <= 0.0) || (MathAbs(px - lock) >= mn);
       bool safe   = (dir > 0) ? (lock < px) : (lock > px);
       if(better && room && safe && trade.PositionModify(tk, lock, tp))
@@ -3837,8 +3866,34 @@ void ProtectBasket()
    // a small account the GBP 2.00 floor dominated and a GBP 2.50 peak had
    // almost no protected range at all. The floor is meant to stop the rule
    // firing on noise, not to postpone it until the money is gone.
+   // ============ WHY THIS SHIPS OFF, AND THE ARITHMETIC ==================
+   // `arm` is MathMin(..., InpBasketMinMoney), and InpBasketMinMoney is a FLAT
+   // GBP 1.00. So the basket armed at GBP 1.00 of floating profit on a GBP 250
+   // account and on a GBP 5,000 account alike, then closed EVERYTHING after
+   // handing back 20% of it - at GBP 0.80.
+   //
+   // At 0.01 lots and E-081's GBP 0.787 a point, GBP 0.80 is ONE POINT. The
+   // stop is 2 ATR, about 4.4 points on M1, or GBP 3.43. Winners capped at
+   // GBP 0.80, losers running the full GBP 3.43:
+   //
+   //     break-even win rate = 3.43 / (3.43 + 0.80) = 81%
+   //
+   // and worse as the account grows, because `arm` is capped flat while 1R
+   // scales with lots. Nothing in this project claims a win rate near that.
+   // With TrendRisk >= 2 the `arm *= 0.60` below makes it 0.6 of a point.
+   //
+   // This is the same defect the file fixed everywhere else and names at line
+   // 3626: "R DECIDES, MONEY IS A FLOOR. This was an OR, and the OR was a bug
+   // ... R is scale-free; money is not." ProtectPositions() gates on peakR >=
+   // InpGbArmR and floors the give-back at twice the round trip;
+   // LockPositions() gates on peakR >= InpLockPosR. ProtectBasket() was the
+   // one give-back path that never got the lesson.
+   //
+   // It is OFF now. The R gate below is what it needs to be safe if it is ever
+   // turned back on, and it has still never been measured.
    double arm = MathMin(MathMax(eq * InpBasketArmPct / 100.0, 0.25),
                         InpBasketMinMoney);
+   if(b.peakR < 1.0) return;          // R decides. Money is only a floor.
 
    // an old, stretched, crowded run gets protected sooner, not later
    string w = "";
@@ -4485,6 +4540,16 @@ int OnInit()
    if(InpTrackMagic2 != 0) PB_AddStrategy(InpTrackMagic2, InpTrackLabel2);
    if(InpTrackMagic3 != 0) PB_AddStrategy(InpTrackMagic3, InpTrackLabel3);
    if(InpTrackMagic4 != 0) PB_AddStrategy(InpTrackMagic4, InpTrackLabel4);
+   // PRIME THE RISK MULTIPLE. RiskAllowsEntry() tests g_lotClampX, which is
+   // only written inside LotFor(). Without this the FIRST signal of every
+   // attach is judged on the initialiser 1.0 and the E-102 guard cannot fire -
+   // and at GBP 250 the real multiple is about 3.4x, right on its threshold.
+   // PersistGuards() here for the same reason it is now in the day rollover:
+   // a losing first session must not re-base its own baseline on restart.
+   double primeAtr = ATR(1);
+   if(primeAtr > 0.0) LotFor(InpStopAtrMult * primeAtr);
+   PersistGuards();
+
    return INIT_SUCCEEDED;
 }
 
@@ -4513,9 +4578,12 @@ void OnTick()
       // absent - and LoadGuards does MathMax(stored, current), which quietly
       // moves the max-drawdown baseline DOWN to whatever equity you restarted
       // at. Peak 1000, restart at 950, and the 8% floor is measured off 950.
-      static datetime lastPk = 0;
-      if(TimeCurrent() - lastPk >= 60) { lastPk = TimeCurrent(); PersistGuards(); }
    }
+   // Outside the peak branch on purpose: a losing day never makes a new high,
+   // and a losing day is exactly the one whose baseline has to survive a
+   // restart.
+   static datetime lastPk = 0;
+   if(TimeCurrent() - lastPk >= 60) { lastPk = TimeCurrent(); PersistGuards(); }
 
    int ds = DayStamp();
    if(ds != g_dayStamp)
@@ -4526,7 +4594,18 @@ void OnTick()
       g_lockedDay   = false;
       g_stDayRealized = 0.0;
       g_stDayTrades   = 0;
-      Log("new trading day, daily counters reset");
+      // THE 3% DAILY LIMIT BECAME 3% PER RESTART WITHOUT THIS LINE.
+      // PersistGuards() was called from the three breach paths and from the
+      // new-equity-peak branch, and nowhere else. On a day that never makes a
+      // new high - i.e. a losing day - NOTHING was written. LoadGuards then
+      // finds a stale day stamp and restores nothing, and OnInit has already
+      // set g_dayStartEq to whatever equity is NOW. So: down 2.8%, change an
+      // input on the chart, MT5 reloads the EA, and the budget re-bases to the
+      // lower equity. A restart is the single most likely thing a losing
+      // trader does, which makes this the brake failing at the exact moment it
+      // is reached for.
+      PersistGuards();
+      Log("new trading day, daily counters reset and PERSISTED");
    }
 
    // ---- EVERY TICK: watch the profit and protect it.

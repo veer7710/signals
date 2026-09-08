@@ -8705,3 +8705,80 @@ travel, and the lesson is now a rule rather than an observation:
 
 **VERDICT: the three-partial structure is the right SHAPE and does not fix the
 expectancy. UNPROVEN, and this time on the data he asked for.**
+
+---
+
+## E-189 — THE BASKET RULE CAPPED EVERY WINNER AT ONE POINT. IT WAS ON BY DEFAULT.
+
+An adversarial audit of SuperTrendSniper.mq5, briefed to find what takes a live
+account down. It did not find a compile error or a margin call. It found an
+exit rule that made the account **arithmetically unable to win**, shipped ON.
+
+`ProtectBasket()`:
+```cpp
+double arm = MathMin(MathMax(eq * InpBasketArmPct / 100.0, 0.25),
+                     InpBasketMinMoney);          // InpBasketMinMoney = 1.00
+...
+double floorMoney = g_bkPeak * (1.0 - 0.20);
+if(b.money > floorMoney) return;                  // else close EVERYTHING
+```
+
+`arm` is `MathMin(..., 1.00)`, a **flat GBP 1.00 whatever the account size.**
+So the basket armed at GBP 1.00 of floating profit on a GBP 250 account and on a
+GBP 5,000 account alike, then closed every position after handing back 20% of it
+— at **GBP 0.80**.
+
+At 0.01 lots and E-081's GBP 0.787 a point, GBP 0.80 is **one point**. The stop
+is 2 ATR, about 4.4 points on M1, GBP 3.43.
+
+```
+  break-even win rate = 3.43 / (3.43 + 0.80) = 81%
+  and it gets WORSE as the account grows, because arm is capped flat
+  while 1R scales with lots:   GBP 250 -> 85.5%    GBP 5,000 -> 98.5%
+```
+With `TrendRisk >= 2` the `arm *= 0.60` below it makes the trigger **0.6 of a
+point** — smaller than a single spread.
+
+**This is the same defect this file fixed everywhere else, and names at its own
+line 3626:** *"R DECIDES, MONEY IS A FLOOR. This was an OR, and the OR was a
+bug… R is scale-free; money is not."* `ProtectPositions()` gates on
+`peakR >= InpGbArmR` and floors the give-back at twice the round trip.
+`LockPositions()` gates on `peakR >= InpLockPosR`. **`ProtectBasket()` was the
+one give-back path that never got the lesson**, and it is the one that runs on
+every tick with no R gate at all.
+
+It is the mechanism behind the live complaint recorded earlier — *"peaks summed
+GBP 110 and handed back GBP 73"*. That was never fixed. It was renamed.
+
+**FIXED: `InpUseBasket` now ships FALSE, and `if(b.peakR < 1.0) return;` is
+added so it is survivable if it is ever switched on. It has still never been
+measured and the default does not move until it is.**
+
+### Four more from the same audit, all confirmed by reading the code
+1. **The 3% daily loss limit was 3% PER RESTART.** `PersistGuards()` was called
+   from the three breach paths and the new-equity-peak branch only. **A losing
+   day never makes a new high, so nothing was written**, `LoadGuards()` found a
+   stale day stamp and restored nothing, and `OnInit` had already re-based
+   `g_dayStartEq` to current equity. Down 2.8%, change an input, MT5 reloads,
+   budget re-bases lower. **A restart is the single most likely thing a losing
+   trader does — the brake failed exactly where it is reached for.** Now
+   persisted at `OnInit`, at the day rollover, and on the 60-second timer
+   unconditionally.
+2. **Three of four stop ratchets refused to place a missing stop BECAUSE it was
+   missing.** `better = (dir > 0) ? (lock > sl) : (lock < sl)` — with `sl == 0`
+   on a short, `lock < 0.0` is false. Only `TrailProfitStop` had the `sl == 0.0`
+   guard. Added to the other three.
+3. **`CanAfford()` failed OPEN** — `if(!OrderCalcMargin(...)) return true;`. The
+   function added *this session to stop a margin call* granted permission when
+   it could not compute, which is what happens on a desynced symbol after a
+   reconnect. Now refuses.
+4. **`InpLockAtMoney = 1.20` was a break-even move at 0.28R**, through a
+   different door from `InpUseBreakEven`, which this file ships FALSE and
+   documents as *"the WORST exit rule on all four markets, −0.161R to −0.308R"*.
+   Now 0 (off), with an `InpLockAtPeakR` gate if it is switched on.
+
+**And the lesson that outranks all five: two static checkers and a full-file
+audit had passed this file. Neither checker does ARITHMETIC.** A rule can be
+syntactically perfect, correctly ordered, properly guarded against every fill
+bug in this repo, and still require an 85% win rate to break even. Nothing in
+the toolchain looks for that.
