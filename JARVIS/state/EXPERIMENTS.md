@@ -8326,3 +8326,92 @@ nobody — me included — looked at it.
 Both books now carry SUPERTREND_SNIPER's existing E-151 clamp: a level already
 on the wrong side of this bar's close cannot be rested at, so the honest exit is
 the close.
+
+---
+
+## E-184 — EVERY ICT/SMC CONCEPT, SCORED ON ONE QUESTION. THE THREE MOST-TAUGHT ONES ARE THE WORST.
+
+Veer: *"can you actually research everything about liquidity ict smc all the
+little little aspects and build me a successful leg catcher"*, and about
+SuperTrend: *"it also caught lot of chop eg pullbacks were caught as a signal"*.
+
+E-182 fixed the leg scoreboard, and that changes what can be asked. Every study
+before this asked "does this strategy make money" — which mixes entry, stop,
+target, trail and cost into one number and cannot say which part is broken.
+**This asks one thing: does the condition mark the START of a leg?**
+
+Method: legs are pivot-to-pivot, ≥ 2 ATR. A concept "catches" a leg if it fires,
+in the leg's direction, within 3 bars ending ON the starting extreme — never
+after it. Every concept is scored against a **time-shifted copy of itself**, so
+its shape and frequency are identical and only its timing is destroyed. Lift is
+catch-rate ÷ control.
+
+### The result, on four independent samples
+```
+  concept                  1h     4h    15m     M1(157k bars)
+  stretched from 50 EMA  1.23   1.34   1.32   1.32
+  premium / discount     1.14   1.21   1.23   1.23
+  equal highs/lows taken 1.18      -      -   1.42 / 1.30
+  60%+ rejection wick    1.13   1.19   1.07   1.15
+  volume x2 at the bar      -      -      -   1.17
+  ---------------------------------------------------------
+  sweep a swing high     1.03   0.92   1.03   0.97
+  sweep a swing low      1.00   0.98   1.04   0.93
+  OTE 0.62-0.79          1.02   0.86   0.83   0.98
+  order block            1.17   0.80   0.82   0.84
+  ---------------------------------------------------------
+  BOS                    0.60   0.57   0.61   0.55
+  displacement candle    0.57   0.47   0.45   0.47
+  FVG / imbalance        0.34   0.30   0.37   0.36
+```
+
+**FVG, displacement and BOS — three of the most-taught ICT concepts — are the
+WORST predictors of a leg start on every sample.** Not neutral: an FVG marks a
+bar roughly **three times LESS likely** to begin a leg than a random bar.
+
+The reason is structural and obvious once seen: **FVG, displacement and BOS all
+fire in the MIDDLE of a leg.** They are confirmations that a move is already
+running, so by the time they print, the leg has begun and most of it is gone.
+That is precisely Veer's complaint — *"pullbacks were caught as a signal"* — and
+it is also why SuperTrend chops: **a SuperTrend flip is a BOS-shaped event**,
+which is why it scores 0.55–0.61 as a leg-start marker.
+
+**Sweeps score 1.00. The liquidity sweep, the thing this whole project was built
+on, does not mark a leg start at all** — which is the same answer E-179 got from
+the money side, arrived at independently.
+
+What DOES mark a leg start is one family: **price stretched from its mean, in
+the outer third of its range, printing a rejection wick, at a level where equal
+highs or lows just got taken, on elevated volume.** Mean reversion at an
+extreme — which is exactly the "top tick entry" Veer has been asking for since
+the beginning.
+
+### Stacking them — the lift compounds
+```
+  conditions agreeing      1h      15m       M1
+    1 of 5/6             1.17     1.20     1.23
+    2                    1.21     1.31     1.32
+    3                    1.41     1.50     1.53
+    4                       -        -     2.18   (48.1% vs 22.1%, n=497)
+```
+Monotone on all three, so the concepts carry **independent** information.
+
+### Out of sample — the stack, unchanged, on each half separately
+```
+  2018 M1   need:   1      2      3      4
+    first half    1.22   1.33   1.48   1.94
+    second half   1.22   1.31   1.50   2.19    <- unseen by the choice
+```
+**Near-identical.** On 1h the ladder holds at need 1–2 (1.18 / 1.23) and the
+need-3 cell disagrees between halves on n≈270, so it is M1 where this is solid —
+and M1 is the clock Veer trades.
+
+**VERDICT: SUPPORTED — the mean-reversion stack marks leg starts at up to 2.2x
+the base rate, replicated out of sample on 157,051 M1 bars. DISPROVEN as
+leg-start markers: FVG, displacement, BOS, at 0.34–0.61 on every sample tested.
+UNPROVEN and flat: the liquidity sweep, OTE, order blocks.**
+
+This does not say the stack makes money — it says it fires where the moves
+begin, which is the thing every previous entry in this project failed to do.
+Turning a 2.2x leg-start hit rate into a P&L still needs the stop, the target
+and the cost, and those are separate questions.
