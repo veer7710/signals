@@ -1123,6 +1123,44 @@ lcDir   = lcUp > lcDn ? 1 : lcDn > lcUp ? -1 : 0
 sigLegB = useLegCatch and lcDir > 0 and lcUp >= lcNeed and barstate.isconfirmed
 sigLegS = useLegCatch and lcDir < 0 and lcDn >= lcNeed and barstate.isconfirmed
 
+// ---- WHERE IT IS GOING (E-185) -------------------------------------------
+// The higher timeframe is NOT a filter. Five different HTF contexts were
+// layered on this signal and every one landed within 0.02 of the unfiltered
+// 1.53 lift, on 12,092 signals - while cutting the count by half to two thirds.
+// Both directions of the "H1 downtrend, M15 buy" model came out flat. The
+// reason is that this stack already measures "price is at an extreme", and the
+// HTF's premium/discount is the same measurement on a bigger bar.
+//
+// What the HTF IS good for is the DESTINATION. From an M1 signal, price reaches
+// the next H1 swing level 54.5% of the time (n = 3,666) and the median leg
+// travels 115% of the way there - it overshoots. Against E-172, where every
+// fixed R target sat on zero, a level-based target is a different animal.
+//
+// So the signal gets a target drawn on it: the next HTF swing level in its
+// direction. It is a destination, not a promise - it is reached just over half
+// the time, and that is what the number says.
+lcHtfHi = request.security(syminfo.tickerid, htfTf, ta.highest(high, 20)[1],
+     lookahead = barmerge.lookahead_off)
+lcHtfLo = request.security(syminfo.tickerid, htfTf, ta.lowest(low, 20)[1],
+     lookahead = barmerge.lookahead_off)
+lcTgt = sigLegB ? lcHtfHi : sigLegS ? lcHtfLo : na
+
+var line  lcTLine = na
+var label lcTLab  = na
+if (sigLegB or sigLegS) and not na(lcTgt) and showLive
+    if not na(lcTLine)
+        line.delete(lcTLine)
+    if not na(lcTLab)
+        label.delete(lcTLab)
+    tcol = sigLegB ? cBuy : cSell
+    lcTLine := line.new(bar_index, lcTgt, bar_index + 30, lcTgt,
+         color = color.new(tcol, 35), width = 1, style = line.style_dashed)
+    lcTLab := label.new(bar_index + 30, lcTgt,
+         "target  " + str.tostring(math.abs(lcTgt - close), format.mintick)
+         + "pt   reached 55% on M1",
+         style = label.style_label_left, size = size.tiny,
+         color = color.new(chart.bg_color, 100), textcolor = color.new(tcol, 10))
+
 sigSweepB = useSweep and sessOk and fillB and gradeOk
 sigSweepS = useSweep and sessOk and fillS and gradeOk
 sigBrB    = brFillB and gradeOk
