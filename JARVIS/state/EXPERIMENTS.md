@@ -8415,3 +8415,73 @@ This does not say the stack makes money — it says it fires where the moves
 begin, which is the thing every previous entry in this project failed to do.
 Turning a 2.2x leg-start hit rate into a P&L still needs the stop, the target
 and the cost, and those are separate questions.
+
+---
+
+## E-185 — THE HIGHER TIMEFRAME IS NOT A FILTER. IT IS A DESTINATION.
+
+Veer, showing H1 and 15m charts of the same move: *"tons of potential for scalps
+especially m1 m15 h1 use bias wisely if u can"*, and his standing model: *"a h1
+down trend we look for that buy entry on m15"*.
+
+E-184's leg catcher, unchanged, with five different higher-timeframe contexts
+layered on top. Lookahead done by hand: bar `i` reads HTF bar `(i//factor) - 1`,
+never the one still forming.
+
+### As a FILTER: nothing. Not a small effect — no effect.
+```
+  M1 legs, 18,123 legs, catcher fires 12,092 times      LIFT
+  the leg catcher alone                                 1.53
+  + M15 premium/discount agrees          5675           1.53
+  + M15 stretched the same way           4544           1.52
+  + at an M15 swing level                9457           1.53
+  + M15 trend AGREES                     4082           1.55
+  + M15 trend OPPOSES                    7947           1.52
+  ... and with H1 context: 1.53 / 1.54 / 1.54 / 1.53 / 1.54 / 1.53
+```
+**Every context lands within ±0.02 of the baseline, while cutting the signal
+count by half to two thirds.** You pay frequency and buy nothing.
+
+Both directions of Veer's own hypothesis are flat: trend AGREES 1.54–1.55,
+trend OPPOSES 1.52–1.53. The two ">>>"-looking cells elsewhere (4h trend agrees
+1.74 on n=47, 1h level 1.68 on n=153) are what two outliers out of thirty small-n
+cells look like.
+
+**Why, and it is a satisfying reason:** the leg catcher already measures "price
+is at an extreme". The HTF's premium/discount and stretch are the SAME
+measurement at a coarser resolution — redundant, not additive. E-184's five
+conditions compounded because they were *independent* evidence about one bar;
+the HTF is the *same* evidence about a bigger bar.
+
+This independently replicates E-133 — which said HTF direction never beat the
+traded clock — but on the right regime and with the right question.
+
+### As a TARGET: yes, clearly.
+For every leg the catcher fires on, how far did it run against the distance to
+the next HTF swing level?
+```
+                          n     dist to level   reached it   median leg / distance
+  M1  -> H1 levels     3666        3.02 ATR        54.5%           1.15
+  15m -> 1h levels       54        1.04 ATR        90.7%           2.61
+  1h  -> 4h levels      132        1.12 ATR        81.8%           2.81
+```
+**From an M1 leg-catcher signal, price reaches the next H1 level 54.5% of the
+time, and the median leg travels 115% of the way there — it overshoots.**
+n = 3,666, so that number is solid.
+
+Set against E-172, where every fixed R-target sat on zero, this says a
+**level-based** target is a different animal from a ruler-based one. It is
+reachable, and the median move goes past it.
+
+**VERDICT: the higher timeframe as an entry filter is DISPROVEN — ±0.02 across
+30 cells on 12,092 signals. As a target it is SUPPORTED: the next HTF level is
+reached over half the time on M1 and the median move exceeds it.**
+
+**The bias is not permission to enter. It is where you are going.** That is the
+answer to "the good signals didn't hold out": they had no destination, so they
+were cut at a fixed R that had nothing to do with where price was headed.
+
+CAVEAT, stated plainly: this measures LEG geometry, not trade P&L. A leg
+reaching a level does not prove a position held through the drawdown to get
+there. It settles target SELECTION, not whether the trade survives — and that
+is the next question, not this one.
