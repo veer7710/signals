@@ -8638,3 +8638,70 @@ turns out to be.** That is "leg to leg", written as a rule.
 
 **The single thing that would settle it is recent M1 data.** It has been the
 blocking item for weeks and it is now blocking the only promising result here.
+
+---
+
+## E-188 — THREE PARTIALS, ON RECENT DATA ONLY. THE SHAPE IS RIGHT, THE EXPECTANCY IS ZERO — AND E-187 DOES NOT REPRODUCE.
+
+Veer: *"it's not about rr we simply set 3 tp levels and take 3 partials on our
+funded also why u doing 2018 im showing u live data and dont worry about rr we
+just want best entry and a safe sl and tp for consistent payouts"*.
+
+Both corrections taken. **Nothing in this experiment touches 2018.** (Outbound
+fetching from this container is blocked — the proxy returns 403 — so recent M1
+cannot be obtained here. `GOLD_1h.json` runs to Aug 2026 and `GOLD_15m.json` is
+Jun–Aug 2026, and both had been under-used because I was chasing sample size.)
+
+Modelled as he actually trades it: full size in, one stop, close a third at each
+of three TPs, stop to a REAL breakeven (entry + cost) once TP1 is banked. That
+changes the arithmetic from E-186 completely — a trade that reaches TP1 and
+reverses becomes a small win rather than a full loss.
+
+### The shape is exactly what he asked for
+```
+  stop 1.5 ATR, TP ladder 1/2/3 ATR, BE after TP1
+  sample            side       n   banked   ATR/trd      t   maxDD  worst run
+  2024-2026 1h      against  288    54.9%   -0.1051  -1.27    47.9      4
+  2024-2026 4h      against   72    58.3%   +0.0898  +0.52     8.3      4
+  2026 15m          against   93    66.7%   +0.1127  +0.84    10.7      4
+  2026 15m          all      105    67.6%   +0.1032  +0.84    10.4      4
+  ---------------------------------------------------------------------------
+  POOLED            against  655    57.9%   -0.0305  -0.56    47.9      6
+  POOLED            with     101    65.3%   +0.0958  +0.74    13.8      4
+  POOLED            all      752    58.5%   -0.0280  -0.56    44.1      7
+```
+**58.5% of trades bank something, worst losing run 4–7, and the drawdown is
+shallow.** That is the "consistent payouts" profile, and single-target testing
+could never show it — E-186's 63% at TP1 was a *whole-position* win rate, which
+is a different and much more fragile thing.
+
+**And the expectancy is still zero.** −0.028 ATR a trade pooled. Banking
+something on 58% of trades does not pay when the 42% that fail lose more than
+the partials collect.
+
+### E-187 DOES NOT REPRODUCE ON RECENT DATA
+E-187 found counter-bias entries positive on 2018 M1: +0.1085 ATR/trade at
+t +3.10, holding out of sample across both halves, with 6.4x cost headroom. On
+**recent** data the same side is **−0.0305 pooled**, negative on the largest
+single sample (1h, n=288, t −1.27), and positive only on the two smallest.
+
+**E-187 is downgraded from PROMISING to UNPROVEN.** It was one survivor of ~40
+cells on the 2018 sample that has now inverted a verdict twice (E-176 was the
+first). This is the second time that file has produced a result that did not
+travel, and the lesson is now a rule rather than an observation:
+
+> **A result from GOLD_M1_2018.json is a hypothesis about 2018. It is not
+> evidence about the market Veer trades, however strong its t-statistic and
+> however cleanly it survives an in-sample split.**
+
+### WHAT IS ACTUALLY ESTABLISHED, after everything
+* **E-184 holds** — the mean-reversion stack marks leg starts at 1.4–2.2x the
+  base rate, replicated out of sample and on four samples including recent ones.
+  It is a real classifier.
+* **E-185 holds** — the HTF is useless as a filter (±0.02 over 30 cells) and
+  good as a destination (next level reached 54.5%).
+* **No entry, target, stop or partial structure tested has a positive
+  expectancy on recent data.** Best pooled cell +0.0958 at t +0.74 on n = 101.
+
+**VERDICT: the three-partial structure is the right SHAPE and does not fix the
+expectancy. UNPROVEN, and this time on the data he asked for.**

@@ -1,160 +1,232 @@
 """
-E-147 — PARTIALS: does banking half early beat letting it all run?
+E-188 — THREE TP LEVELS, THREE PARTIALS. What Veer actually trades, on RECENT
+data only.
 
-Veer asked for partials on the chart. E-137 measured whole-position exits - fixed
-targets, ATR trails, give-backs, the next level - and the give-back won. It never
-tested SPLITTING the position, and a chart that draws a partial level nobody has
-measured is a chart telling you to do something unknown.
+Veer: "it's not about rr we simply set 3 tp levels and take 3 partials on our
+funded also why u doing 2018 im showing u live data and dont worry about rr we
+just want best entry and a safe sl and tp for consistent payouts".
 
-THE TEST, on the shipped sweep setup with everything else unchanged:
-    close `frac` of the position at `n` x risk
-    let the remainder run on the same 25% give-back trail
-Compared against the shipped whole-position exit.
+Both corrections are taken.
 
-The intuition for partials is real - it converts an open trade into a closed
-profit and a free option - but it has a cost that is easy to miss: the half you
-banked at 1R is the half that would have carried the trade that ran 6R, and this
-system's whole edge is a trail with no target (E-137: every fixed target banked
-less). So the question is whether the smoothing is worth the top slice.
+ON 2018: he is right and I kept going back to it because it is the only M1 file
+in the repo. Outbound fetching is blocked here (the proxy returns 403), so
+recent M1 cannot be obtained from this container - but GOLD_1h.json runs to
+Aug 2026 and GOLD_15m.json is Jun-Aug 2026, and both have been under-used
+because I chased sample size. **Nothing below touches 2018.**
 
-Reported in POINTS, not R. E-074: the best per-trade gate set in this project
-banked the LEAST money, and this is exactly the shape of question where R lies.
-Also reported: max drawdown and worst trade, because the honest case FOR partials
-is a smoother path, not a bigger total - and if that is what they buy, that has
-to show up here or the argument is empty.
+ON R:R: a single target with a single R multiple is not how a funded account is
+traded and it is not what he does. This models the real thing:
+
+    full size in, ONE stop
+    TP1  ->  close a third
+    TP2  ->  close a third        stop to breakeven once TP1 is banked
+    TP3  ->  close the last third
+
+That changes the arithmetic completely from E-186. There the whole position
+lived or died on one target. Here a trade that reaches TP1 and reverses is a
+SMALL WIN, not a full loss - which is exactly the "consistent payouts" shape,
+and it is why the win rate and the expectancy stop being the same question.
+
+The metrics reported are the ones a funded account is actually judged on:
+what fraction of trades bank something, the worst losing run, and the deepest
+drawdown of the equity curve - not R multiples.
 """
 from __future__ import annotations
-import os, sys, statistics
+import os, statistics, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, trail_level
-from liq_m1 import load, GBP
-from sweep_winrate import pivots
+from engine import atr as watr, Series
+from regime import load_plain, resample
+from legcatch import features
+from bias_run import bias_series
 
-TODAY = 7.38
-GBP_PT = TODAY * GBP
-BPD = {"M1": 1440, "M5": 288, "M15": 96}
+COST = 0.02
 
 
-def run(tf="M1", part_r=0.0, part_frac=0.5, pk=5, sweep_atr=0.10, wick=0.6460,
-        buf=0.30, give=0.25, max_risk_atr=1.2, hold=240, cooldown=5,
-        cost_frac=0.11, subset=None):
-    s, SP = load(tf)
-    A = watr(s, 14)
-    va = sorted(x for x in A[100:] if x)
-    cs = cost_frac / (statistics.median(SP) / va[len(va) // 2])
-    out, busy = [], -1
-    for (kb, px, side) in pivots(s, pk):
-        if kb <= busy:
-            continue
-        a = A[kb]
-        if not a or a <= 0:
-            continue
-        t = -side
-        need = px + side * sweep_atr * a
-        sw, ext = None, None
-        for k in range(kb + 1, min(kb + 120, len(s))):
-            if (s.h[k] >= need) if side > 0 else (s.l[k] <= need):
-                sw, ext = k, (s.h[k] if side > 0 else s.l[k])
-                break
-        if sw is None:
-            continue
-        rng = s.h[sw] - s.l[sw]
-        if (abs(s.c[sw] - s.o[sw]) / rng if rng > 0 else 1.0) > wick:
-            continue
-        j = None
-        for k in range(sw + 1, min(sw + 120, len(s))):
-            if (s.h[k] >= px) if t > 0 else (s.l[k] <= px):
-                j = k
-                break
-            ext = max(ext, s.h[k]) if side > 0 else min(ext, s.l[k])
-        if j is None:
-            continue
-        if subset and not (subset[0] <= j < subset[1]):
-            continue
-        sp = SP[j] * cs
-        entry = px + t * sp / 2.0
-        sl = ext - t * buf * a
-        risk = abs(entry - sl)
-        if risk <= 0 or risk > max_risk_atr * a:
-            continue
-        tp = entry + t * part_r * risk if part_r > 0 else None
-
-        booked = 0.0
-        openf = 1.0
-        peak = entry
-        px_out, kk = None, None
-        for k in range(j, min(j + hold, len(s))):
-            if (s.l[k] <= sl) if t > 0 else (s.h[k] >= sl):
-                px_out, kk = sl, k
-                break
-            if k == j:
-                continue
-            # the partial is checked BEFORE the trail is advanced on this bar,
-            # and never on the entry bar - same E-110 rule as everything else
-            if tp is not None and openf > part_frac / 2 and (
-                    (s.h[k] >= tp) if t > 0 else (s.l[k] <= tp)):
-                booked += part_frac * (t * (tp - entry) - SP[k] * cs)
-                openf -= part_frac
-                tp = None
-            peak = max(peak, s.h[k]) if t > 0 else min(peak, s.l[k])
-            # E-151: one trail, in engine.py. None = exit at this close.
-            nsl = trail_level(entry, sl, peak, s.c[k], t, give)
-            if nsl is None:
-                px_out, kk = s.c[k], k
-                break
-            sl = nsl
-        if px_out is None:
-            kk = min(j + hold, len(s) - 1)
-            px_out = s.c[kk]
-        rest = openf * (t * ((px_out - t * SP[kk] * cs / 2.0) - entry))
-        out.append(booked + rest)
-        busy = kk + cooldown
+def sigs(s, A, need=3):
+    F = features(s, A, None)
+    keep = [k for k in ["stretched from 50 EMA", "premium / discount",
+                        "60%+ rejection wick", "equal highs taken",
+                        "equal lows taken"] if k in F]
+    out = []
+    for i in range(len(s)):
+        up = sum(1 for k in keep if F[k][i] > 0)
+        dn = sum(1 for k in keep if F[k][i] < 0)
+        if up >= need and up > dn:
+            out.append((i, 1))
+        elif dn >= need and dn > up:
+            out.append((i, -1))
     return out
 
 
+def book(s, A, sig, bias, side, stopAtr, tps, beAfterTp1=True,
+         hold=400, cool=5, cost=COST):
+    """side: 'with', 'against' or 'all'. tps: three distances in ATR.
+
+    Returns (per-trade results in ATR, how many reached each TP).
+    """
+    out, busy = [], -1
+    reach = [0, 0, 0]
+    for (i, t) in sig:
+        if i <= busy or i + 1 >= len(s):
+            continue
+        b = bias[i]
+        if side == "with" and b != t:
+            continue
+        if side == "against" and b != -t:
+            continue
+        a = A[i]
+        if not a or a <= 0:
+            continue
+        entry = s.o[i + 1]
+        sl = entry - t * stopAtr * a
+        lv = [entry + t * x * a for x in tps]
+        left = 1.0
+        got = 0.0
+        hitN = 0
+        kk = None
+        for k in range(i + 1, min(i + 1 + hold, len(s))):
+            # the stop is tested FIRST on every bar: ties lose
+            hitSl = (s.l[k] <= sl) if t > 0 else (s.h[k] >= sl)
+            if hitSl:
+                got += left * t * (sl - entry) / a
+                left = 0.0
+                kk = k
+                break
+            if k == i + 1:
+                continue                      # E-110: not on the entry bar
+            for n in range(hitN, 3):
+                hit = (s.h[k] >= lv[n]) if t > 0 else (s.l[k] <= lv[n])
+                if not hit:
+                    break
+                part = 1.0 / 3.0 if n < 2 else left
+                got += part * t * (lv[n] - entry) / a
+                left -= part
+                hitN = n + 1
+                reach[n] += 1
+                if n == 0 and beAfterTp1:
+                    # THE STOP TO BREAKEVEN, and it is a REAL breakeven: entry
+                    # plus the cost, not entry. "At breakeven" at the entry
+                    # price is a story - the spread has already been paid.
+                    be = entry + t * cost * a
+                    if (be > sl) if t > 0 else (be < sl):
+                        sl = be
+            if left <= 1e-9:
+                kk = k
+                break
+        if left > 1e-9:
+            kk = min(i + 1 + hold, len(s) - 1)
+            got += left * t * (s.c[kk] - entry) / a
+        out.append(got - cost)
+        busy = kk + cool
+    return out, reach
+
+
 def stats(r):
-    eq = peak = mdd = 0.0
+    if len(r) < 30:
+        return None
+    m = statistics.fmean(r)
+    t = m / (statistics.pstdev(r) / len(r) ** 0.5)
+    eq, peak, dd, run, worst = 0.0, 0.0, 0.0, 0, 0
     for x in r:
         eq += x
         peak = max(peak, eq)
-        mdd = max(mdd, peak - eq)
-    return (len(r), 100.0 * sum(1 for x in r if x > 0) / len(r), sum(r),
-            sum(r) / len(r), mdd, min(r))
+        dd = max(dd, peak - eq)
+        run = run + 1 if x <= 0 else 0
+        worst = max(worst, run)
+    banked = 100.0 * sum(1 for x in r if x > 0) / len(r)
+    return len(r), banked, m, t, dd, worst
+
+
+def report(label, s, factor, need=3):
+    A = watr(s, 14)
+    sig = sigs(s, A, need)
+    bias = bias_series(s, factor)
+    print(f"\n  ---- {label} — {len(sig)} signals ----")
+    print(f"  {'side  stop  TP ladder (ATR)':<34}{'n':>6}{'banked':>8}"
+          f"{'ATR/trd':>10}{'t':>7}{'maxDD':>8}{'worst run':>10}")
+    print("  " + "-" * 83)
+    for side in ("against", "with", "all"):
+        for stopAtr in (1.0, 1.5):
+            for tps in ([1.0, 2.0, 3.0], [1.5, 3.0, 5.0], [2.0, 4.0, 7.0]):
+                r, reach = book(s, A, sig, bias, side, stopAtr, tps)
+                v = stats(r)
+                if not v:
+                    continue
+                n, bank, m, t, dd, worst = v
+                lad = "/".join(f"{x:.0f}" for x in tps)
+                print(f"  {side:<8}{stopAtr:>4.1f}  {lad:<20}{n:>6}{bank:>7.1f}%"
+                      f"{m:>+10.4f}{t:>+7.2f}{dd:>8.1f}{worst:>10}"
+                      f"{'  <<<' if t >= 2.0 else ''}")
+        print()
 
 
 def main():
-    for tf in ("M1", "M5"):
-        s, _ = load(tf)
-        n = len(s)
-        print("=" * 92)
-        print(f"  E-147 — partials on {tf}: bank half early, or let it all run?")
-        print("=" * 92)
-        print(f"  {'exit':<28}{'n':>6}{'win%':>8}{'points':>9}{'per trade':>12}"
-              f"{'maxDD GBP':>11}{'worst GBP':>11}")
-        print("  " + "-" * 76)
-        rows = [("no partial (shipped)", 0.0, 0.0)]
-        for r_ in (0.5, 1.0, 1.5, 2.0):
-            for f_ in (0.5, 0.33):
-                rows.append((f"close {int(f_*100)}% at {r_:.1f}R", r_, f_))
-        base = None
-        for lbl, r_, f_ in rows:
-            res = run(tf, part_r=r_, part_frac=f_)
-            if len(res) < 40:
+    print("=" * 92)
+    print("  E-188 — three TPs, three partials, stop to breakeven after TP1.")
+    print("  RECENT DATA ONLY. Nothing here touches 2018.")
+    print("=" * 92)
+    h1 = load_plain("GOLD_1h.json")
+    report("2024-2026 1h, H1 bias from 4h", h1, 4)
+    report("2026 Jun-Aug 15m, bias from 1h", load_plain("GOLD_15m.json"), 4)
+
+
+
+
+def pooled():
+    """Recent data is THIN - 1h gives ~300 trades, 15m ~100 - and at that size
+    nothing above reaches significance. Results are already in ATR, which is
+    scale-free, so the honest way to get n up without going back to 2018 is to
+    pool every recent clock and test the ONE configuration that had the best
+    shape on both: stop 1.5 ATR, TP ladder 1/2/3 ATR, stop to breakeven after
+    TP1.
+
+    Nothing is re-optimised here. One configuration, chosen for the shape Veer
+    asked for - most trades banking something, shallow drawdown, short losing
+    runs - measured across every recent sample available.
+    """
+    h1 = load_plain("GOLD_1h.json")
+    g15 = load_plain("GOLD_15m.json")
+    sets = [("2024-2026 1h", h1, 4),
+            ("2024-2026 4h", resample(h1, 4), 4),
+            ("2024-2026 2h", resample(h1, 2), 4),
+            ("2026 15m", g15, 4),
+            ("2026 30m", resample(g15, 2), 4),
+            ("2026 1h", resample(g15, 4), 4)]
+    print("\n" + "=" * 92)
+    print("  E-188 POOLED — one configuration (stop 1.5 ATR, TP 1/2/3 ATR, BE")
+    print("  after TP1) across every recent sample. No re-optimising.")
+    print("=" * 92)
+    print(f"  {'sample':<18}{'side':<10}{'n':>6}{'banked':>8}{'ATR/trd':>10}"
+          f"{'t':>7}{'maxDD':>8}{'worst run':>10}")
+    print("  " + "-" * 78)
+    allr = {"against": [], "with": [], "all": []}
+    for (lbl, s, f) in sets:
+        A = watr(s, 14)
+        sig = sigs(s, A, 3)
+        bias = bias_series(s, f)
+        for side in ("against", "with", "all"):
+            r, _ = book(s, A, sig, bias, side, 1.5, [1.0, 2.0, 3.0])
+            allr[side].extend(r)
+            v = stats(r)
+            if not v:
                 continue
-            N, W, P, PT, DD, WT = stats(res)
-            if base is None:
-                base = P
-            print(f"  {lbl:<28}{N:>6}{W:>7.1f}%{P:>9.1f}{PT:>+12.4f}"
-                  f"{DD*GBP_PT:>11.2f}{WT*GBP_PT:>11.2f}")
-        # does the best partial hold out of sample?
-        print("\n  out of sample, best partial vs shipped")
-        for lbl, r_, f_ in (("shipped", 0.0, 0.0), ("close 50% at 1.0R", 1.0, 0.5)):
-            a = stats(run(tf, part_r=r_, part_frac=f_, subset=(0, n // 2)))
-            b = stats(run(tf, part_r=r_, part_frac=f_, subset=(n // 2, n)))
-            print(f"    {lbl:<20} IS {a[2]:>7.1f} pts {a[3]:+.4f}/tr   "
-                  f"OOS {b[2]:>7.1f} pts {b[3]:+.4f}/tr")
-        print()
+            n, bank, m, t, dd, worst = v
+            print(f"  {lbl:<18}{side:<10}{n:>6}{bank:>7.1f}%{m:>+10.4f}"
+                  f"{t:>+7.2f}{dd:>8.1f}{worst:>10}")
+    print("  " + "-" * 78)
+    for side in ("against", "with", "all"):
+        v = stats(allr[side])
+        if not v:
+            continue
+        n, bank, m, t, dd, worst = v
+        print(f"  {'POOLED':<18}{side:<10}{n:>6}{bank:>7.1f}%{m:>+10.4f}"
+              f"{t:>+7.2f}{dd:>8.1f}{worst:>10}{'  <<<' if t >= 2.0 else ''}")
+    print("\n  The pooled clocks overlap in time, so these are not six")
+    print("  independent samples and the pooled t is optimistic. It is a")
+    print("  better estimate of the MEAN than any single row, not a stronger")
+    print("  significance claim than the rows deserve.")
 
 
 if __name__ == "__main__":
     main()
+    pooled()
