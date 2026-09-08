@@ -71,6 +71,11 @@ OB_PINE, OB_EA = "useOB", ("InpUseObDetect", "InpUseObReturn")
 # Deliberately unpaired, with the reason. Anything else unpaired is a finding.
 PINE_ONLY = {
     "cleanChart": "the master drawing switch - the EA draws nothing",
+    "useLegCatch": "E-184 leg catcher - chart-only until it is measured on money",
+    "lcNeed": "leg catcher threshold, chart only",
+    "lcEmaLen": "leg catcher mean length, chart only",
+    "lcStretch": "leg catcher stretch threshold, chart only",
+    "lcVolX": "leg catcher volume multiple, chart only",
     "showLvl": "drawing", "showSmc": "drawing", "showZones": "drawing",
     "showLive": "drawing", "showHist": "drawing", "showPanel": "drawing",
     "showSess": "drawing", "showRefused": "drawing", "panelBig": "drawing",

@@ -186,8 +186,50 @@ flipDown = not bull and bull[1]
 gateBuy  = not useDema or dema >= dema[2]
 gateSell = not useDema or dema <= dema[2]
 
-buySig  = flipUp   and gateBuy  and barstate.isconfirmed
-sellSig = flipDown and gateSell and barstate.isconfirmed
+// ================= THE CHOP FILTER (E-184) =================================
+// Veer: SuperTrend "caught decent legs and good trades but it also caught lot
+// of chop eg pullbacks were caught as a signal".
+//
+// E-184 explains it exactly. Scored on whether it marks the START of a leg
+// (pivot to pivot, 2+ ATR, against a time-shifted control, on four samples
+// including 157,051 M1 bars), a BOS scores 0.55-0.61 - it marks a bar roughly
+// HALF as likely to begin a leg as a random one. And a SuperTrend flip IS a
+// BOS-shaped event: it confirms a move that is already running. That is what
+// makes it fire into pullbacks.
+//
+// What DOES mark a leg start is one family, and it beat its own control on
+// every sample: price stretched from its mean (1.23-1.34), in the outer third
+// of its range (1.14-1.23), printing a rejection wick (1.07-1.19). Stacked
+// they compound, and the ladder reproduced out of sample almost exactly.
+//
+// So the flip stays the trigger - it is what finds the direction - and this
+// asks one extra question before taking it: is price actually at an extreme,
+// or is this the middle of a move? Off by default, because it has NOT been
+// measured on the money, only on leg starts.
+chopOn = input.bool(false, "Refuse flips that are not at an extreme (E-184)",
+     group = gS,
+     tooltip = "A SuperTrend flip is a BOS-shaped event, and E-184 scored BOS at 0.55-0.61 as a leg-start marker on every sample tested - about half as likely as a random bar. That is the mechanism behind 'it caught the pullback'. This requires N of three mean-reversion conditions, each of which BEAT its own time-shifted control, to agree with the flip's direction: price stretched from the 50 EMA, price in the outer third of its 60-bar range, and a 60%+ rejection wick.\n\nOFF by default. E-184 measured these on LEG STARTS, not on profit, and this project does not turn a default on for a result it has not measured on the money.")
+chopNeed = input.int(2, "...how many of the three must agree", group = gS,
+     minval = 1, maxval = 3)
+
+cEma  = ta.ema(close, 50)
+cDist = atr > 0 ? (close - cEma) / atr : 0.0
+cStr  = cDist <= -1.5 ? 1 : cDist >= 1.5 ? -1 : 0
+cHH   = ta.highest(high, 60)
+cLL   = ta.lowest(low, 60)
+cPos  = cHH > cLL ? (close - cLL) / (cHH - cLL) : 0.5
+cPrem = cPos < 0.35 ? 1 : cPos > 0.65 ? -1 : 0
+cRng  = high - low
+cDnW  = cRng > 0 ? (math.min(open, close) - low) / cRng : 0.0
+cUpW  = cRng > 0 ? (high - math.max(open, close)) / cRng : 0.0
+cWick = cDnW >= 0.6 ? 1 : cUpW >= 0.6 ? -1 : 0
+cUp   = (cStr > 0 ? 1 : 0) + (cPrem > 0 ? 1 : 0) + (cWick > 0 ? 1 : 0)
+cDn   = (cStr < 0 ? 1 : 0) + (cPrem < 0 ? 1 : 0) + (cWick < 0 ? 1 : 0)
+chopOkB = not chopOn or cUp >= chopNeed
+chopOkS = not chopOn or cDn >= chopNeed
+
+buySig  = flipUp   and gateBuy  and chopOkB and barstate.isconfirmed
+sellSig = flipDown and gateSell and chopOkS and barstate.isconfirmed
 refuseB = flipUp   and not gateBuy  and barstate.isconfirmed
 refuseS = flipDown and not gateSell and barstate.isconfirmed
 

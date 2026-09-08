@@ -174,6 +174,15 @@ useBR    = input.bool(false, "BREAK + RETEST — close through, then holds",   g
 useOB    = input.bool(false, "ORDER BLOCK — the block, and the return to it", group = gX,
      tooltip = "OFF by default. E-151: same story as break+retest. Under achievable fills, detection is -0.0089/trade and the return is -0.0319 on M1. The order block finds real structure - it is genuinely better than a random entry - but the move it catches does not pay the spread on its own. The blocks still DRAW so you can see them behind the sweep.")
 
+gLC = "1b · LEG CATCHER  (E-184 — the only thing measured to mark leg STARTS)"
+useLegCatch = input.bool(true, "Leg catcher signals", group = gLC,
+     tooltip = "E-184 scored every ICT/SMC concept on ONE question - does it mark the START of a leg (pivot to pivot, 2+ ATR)? - against a time-shifted copy of itself, on four samples including 157,051 M1 bars.\n\nWORST on every sample: FVG 0.34-0.37, displacement 0.45-0.57, BOS 0.55-0.61. An FVG marks a bar about THREE TIMES LESS likely to begin a leg than a random one. All three fire in the MIDDLE of a leg, once the move is already running - which is why they read as 'caught the pullback'.\n\nFLAT: the liquidity sweep, 0.93-1.04. It does not mark a leg start at all.\n\nBEST: stretched from the mean 1.23-1.34, premium/discount 1.14-1.23, equal highs/lows taken 1.30-1.42, rejection wick 1.07-1.19, volume 1.17. Stacked they compound: 1.23 -> 1.32 -> 1.53 -> 2.18 as more agree, and out of sample the ladder reproduces almost exactly (first half 1.22/1.33/1.48/1.94, second 1.22/1.31/1.50/2.19).\n\nThis marks where moves BEGIN. It is not a claim that it makes money - the stop, the target and the cost are separate questions and are not settled.")
+lcNeed = input.int(3, "How many conditions must agree", group = gLC, minval = 1, maxval = 5,
+     tooltip = "M1, out of sample: 1 -> 1.22x the base rate, 2 -> 1.31x, 3 -> 1.50x, 4 -> 2.19x. Higher is sharper and much rarer - at 4 it fired 330 times over 78,000 bars. 3 is the balance.")
+lcEmaLen = input.int(50, "Mean to measure 'stretched' from", group = gLC)
+lcStretch = input.float(1.5, "Stretched = this many ATR from the mean", group = gLC, step = 0.1)
+lcVolX  = input.float(2.0, "Volume multiple vs the 50-bar median", group = gLC, step = 0.25)
+
 gS = "2 · THE SWEEP  (measured; leave alone unless testing)"
 pvLen    = input.int(3,    "Swing needs this many bars either side", group = gS, minval = 1,
      tooltip = "E-179, measured on 2024-2026 gold at a 2R target, ATR per trade: on 15m a 3-bar pivot returns +0.208 against +0.126 at 5; on 1h +0.050 against -0.005; and a 12-bar pivot is NEGATIVE on every clock tested. A smaller pivot is better the faster the clock, which is the sensible shape - a pivot should mark a similar amount of TIME, not a similar number of bars. Raise it to 8 on H4 and above. None of this is statistically significant, so it sets a default and nothing more.")
@@ -1060,6 +1069,60 @@ ckScore = (ckSweep ? 1 : 0) + (ckOB ? 1 : 0) + (ckVol ? 1 : 0) + (ckBias ? 1 : 0
 gradeOk = minGrade == "A  — every setup" ? true
      : minGrade == "A+ — 4 of 7 or better" ? ckScore >= 4 : ckScore >= 6
 
+// ===================== THE LEG CATCHER (E-184) =============================
+// Five conditions, each of which BEAT a time-shifted copy of itself on four
+// separate samples. They are all one family - mean reversion at an extreme -
+// and they are deliberately the OPPOSITE of the continuation family (FVG,
+// displacement, BOS) that scored 0.34-0.61 and is what makes an indicator fire
+// in the middle of a move it has already missed.
+//
+// +1 = expect an UP leg, -1 = a DOWN leg, 0 = silent. Nothing here reads a bar
+// that is not closed.
+lcEma  = ta.ema(close, lcEmaLen)
+lcDist = atr > 0 ? (close - lcEma) / atr : 0.0
+lcStr  = lcDist <= -lcStretch ? 1 : lcDist >= lcStretch ? -1 : 0
+
+lcHH = ta.highest(high, 60)
+lcLL = ta.lowest(low, 60)
+lcPos = lcHH > lcLL ? (close - lcLL) / (lcHH - lcLL) : 0.5
+lcPrem = lcPos < 0.35 ? 1 : lcPos > 0.65 ? -1 : 0
+
+lcRng = high - low
+lcUpW = lcRng > 0 ? (high - math.max(open, close)) / lcRng : 0.0
+lcDnW = lcRng > 0 ? (math.min(open, close) - low) / lcRng : 0.0
+lcWick = lcDnW >= 0.6 ? 1 : lcUpW >= 0.6 ? -1 : 0
+
+// EQUAL HIGHS / LOWS TAKEN. Two swings within 0.1 ATR of each other, then
+// swept and closed back inside - the strongest single concept on M1 (1.42).
+var float eqA = na
+var float eqB = na
+var float eqC = na
+var float eqD = na
+if not na(ph)
+    eqB := eqA
+    eqA := ph
+if not na(pl)
+    eqD := eqC
+    eqC := pl
+lcEqH = not na(eqA) and not na(eqB) and math.abs(eqA - eqB) <= 0.10 * atr
+     and high > math.max(eqA, eqB) and close < math.max(eqA, eqB) ? -1 : 0
+lcEqL = not na(eqC) and not na(eqD) and math.abs(eqC - eqD) <= 0.10 * atr
+     and low < math.min(eqC, eqD) and close > math.min(eqC, eqD) ? 1 : 0
+lcEq = lcEqH != 0 ? lcEqH : lcEqL
+
+lcVmed = ta.median(volume, 50)
+lcVol  = (not na(volume) and lcVmed > 0 and volume >= lcVolX * lcVmed) ? 1 : 0
+
+lcUp = (lcStr > 0 ? 1 : 0) + (lcPrem > 0 ? 1 : 0) + (lcWick > 0 ? 1 : 0)
+     + (lcEq > 0 ? 1 : 0) + lcVol
+lcDn = (lcStr < 0 ? 1 : 0) + (lcPrem < 0 ? 1 : 0) + (lcWick < 0 ? 1 : 0)
+     + (lcEq < 0 ? 1 : 0) + lcVol
+lcScore = math.max(lcUp, lcDn)
+lcDir   = lcUp > lcDn ? 1 : lcDn > lcUp ? -1 : 0
+
+sigLegB = useLegCatch and lcDir > 0 and lcUp >= lcNeed and barstate.isconfirmed
+sigLegS = useLegCatch and lcDir < 0 and lcDn >= lcNeed and barstate.isconfirmed
+
 sigSweepB = useSweep and sessOk and fillB and gradeOk
 sigSweepS = useSweep and sessOk and fillS and gradeOk
 sigBrB    = brFillB and gradeOk
@@ -1197,9 +1260,9 @@ if newDay
 // exactly the pivot's confirmation lag - the signal fires inside it by design.
 var int lastBuySigB  = -1
 var int lastSellSigB = -1
-if sigSweepB or sigBrB or sigObB or sigDetB
+if sigSweepB or sigBrB or sigObB or sigDetB or sigLegB
     lastBuySigB := bar_index
-if sigSweepS or sigBrS or sigObS or sigDetS
+if sigSweepS or sigBrS or sigObS or sigDetS or sigLegS
     lastSellSigB := bar_index
 
 // Pine CANNOT modify a global inside a user function, so this is written
@@ -1588,6 +1651,14 @@ plot(showLvl and not na(lvlB) ? lvlB : na, "Buy-side level",
 
 // WITH the bias: the full label. AGAINST it: a small dot, still permanent.
 // Nothing is deleted - Veer: "make sure like signals dont disappear".
+// THE LEG CATCHER'S OWN MARKS. Deliberately a different shape from the sweep
+// so the two can be told apart on the chart and judged separately - E-184 says
+// they are measuring completely different things.
+plotshape(sigLegB, "LEG BUY", shape.arrowup, location.belowbar,
+     color = cBuy, text = "LEG", textcolor = color.white, size = size.small)
+plotshape(sigLegS, "LEG SELL", shape.arrowdown, location.abovebar,
+     color = cSell, text = "LEG", textcolor = color.white, size = size.small)
+
 plotshape(sigSweepB and (not htfDim or withB), "BUY  sweep",
      shape.labelup, location.belowbar,
      color = cBuy,  text = "BUY",  textcolor = color.white, size = size.tiny)
@@ -1845,6 +1916,8 @@ plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)
 plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
 plot(atr, "ATR(14)", display = display.status_line)
 
+alertcondition(sigLegB, "LEG BUY", "Leg catcher BUY - {{ticker}} {{interval}}")
+alertcondition(sigLegS, "LEG SELL", "Leg catcher SELL - {{ticker}} {{interval}}")
 alertcondition(sigSweepB or sigBrB or sigObB or sigDetB, "LS BUY",  "Liquidity Sniper BUY")
 alertcondition(sigSweepS or sigBrS or sigObS or sigDetS, "LS SELL", "Liquidity Sniper SELL")
 alertcondition(closedNow,  "LS CLOSE", "Liquidity Sniper trade closed")
