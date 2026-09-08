@@ -8882,3 +8882,60 @@ adapts, so targets look equally reachable all day *in ATR*, while the cost in
 points does not adapt at all. That is a mechanically sound reason to prefer
 12:00–15:00 UTC on M1 — and it is a P&L question with per-bar spread, not a leg
 study. It is not established here.
+
+---
+
+## E-191 — E-190's OWN RECOMMENDATION DOES NOTHING ON M1, AND THE MEASUREMENT SAYS SO
+
+E-190's headline advice was to build a **time-of-day-normalised ATR**, on the
+grounds that "every experiment in this repo using a fixed ATR multiple was
+silently trading a different instrument at each hour". Before building it I
+measured whether the premise is true on the clock Veer actually trades.
+
+**It is not.** On M1, ATR(14) spans fourteen MINUTES and already tracks the hour
+almost exactly:
+```
+  hr   bar range x   ATR(14) x   ratio      hr   bar range x   ATR(14) x   ratio
+   3         0.61        0.66     1.09      13         1.84        1.76     0.96
+   4         0.55        0.56     1.02      14         1.84        1.85     1.00
+   7         1.16        1.16     1.00      15         1.61        1.69     1.05
+  11         1.00        1.00     1.00      20         0.67        0.76     1.13
+  12         1.42        1.35     0.95      21         0.65        0.80     1.22
+```
+**Ratio 0.95–1.13 for twenty of twenty-three hours.** A normalised-ATR knob on
+M1 would be a knob that does nothing — and E-190's own evidence contains this
+already: native M1 was flat at 1.03 on every session test *because* its ATR
+normalises the clock away.
+
+The premise is true on 1h and above, where ATR(14) spans fourteen hours. It is
+false where it was recommended.
+
+**And the cost half is already handled.** At 04:00 a smaller ATR gives a smaller
+stop, and the fixed spread becomes a larger fraction of it — which is exactly
+what `InpUseCostGate` / `InpMaxCostFrac` already test, on by default. The three
+hours where ATR *does* lag (20, 21, 22 at ratio 1.13–1.22) are ones where the
+stop is too WIDE for the movement, and those sit inside the dead window below.
+
+### So one thing shipped, and it is the one that was not already covered
+`InpDeadHours` — refuse 15:00–21:00 UTC, where leg starts run at 0.50–0.70 of
+control on both recent samples and both halves of each. **OFF by default**:
+E-190 measured leg geometry, not money, and a filter does not earn its place
+until the trades it refuses are shown to be worse.
+
+The Pine gets the hour profile as a **panel readout, never a filter** — the
+measured factor for the current hour, averaged over all three samples, so a
+20-point target at 04:00 visibly asks for something the hour does not usually
+give.
+```
+  hour  0     1     2     3     4     5     6     7     8     9    10    11
+       1.16  1.38  1.04  0.78  0.66  0.95  1.05  1.09  1.04  0.93  0.90  1.01
+  hour 12    13    14    15    16    17    18    19    20    21    22    23
+       1.46  1.88  1.82  1.50  1.17  1.01  0.93  0.92  0.66  0.66  0.65  0.75
+```
+Hour 13 measured 1.95 / 1.84 / 1.84 on the three samples independently; hour 04
+measured 0.67 / 0.76 / 0.55. That agreement, across seven years and three
+clocks, is why this is the one timing result worth carrying.
+
+**LESSON: a recommendation from a study is not a finding. E-190's advice was
+sound for the samples it was computed on and wrong for the clock it was aimed
+at, and the only way to know was to measure the premise separately.**

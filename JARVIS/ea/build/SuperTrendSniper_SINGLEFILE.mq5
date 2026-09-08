@@ -1079,6 +1079,8 @@ input double InpTwoPoleVeto   = 0.02;   // how hard "against" has to be, mode 1
 input bool   InpUseAdxFilter  = false;  // skip entries when the trend is already extended
 input double InpMaxAdx        = 35.0;   // ADX ceiling
 input bool   InpUseSession    = false;  // restrict to one session (see below)
+input bool   InpDeadHours     = false;  // refuse 15:00-21:00 UTC. E-190, and read
+                                        // the note above DeadHour() before using it.
 input int    InpSessFromUTC   = 13;     // NY open
 input int    InpSessToUTC     = 20;     // NY close
 
@@ -2831,6 +2833,43 @@ void TryEntry()
          SkipLog(sdir, StringFormat("%d flips in %d bars - one range being "
                                     "sliced, not %d setups",
                                     fl, InpChopFlipLen, fl));
+         return;
+      }
+   }
+
+   // ---- THE DEAD WINDOW (E-190) --------------------------------------
+   // 530 timing cells were scored across three samples. Almost every ICT clock
+   // concept failed: the judas swing measured 0.91 and 0.96, BELOW its own
+   // control; the killzone set, the first hour after an open and day-of-week
+   // all came out flat. The NY AM "leg cluster" at 1.90 lift turned out to be
+   // an artefact of measuring legs in a 14-HOUR ATR - it collapses to 1.01 on
+   // an hour-normalised yardstick and is 1.03 on native M1.
+   //
+   // Two things survived. The first is that gold genuinely moves 1.65-1.88x
+   // more at 13:00-14:00 UTC than the median hour and 0.66x at 04:00 and
+   // 20:00-22:00 - replicated on 1h, 15m and M1, seven years apart. The second
+   // is that 15:00-21:00 UTC starts legs at 0.50-0.70 of control on both
+   // recent samples and both halves of each.
+   //
+   // AND WHY THE OBVIOUS FIX IS NOT HERE. E-190 recommended a time-of-day
+   // normalised ATR. On M1 that does nothing: ATR(14) spans 14 minutes and
+   // already tracks the hour almost exactly - measured ratio 0.95-1.13 for 20
+   // of 23 hours. The cost gate above already handles the rest, because a
+   // smaller ATR at 04:00 makes a smaller stop and the fixed spread becomes a
+   // bigger fraction of it, which is precisely what InpMaxCostFrac tests.
+   //
+   // So this is the ONE timing rule that is not already covered, and it ships
+   // OFF: E-190 measured leg geometry, not money, and this project does not
+   // turn on a filter until the trades it refuses are shown to be worse.
+   if(InpDeadHours)
+   {
+      MqlDateTime dh;
+      TimeToStruct(TimeGMT(), dh);
+      if(dh.hour >= 15 && dh.hour < 21)
+      {
+         SkipLog(sdir, StringFormat("%02d:00 UTC is inside the 15-21 dead "
+                                    "window - leg starts there run at 0.50-0.70 "
+                                    "of control (E-190)", dh.hour));
          return;
       }
    }

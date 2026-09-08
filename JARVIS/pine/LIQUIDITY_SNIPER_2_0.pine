@@ -174,6 +174,10 @@ useBR    = input.bool(false, "BREAK + RETEST — close through, then holds",   g
 useOB    = input.bool(false, "ORDER BLOCK — the block, and the return to it", group = gX,
      tooltip = "OFF by default. E-151: same story as break+retest. Under achievable fills, detection is -0.0089/trade and the return is -0.0319 on M1. The order block finds real structure - it is genuinely better than a random entry - but the move it catches does not pay the spread on its own. The blocks still DRAW so you can see them behind the sweep.")
 
+gHR = "1a · THE HOUR  (E-190 — the one timing effect that replicated)"
+showHour = input.bool(true, "Show the hour's volatility factor on the panel", group = gHR,
+     tooltip = "530 timing cells were scored across 1h, 15m and M1 data seven years apart. Almost all of ICT's clock failed: the judas swing measured 0.91 and 0.96, BELOW its own control; killzones as a set, the first hour after an open, and day-of-week were all flat. The 'legs cluster in NY AM' result at 1.90 lift was an artefact of measuring legs against a 14-HOUR ATR - it collapses to 1.01 on an hour-normalised yardstick and is 1.03 on native M1.\n\nTwo things survived. Gold moves 1.65-1.88x more at 13:00-14:00 UTC than the median hour and about 0.66x at 04:00 and 20:00-22:00 - replicated on all three samples. And 15:00-21:00 UTC starts legs at 0.50-0.70 of control.\n\nThis is a READOUT, not a filter. It never hides a signal. The number is how much the current hour typically moves against a normal hour, so a 20-point target at 04:00 is asking for something the hour does not usually give.")
+
 gLC = "1b · LEG CATCHER  (E-184 — the only thing measured to mark leg STARTS)"
 useLegCatch = input.bool(true, "Leg catcher signals", group = gLC,
      tooltip = "E-184 scored every ICT/SMC concept on ONE question - does it mark the START of a leg (pivot to pivot, 2+ ATR)? - against a time-shifted copy of itself, on four samples including 157,051 M1 bars.\n\nWORST on every sample: FVG 0.34-0.37, displacement 0.45-0.57, BOS 0.55-0.61. An FVG marks a bar about THREE TIMES LESS likely to begin a leg than a random one. All three fire in the MIDDLE of a leg, once the move is already running - which is why they read as 'caught the pullback'.\n\nFLAT: the liquidity sweep, 0.93-1.04. It does not mark a leg start at all.\n\nBEST: stretched from the mean 1.23-1.34, premium/discount 1.14-1.23, equal highs/lows taken 1.30-1.42, rejection wick 1.07-1.19, volume 1.17. Stacked they compound: 1.23 -> 1.32 -> 1.53 -> 2.18 as more agree, and out of sample the ladder reproduces almost exactly (first half 1.22/1.33/1.48/1.94, second 1.22/1.31/1.50/2.19).\n\nThis marks where moves BEGIN. It is not a claim that it makes money - the stop, the target and the cost are separate questions and are not settled.")
@@ -1123,6 +1127,18 @@ lcDir   = lcUp > lcDn ? 1 : lcDn > lcUp ? -1 : 0
 sigLegB = useLegCatch and lcDir > 0 and lcUp >= lcNeed and barstate.isconfirmed
 sigLegS = useLegCatch and lcDir < 0 and lcDn >= lcNeed and barstate.isconfirmed
 
+// ---- WHAT THIS HOUR USUALLY DOES (E-190) ---------------------------------
+// Median bar range by UTC hour, against the median hour, averaged over three
+// samples: 1h Apr2024-Aug2026, 15m Jun-Aug 2026, and M1 Jan-Jun 2018. The
+// agreement between them is the point - hour 13 measured 1.95 / 1.84 / 1.84,
+// hour 04 measured 0.67 / 0.76 / 0.55.
+hrF = array.from(1.16, 1.38, 1.04, 0.78, 0.66, 0.95, 1.05, 1.09, 1.04, 0.93,
+     0.90, 1.01, 1.46, 1.88, 1.82, 1.50, 1.17, 1.01, 0.93, 0.92, 0.66, 0.66,
+     0.65, 0.75)
+hrNow = array.get(hrF, hour(time, "Etc/UTC"))
+hrTxt = str.tostring(hrNow, "0.00") + "x" + (hrNow >= 1.4 ? "  fast" :
+     hrNow <= 0.80 ? "  slow" : "")
+
 // ---- WHERE IT IS GOING (E-185) -------------------------------------------
 // The higher timeframe is NOT a filter. Five different HTF contexts were
 // layered on this signal and every one landed within 0.02 of the unfiltered
@@ -1772,6 +1788,7 @@ if barstate.islast and showPanel
          + (showSplit ? 1 + nSigOn : 0)         // -- which signal is paying --
          + 2                                   // cost paid / enter by
          + (showCheck ? 5 : 0)                  // -- checklist -- + 4 grade rows
+         + (showHour ? 1 : 0)                   // this hour
          + (mtfOn ? 1 : 0)                      // trend stack
          + (showLegsEff ? 3 : 0)                   // -- legs -- + 2
          + 1                                   // the separator before the tail
@@ -1883,6 +1900,12 @@ if barstate.islast and showPanel
                  str.tostring(nA) + " tr  " +
                  (nA > 0 ? str.tostring(100.0 * wA / nA, "0") + "%W" : "-"),
                  pA >= 0 ? cPos : cNeg)
+        r += 1
+    if showHour
+        f_row(r, "this hour",
+                 hrTxt,
+                 "vs a normal hour (E-190)",
+                 hrNow >= 1.4 ? cPos : hrNow <= 0.80 ? cNeg : cVal)
         r += 1
     if mtfOn
         f_row(r, "trend stack",
