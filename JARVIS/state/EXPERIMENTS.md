@@ -8782,3 +8782,103 @@ audit had passed this file. Neither checker does ARITHMETIC.** A rule can be
 syntactically perfect, correctly ordered, properly guarded against every fill
 bug in this repo, and still require an 85% win rate to break even. Nothing in
 the toolchain looks for that.
+
+---
+
+## E-190 — THE CLOCK PREDICTS VOLATILITY AND NOTHING ELSE. AND E-184'S EDGE IS DIRECTIONAL.
+
+Veer asked for research into "market movement timings". 530 cells scored across
+three samples — 1h Apr 2024–Aug 2026, 15m Jun–Aug 2026, and M1 2018 as a
+secondary check under the E-188 rule. At |z|>2 about 24 cells look good by
+chance, so only what replicates is reported as anything.
+
+### A DATA FACT FIRST, verified against two physical anchors
+The clock of every file was checked against the **CME daily break** (17:00 New
+York) and the **08:30 New York release**, the biggest minute of the day on M1.
+All three files are **true UTC**. But `GOLD_M1_2018.json` has **hour 00:00–01:00
+UTC missing on every single day** — it is not a server-time offset, that hour is
+simply absent from the export. It is the Asian session hour. Anyone reading
+session results off that file needs to know.
+
+### CONFIRMED: the intraday volatility clock
+Points of movement per bar, by hour, against the median hour:
+```
+  13:00 UTC  1.65-1.81x        03:00-04:00 UTC  0.66x
+  14:00 UTC  1.69x             16:00-21:00 UTC  0.57-0.90x
+```
+Three samples, two eras seven years apart, stable across both halves of each.
+The absolute level doubles between halves; **the ratio holds.**
+
+### REJECTED: that NY AM starts more TURNS than its volatility explains
+Legs concentrate in 12:00–15:00 UTC at lift 1.90 on 1h (n=354, z 13.0, halves
+2.09/1.86) — which looks like the strongest timing result in the study. It is an
+artefact of the yardstick:
+
+> A leg must be ≥ 2 × ATR(14). On 1h that ATR spans 14 **hours** — a daily
+> average that cannot know 13:00 moves 1.7x faster than 04:00. On M1 it spans 14
+> **minutes** and tracks the intraday cycle, normalising the clock away.
+
+The proof is three-way and it is conclusive:
+* **native M1 2018 is flat** — NY AM 1.03, London 1.01, Asia 1.00, all 24 hours 0.89–1.09
+* **the same M1 bars resampled** — 1.03 native → 1.46 at 15m → 1.59 at 1h. Same
+  year, same bars, only the yardstick's horizon changed.
+* **an hour-normalised yardstick** collapses NY AM 1.90 → 1.12, and → **1.01**
+  with factors fitted on the first half only. Cross-fitted halves: 1.37 / 0.97.
+
+**"Legs cluster in the killzone" and "gold moves 1.7x more points at 13:00" are
+the same fact, and only the second one is true independent of how you measure.**
+
+### Also REJECTED or DISPROVEN
+| concept | verdict | evidence |
+|---|---|---|
+| killzones as a set (London, Asian, NY PM) | REJECTED | London 0.96/0.84/1.01, Asian 0.91/1.01/1.00 across the three samples |
+| judas swing — Asian-range sweep in 07:00–10:00 | **DISPROVEN** | 0.91 (n=69) and 0.96 (n=129), BELOW its own control on both samples with enough data |
+| first hour after a session open | REJECTED | no premium in 4 sessions × 3 samples; London's own open hour is its weakest, 0.80 |
+| day of week | UNPROVEN | Wed 1.15 on 1h, 0.92 on 15m, M1 flat to 3 decimals |
+| leg SIZE by hour, once started | no effect | 2.97–4.17 ATR across 24 hours, no session pattern |
+
+### SUPPORTED: 15:00–21:00 UTC is dead for leg starts
+0.60 on 1h (z −8.2, halves 0.52/0.65), 0.70 on 15m, NY PM killzone 0.50. This is
+leg geometry, not P&L — a filter still has to earn its place by the refused
+trades being worse.
+
+### AND A REFINEMENT OF E-184 THAT MATTERS MORE THAN ANY OF THE ABOVE
+Holding the hour FIXED and varying only whether the catcher fires — the
+strictest control, and one no time-shift can provide. Verified independently:
+```
+  bucket          bars   any-leg%   fires   any-leg%   lift  |  dir%  base   DIR LIFT
+  ALL hours      13665      37.5%     547      41.3%   1.10    26.9%  20.6%    1.30
+  NY AM 12-15     1791      45.8%      68      47.1%   1.03    36.8%  26.7%    1.37
+  Asian 00-05     2960      33.6%     132      41.7%   1.24    25.8%  18.3%    1.40
+  15-21 dead      3573      25.1%     146      29.5%   1.17    18.5%  13.3%    1.39
+```
+**The catcher barely predicts THAT a leg is coming (1.03–1.24). It predicts
+WHICH WAY (1.30–1.40) — and that directional edge is the same in every session
+bucket.**
+
+E-184 was measured directionally, so its headline numbers stand. But what it
+means is narrower and more precise than how it was written up: **it is not a
+turn detector, it is a direction detector at a turn.** That also explains
+E-186 cleanly — knowing the direction of a move that may or may not come is
+worth much less than knowing a move is coming, which is exactly why the entry
+classifies well and the trade does not pay.
+
+**It also kills any "trade the catcher in the killzone" rule: within a fixed
+hour the catcher adds nothing to leg probability, and the hour does all the work
+in the naive numbers.**
+
+### WHAT IS WORTH BUILDING — one thing, and it is a correction, not a signal
+**A time-of-day-normalised ATR.** This is the only CONFIRMED result and its
+implication is retrospective and uncomfortable: a 1.5-ATR stop and a 3-ATR
+target mean *different things* at 04:00 and 13:00, so **every experiment in this
+repo that used a fixed ATR multiple was silently trading a different instrument
+at each hour.** Factors run 0.67 at 04:00 to 1.68 at 13:00.
+
+### The open question this study could not answer, stated so it is not lost
+**Cost.** The spread is a fixed number of points. If a bar's range is 1.7x the
+median at 13:00 and 0.66x at 04:00, the same ATR-sized trade pays roughly **2.5x
+more spread per point of move in the Asian session**. On M1 the ATR yardstick
+adapts, so targets look equally reachable all day *in ATR*, while the cost in
+points does not adapt at all. That is a mechanically sound reason to prefer
+12:00–15:00 UTC on M1 — and it is a P&L question with per-bar spread, not a leg
+study. It is not established here.

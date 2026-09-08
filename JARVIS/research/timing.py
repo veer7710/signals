@@ -657,7 +657,80 @@ def main3():
     print(f"\n  CELLS SCORED IN TOTAL (parts 1+2+3): {CELLS}")
 
 
+
+
+# ==========================================================================
+#  PART 4 — does the clock add anything TO the catcher, or the catcher to
+#  the clock? Neither shift-control can answer this, because each one is
+#  scored against a twin of ITSELF. Here time of day is held FIXED and the
+#  only thing that varies is whether the catcher fired - so the control is
+#  the other bars of the same hour, which is the strictest control there is
+#  for a clock claim.
+#
+#  Read it as: inside this bucket, of every bar, how often did a leg start
+#  within 3 bars? And of the bars where the catcher fired, how often then?
+# ==========================================================================
+def within(label, s, V=None, need=2, slack=3):
+    hh, _ = clock(s)
+    A = watr(s, 14)
+    lg = legs(s, A, pv=3, minAtr=2.0)
+    n = len(s)
+    sig = catcher(s, A, V, need=need)
+    st = {}
+    for (b0, b1, d, sz) in lg:
+        st.setdefault(b0, []).append(d)
+
+    def rate(idx, want_dir):
+        hit = 0
+        for i in idx:
+            for k in range(i, min(i + slack + 1, n)):
+                ds = st.get(k)
+                if ds and (not want_dir or sig[i] in ds):
+                    hit += 1
+                    break
+        return hit / max(len(idx), 1), hit
+
+    buckets = [("ALL hours", list(range(n)))]
+    for k, v in KZ.items():
+        buckets.append((k, [i for i in range(n) if hh[i] in v]))
+    allkz = set()
+    for v in KZ.values():
+        allkz |= set(v)
+    buckets.append(("outside killzones",
+                    [i for i in range(n) if hh[i] not in allkz]))
+
+    print(f"\n  ---- {label}: catcher value INSIDE each bucket "
+          f"({len(lg)} legs, slack={slack}) ----")
+    print(f"  {'bucket':<22}{'bars':>7}{'anyleg%':>9}{'fires':>7}"
+          f"{'anyleg%':>9}{'dirmatch%':>11}{'legs':>6}{'catcher lift':>14}")
+    print("  " + "-" * 78)
+    for name, idx in buckets:
+        base, _ = rate(idx, False)
+        fi = [i for i in idx if sig[i] != 0]
+        if len(fi) < 30:
+            print(f"  {name:<22}{len(idx):>7}{100*base:>8.1f}%{len(fi):>7}"
+                  f"   too few")
+            continue
+        ca, _ = rate(fi, False)
+        cd, hd = rate(fi, True)
+        lift = ca / base if base else 0.0
+        flag = "" if hd >= 40 else "  (<40 legs)"
+        print(f"  {name:<22}{len(idx):>7}{100*base:>8.1f}%{len(fi):>7}"
+              f"{100*ca:>8.1f}%{100*cd:>10.1f}%{hd:>6}{lift:>14.2f}{flag}")
+
+
+def main4():
+    print("\n" + "=" * 84)
+    print("  PART 4 — clock vs catcher, each holding the other fixed")
+    print("=" * 84)
+    within("1h 2024-2026", load_plain("GOLD_1h.json"))
+    within("15m 2026", load_plain("GOLD_15m.json"))
+    m1, V = load_m1_2018()
+    within("M1 2018 (secondary)", m1, V=V)
+
+
 if __name__ == "__main__":
     main()
     main2()
     main3()
+    main4()
