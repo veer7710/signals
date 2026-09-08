@@ -8556,3 +8556,85 @@ here by a wide margin, measured out of sample, and it still does not pay.
    test that has not been run.
 3. **His own fills.** The execution journal measures the two numbers this all
    assumes. It has never been run.
+
+---
+
+## E-187 — TAKE THE COUNTER-BIAS TRADE. IT IS THE BETTER ONE, AND FOR THE OPPOSITE REASON.
+
+Veer: *"say h1 bias is bearish but m15 shows like an insane wick at a lowufity
+level and a clear buy opportunity should i not take that then just cuz its not
+in the bias don't mean we cant and m1 often just has big legs but continues down
+towards bias yk most the time"*.
+
+Two claims in there. One is right, one is wrong, and the correction is what
+produced the first result in this project with real cost headroom.
+
+### CLAIM 1: "take it anyway" — RIGHT
+### CLAIM 2: "but it's shorter, it continues toward bias" — WRONG
+```
+  2018 M1, leg size WITH vs AGAINST the H1 bias
+                        n     mean ATR   median   75th pct
+  with the bias      8838       3.84      3.16      4.34
+  against it         8936       3.87      3.19      4.39
+  difference -0.03 ATR, t -0.93 -> no reliable difference
+```
+Against the M15 bias the difference is +0.10 ATR at t +2.86 — detectable, and
+2.6%, which is not a thing you can trade. **Counter-bias legs are the same size
+as with-bias legs.**
+
+### And it also answers "we catch the smaller ones too"
+```
+  leg floor      legs    fires   catches  control   LIFT
+  >= 1.0 ATR    24611    12092    43.4%    30.9%   1.40
+  >= 2.0 ATR    18123    12092    35.0%    22.9%   1.53
+  >= 3.0 ATR    10125    12092    20.4%    12.6%   1.61
+```
+It works on small legs too, and gets *sharper* on bigger ones.
+
+### THE RESULT: the target was too SMALL all along, not too big
+E-186 killed TP1 and stopped at 3R. Pushing further, split by bias:
+```
+  2018 M1, stop 1.0 ATR                n     win%   ATR/trd      t
+  with     TP 6R                    2154    16.1%   +0.1058  +1.91
+  against  TP 8R                    2182    13.3%   +0.1706  +2.62
+  against  RIDE to the first pivot  2815    36.4%   +0.1085  +3.10
+```
+
+### Out of sample — ~40 cells were examined, so this is the only test that counts
+```
+                                   FIRST half          SECOND half (unseen)
+  against  TP 8R              +0.2889  t +2.92     +0.0230  t +0.27   <- a FIT
+  against  ride to the pivot  +0.0819  t +1.67     +0.1364  t +2.67   <- HOLDS
+  with     ride to the pivot  +0.0357  t +0.77     +0.0365  t +0.75
+```
+**TP 8R was a fit and is discarded. Riding to the first opposing pivot, against
+the bias, is positive in both halves and STRONGER in the half the search never
+saw.** With-bias, same exit, is positive in both halves at half the size.
+
+### Cost headroom — the test that has killed everything else here
+```
+  cost 0.00 (0x)   +0.1285  t +3.67        cost 0.06 (3x)  +0.0685  t +1.96
+  cost 0.02 (1x)   +0.1085  t +3.10        cost 0.12 (6x)  +0.0085  t +0.24
+  cost 0.04 (2x)   +0.0885  t +2.53        break-even at 0.1285 ATR = 6.4x
+```
+**It survives 6.4x the assumed cost.** E-149's M5 book died at 0.6x. Nothing
+else in this repo has had a margin like this.
+
+### WHY, and the reason is coherent
+The leg catcher is a **mean-reversion** entry (E-184). Taken *against* the
+prevailing bias it is a fade of an extreme — catching the turn, which is what it
+was built to find. Taken *with* the bias it is buying a dip in a trend, which is
+a different and much more crowded trade. And the exit matters more than the
+target: **there is no right R multiple, because the leg's length is not knowable
+in advance — riding to the first opposing pivot lets each trade be as long as it
+turns out to be.** That is "leg to leg", written as a rule.
+
+**VERDICT: PROMISING, and deliberately not stronger than that.**
+* both halves positive, unseen half stronger, n = 1,285 and 1,490
+* 6.4x cost headroom
+* **but: Jan–Jun 2018 M1, the sample that already inverted a verdict once
+  (E-176), and roughly forty cells were examined to find it.** One survivor of
+  forty, on one sample, is a hypothesis with evidence — not a system.
+
+**The single thing that would settle it is recent M1 data.** It has been the
+blocking item for weeks and it is now blocking the only promising result here.
