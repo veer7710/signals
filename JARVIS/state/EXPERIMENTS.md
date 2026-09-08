@@ -8485,3 +8485,74 @@ CAVEAT, stated plainly: this measures LEG geometry, not trade P&L. A leg
 reaching a level does not prove a position held through the drawdown to get
 there. It settles target SELECTION, not whether the trade survives — and that
 is the next question, not this one.
+
+---
+
+## E-186 — TP1 DOES NOT PAY, EVEN FROM THE BEST ENTRY THIS PROJECT HAS
+
+Veer, showing two M1 charts: *"see how price is reacting in the clean moves and
+even when the moves don't last that that long we are still profitable yk easily
+hit tp 1"*.
+
+He is right about the hit rate and the conclusion does not follow. Both halves
+of that are worth stating precisely.
+
+E-184 gave the entry (leg starts at 1.5–2.2x the base rate). E-185 gave the
+destination (the next H1 level, reached 54.5% of the time). Neither measured
+money and I said so both times. This does.
+
+### Fixed targets, on 2018 M1, 8,000+ signals
+```
+  stop / target                    n     win%   ATR/trd      t
+  stop 1.0 ATR, TP 0.5R         5626    63.2%   -0.0991   -6.85
+  stop 1.0 ATR, TP 1.0R         5143    49.9%   -0.0226   -1.08
+  stop 1.0 ATR, TP 2.0R         5279    34.5%   +0.0143   +0.73
+  stop 1.5 ATR, TP 0.5R         5626    63.2%   -0.0991   -6.85
+  stop 2.0 ATR, TP 2.0R         3571    33.7%   -0.0032   -0.07
+```
+**TP1 at 0.5R is hit 63.2% of the time — exactly what he sees.** It needs 67%
+plus cost to break even. The hit rate is real; it is about four points short.
+
+The best cell in the entire grid is +0.0143 at t = +0.73, which is zero.
+
+### A LEVEL target instead of a ruler — E-185's finding, cashed in
+```
+  stop 1.0 ATR, any room        4562    33.9%   -0.0309   -1.00
+  stop 1.0 ATR, at least 1R     3584    25.3%   +0.0010   +0.03
+  stop 1.0 ATR, 2R to 6R        1805    24.9%   +0.0278   +0.63
+  stop 1.5 ATR, any room        4178    41.8%   -0.0935   -2.61
+```
+Also zero. The best is +0.0278 at t = +0.63 on n = 1,805.
+
+### THE ARITHMETIC, WHICH IS THE WHOLE ANSWER
+At `need = 3` the catcher lands on a leg start **35%** of the time against a
+**23%** base. That is a real classification edge and it is not enough:
+
+```
+   35% win x 0.5R  -  65% lose x 1.0R  =  -0.475R per trade
+   35% win x 2.0R  -  65% lose x 1.0R  =  +0.05R  before cost
+```
+**You need a payoff better than 1.86 : 1 just to break even, and at the targets
+where the payoff is that good, the win rate has already fallen to 25–33%.**
+
+And the deeper reason, which is the thing I had not separated:
+
+> **"A leg started here" and "my stop was not hit first" are different events.**
+> E-184 and E-185 measured GEOMETRY — where moves begin and how far they go.
+> E-186 measures whether a position SURVIVES to collect it. A leg can start
+> within three bars of the signal and still dip through a 1 ATR stop on the way.
+
+**VERDICT: the leg catcher is CONFIRMED as a leg-start classifier and DISPROVEN
+as a trading system with a stop and a target.** Every previous negative in this
+project could be blamed on a bad entry. This one cannot: it is the best entry
+here by a wide margin, measured out of sample, and it still does not pay.
+
+### What would change the answer, honestly
+1. **Recent M1 data.** Everything above is Jan–Jun 2018, and E-176 already
+   showed once that this sample can invert a verdict. Veer's live results are on
+   2026 gold. **This is the single blocking item and it has been for weeks.**
+2. **Where the stop goes.** Every cell here puts it at a fixed ATR. The signal
+   marks a ZONE, not a bar, and a stop beyond the zone's extreme is a different
+   test that has not been run.
+3. **His own fills.** The execution journal measures the two numbers this all
+   assumes. It has never been run.
