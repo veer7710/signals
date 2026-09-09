@@ -178,6 +178,19 @@ gHR = "1a · THE HOUR  (E-190 — the one timing effect that replicated)"
 showHour = input.bool(true, "Show the hour's volatility factor on the panel", group = gHR,
      tooltip = "530 timing cells were scored across 1h, 15m and M1 data seven years apart. Almost all of ICT's clock failed: the judas swing measured 0.91 and 0.96, BELOW its own control; killzones as a set, the first hour after an open, and day-of-week were all flat. The 'legs cluster in NY AM' result at 1.90 lift was an artefact of measuring legs against a 14-HOUR ATR - it collapses to 1.01 on an hour-normalised yardstick and is 1.03 on native M1.\n\nTwo things survived. Gold moves 1.65-1.88x more at 13:00-14:00 UTC than the median hour and about 0.66x at 04:00 and 20:00-22:00 - replicated on all three samples. And 15:00-21:00 UTC starts legs at 0.50-0.70 of control.\n\nThis is a READOUT, not a filter. It never hides a signal. The number is how much the current hour typically moves against a normal hour, so a 20-point target at 04:00 is asking for something the hour does not usually give.")
 
+gSMC = "1 · THE SMC ENTRY  (sweep -> CHoCH -> order block)"
+useSmcEntry = input.bool(true, "SMC entries", group = gSMC,
+     tooltip = "The model Veer trades, in four steps.\n\n1. LIQUIDITY IS TAKEN - price runs a pool of equal highs or lows and CLOSES BACK INSIDE it. A close beyond is a break; this wants the FAILED break, which is the stop hunt.\n\n2. CHARACTER CHANGES - structure breaks the other way within N bars. Measured on the CLOSE of a confirmed bar, never a wick, because a wick through a level IS the sweep.\n\n3. ENTRY at the order block the CHoCH leg left behind, or at market on the CHoCH if you would rather not miss it.\n\n4. STOP beyond the sweep extreme, which keeps extending while the setup is alive. TARGET the opposite pool. Both structural - no ATR multiples.")
+smcEqTol  = input.float(0.10, "Equal highs/lows within (ATR)", group = gSMC, step = 0.05,
+     tooltip = "Two swings this close together are ONE pool of stops sitting at one price. That pool is what gets run. E-184 measured equal-highs/lows-taken at 1.30-1.42 lift as a leg-start marker - the strongest single SMC concept of the fourteen tested.")
+smcSweep  = input.float(0.05, "Sweep must clear the pool by (ATR)", group = gSMC, step = 0.05)
+smcWait   = input.int(20, "CHoCH must arrive within N bars", group = gSMC, minval = 1)
+smcMode   = input.string("Limit at the order block", "Entry", group = gSMC,
+     options = ["Limit at the order block", "Market on the CHoCH"],
+     tooltip = "LIMIT is the better price and misses the setups that never come back. MARKET never misses and pays more. E-177 measured this trade-off on the SuperTrend entry: every pullback distance was worse than paying the market, and the miss rate ran 14-48%.")
+smcStopBuf = input.float(0.20, "Stop beyond the sweep extreme (ATR)", group = gSMC, step = 0.05)
+smcLife   = input.int(30, "Cancel an untouched order block after N bars", group = gSMC, minval = 1)
+
 gLC = "1b · LEG CATCHER  (E-184 — the only thing measured to mark leg STARTS)"
 useLegCatch = input.bool(true, "Leg catcher signals", group = gLC,
      tooltip = "E-184 scored every ICT/SMC concept on ONE question - does it mark the START of a leg (pivot to pivot, 2+ ATR)? - against a time-shifted copy of itself, on four samples including 157,051 M1 bars.\n\nWORST on every sample: FVG 0.34-0.37, displacement 0.45-0.57, BOS 0.55-0.61. An FVG marks a bar about THREE TIMES LESS likely to begin a leg than a random one. All three fire in the MIDDLE of a leg, once the move is already running - which is why they read as 'caught the pullback'.\n\nFLAT: the liquidity sweep, 0.93-1.04. It does not mark a leg start at all.\n\nBEST: stretched from the mean 1.23-1.34, premium/discount 1.14-1.23, equal highs/lows taken 1.30-1.42, rejection wick 1.07-1.19, volume 1.17. Stacked they compound: 1.23 -> 1.32 -> 1.53 -> 2.18 as more agree, and out of sample the ladder reproduces almost exactly (first half 1.22/1.33/1.48/1.94, second 1.22/1.31/1.50/2.19).\n\nThis marks where moves BEGIN. It is not a claim that it makes money - the stop, the target and the cost are separate questions and are not settled.")
@@ -723,18 +736,33 @@ if not na(pl)
     smcL  := pl
     smcLb := bar_index - pvLen
 
-bosUp = showSmcEff and not na(smcH) and close > smcH and barstate.isconfirmed
-bosDn = showSmcEff and not na(smcL) and close < smcL and barstate.isconfirmed
+// STRUCTURE DETECTION WAS GATED ON A DRAWING FLAG.
+// `bosUp = showSmcEff and ...` meant that with the CLEAN CHART switch on -
+// which is the default - showSmcEff is false, so BOS and CHoCH never fired AT
+// ALL. Not "were not drawn": were never computed. Anything downstream that
+// waits on a change of character waited forever.
+//
+// Detection is a FACT about price. Drawing is a preference. They are separated
+// now, and the label is what the toggle controls.
+bosUp = not na(smcH) and close > smcH and barstate.isconfirmed
+bosDn = not na(smcL) and close < smcL and barstate.isconfirmed
+// CHoCH is the FIRST break against the run - the one this model trades. BOS is
+// a break that continues it. Captured BEFORE smcTrend is updated below, or the
+// test reads the answer it is about to write.
+chochUp = bosUp and smcTrend < 0
+chochDn = bosDn and smcTrend > 0
 if bosUp
-    label.new(bar_index, smcH, smcTrend < 0 ? "CHoCH" : "BOS",
-         style = label.style_label_down, color = color.new(chart.bg_color, 100),
-         textcolor = color.new(cBuy, 15), size = size.tiny)
+    if showSmcEff
+        label.new(bar_index, smcH, smcTrend < 0 ? "CHoCH" : "BOS",
+             style = label.style_label_down, color = color.new(chart.bg_color, 100),
+             textcolor = color.new(cBuy, 15), size = size.tiny)
     smcTrend := 1
     smcH := na
 if bosDn
-    label.new(bar_index, smcL, smcTrend > 0 ? "CHoCH" : "BOS",
-         style = label.style_label_up, color = color.new(chart.bg_color, 100),
-         textcolor = color.new(cSell, 15), size = size.tiny)
+    if showSmcEff
+        label.new(bar_index, smcL, smcTrend > 0 ? "CHoCH" : "BOS",
+             style = label.style_label_up, color = color.new(chart.bg_color, 100),
+             textcolor = color.new(cSell, 15), size = size.tiny)
     smcTrend := -1
     smcL := na
 
@@ -1176,6 +1204,109 @@ if (sigLegB or sigLegS) and not na(lcTgt) and showLive
          + "pt   reached 55% on M1",
          style = label.style_label_left, size = size.tiny,
          color = color.new(chart.bg_color, 100), textcolor = color.new(tcol, 10))
+
+// ==================== THE SMC ENTRY (sweep -> CHoCH -> OB) =================
+// This is the model Veer actually trades and it is now this file's primary
+// signal. Every piece it needs already existed here and was never chained:
+// pivots, structure, order blocks. What was missing was the SEQUENCE.
+//
+// The one that matters: a SWEEP is not a break. Price must run the pool and
+// CLOSE BACK INSIDE it. The existing sweep code above tests only that price
+// reached the level - which fires on genuine breakouts too, and is why "so
+// many random signals".
+
+// ---- 1. THE POOL. Two swings at one price is where the stops are.
+var float smcPrevH = na
+var float smcPrevL = na
+var float poolHi   = na
+var float poolLo   = na
+if not na(ph)
+    smcPrevH := poolHi
+    poolHi   := ph
+if not na(pl)
+    smcPrevL := poolLo
+    poolLo   := pl
+smcEqH = not na(poolHi) and not na(smcPrevH)
+     and math.abs(poolHi - smcPrevH) <= smcEqTol * atr
+smcEqL = not na(poolLo) and not na(smcPrevL)
+     and math.abs(poolLo - smcPrevL) <= smcEqTol * atr
+poolHiPx = smcEqH ? math.max(poolHi, smcPrevH) : poolHi
+poolLoPx = smcEqL ? math.min(poolLo, smcPrevL) : poolLo
+
+// ---- 2. THE SWEEP. Run it, then close back inside. A close BEYOND is a
+//         break and is deliberately not a signal here.
+var int   swpHiB  = na
+var float swpHiEx = na
+var int   swpLoB  = na
+var float swpLoEx = na
+smcSwpHi = not na(poolHiPx) and high > poolHiPx + smcSweep * atr
+     and close < poolHiPx and barstate.isconfirmed
+smcSwpLo = not na(poolLoPx) and low < poolLoPx - smcSweep * atr
+     and close > poolLoPx and barstate.isconfirmed
+if smcSwpHi
+    swpHiB  := bar_index
+    swpHiEx := high
+if smcSwpLo
+    swpLoB  := bar_index
+    swpLoEx := low
+// the extreme keeps extending while the setup lives, so the stop goes with it
+if not na(swpHiB) and bar_index > swpHiB
+    swpHiEx := math.max(swpHiEx, high)
+if not na(swpLoB) and bar_index > swpLoB
+    swpLoEx := math.min(swpLoEx, low)
+// a sweep nobody answered is not a setup
+if not na(swpHiB) and bar_index - swpHiB > smcWait
+    swpHiB := na
+if not na(swpLoB) and bar_index - swpLoB > smcWait
+    swpLoB := na
+
+// ---- 3. CHARACTER CHANGES. chochUp/chochDn come from the structure block
+//         above, which no longer depends on a drawing toggle.
+smcBuyRaw  = useSmcEntry and not na(swpLoB) and chochUp
+     and bar_index - swpLoB <= smcWait
+smcSellRaw = useSmcEntry and not na(swpHiB) and chochDn
+     and bar_index - swpHiB <= smcWait
+
+// ---- 4. ARM at the order block, stop past the sweep, target the far pool.
+var float smcBuyPx = na
+var float smcBuySl = na
+var float smcBuyTp = na
+var int   smcBuyB  = na
+var float smcSellPx = na
+var float smcSellSl = na
+var float smcSellTp = na
+var int   smcSellB  = na
+
+if smcBuyRaw
+    zb = not na(obBullTop) ? obBullTop : close
+    smcBuyPx := smcMode == "Limit at the order block" ? zb : close
+    smcBuySl := swpLoEx - smcStopBuf * atr
+    smcBuyTp := not na(poolHiPx) ? poolHiPx
+         : smcBuyPx + 2.0 * math.abs(smcBuyPx - smcBuySl)
+    smcBuyB  := bar_index
+if smcSellRaw
+    zs = not na(obBearBot) ? obBearBot : close
+    smcSellPx := smcMode == "Limit at the order block" ? zs : close
+    smcSellSl := swpHiEx + smcStopBuf * atr
+    smcSellTp := not na(poolLoPx) ? poolLoPx
+         : smcSellPx - 2.0 * math.abs(smcSellSl - smcSellPx)
+    smcSellB  := bar_index
+if not na(smcBuyB) and bar_index - smcBuyB > smcLife
+    smcBuyB := na
+if not na(smcSellB) and bar_index - smcSellB > smcLife
+    smcSellB := na
+
+// ---- THE FILL
+sigSmcB = smcMode == "Market on the CHoCH" ? smcBuyRaw
+     : (not na(smcBuyB) and bar_index > smcBuyB and low <= smcBuyPx
+        and barstate.isconfirmed)
+sigSmcS = smcMode == "Market on the CHoCH" ? smcSellRaw
+     : (not na(smcSellB) and bar_index > smcSellB and high >= smcSellPx
+        and barstate.isconfirmed)
+if sigSmcB
+    smcBuyB := na
+if sigSmcS
+    smcSellB := na
 
 sigSweepB = useSweep and sessOk and fillB and gradeOk
 sigSweepS = useSweep and sessOk and fillS and gradeOk
@@ -1698,6 +1829,11 @@ if posDir != 0 and showLive and not na(pEnt)
 // Veer: "we need clear levels like smc idniactor amrekd out". The level is a
 // fact about price; whether a simulated trade is open is not a reason to take
 // it off his chart, and `posDir == 0` here used to do exactly that.
+plot(showLvl and not na(poolHiPx) ? poolHiPx : na, "Buyside liquidity",
+     color = color.new(cSell, 40), style = plot.style_linebr, linewidth = 2)
+plot(showLvl and not na(poolLoPx) ? poolLoPx : na, "Sellside liquidity",
+     color = color.new(cBuy, 40), style = plot.style_linebr, linewidth = 2)
+
 plot(showLvl and not na(lvlS) ? lvlS : na, "Sell-side level",
      color = color.new(cSell, 45), style = plot.style_linebr, linewidth = 1)
 plot(showLvl and not na(lvlB) ? lvlB : na, "Buy-side level",
@@ -1705,6 +1841,18 @@ plot(showLvl and not na(lvlB) ? lvlB : na, "Buy-side level",
 
 // WITH the bias: the full label. AGAINST it: a small dot, still permanent.
 // Nothing is deleted - Veer: "make sure like signals dont disappear".
+// THE SMC ENTRY — this file's primary signal. Big labels, because this is the
+// one Veer trades; the sweep and leg marks below are smaller on purpose.
+plotshape(sigSmcB, "SMC BUY", shape.labelup, location.belowbar, color = cBuy,
+     text = "BUY", textcolor = color.white, size = size.normal)
+plotshape(sigSmcS, "SMC SELL", shape.labeldown, location.abovebar, color = cSell,
+     text = "SELL", textcolor = color.white, size = size.normal)
+// where the liquidity actually got taken - the bar the stops came out
+plotshape(smcSwpLo, "sellside taken", shape.xcross, location.belowbar,
+     color = color.new(cBuy, 45), size = size.tiny)
+plotshape(smcSwpHi, "buyside taken", shape.xcross, location.abovebar,
+     color = color.new(cSell, 45), size = size.tiny)
+
 // THE LEG CATCHER'S OWN MARKS. Deliberately a different shape from the sweep
 // so the two can be told apart on the chart and judged separately - E-184 says
 // they are measuring completely different things.
@@ -1977,6 +2125,45 @@ plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)
 plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
 plot(atr, "ATR(14)", display = display.status_line)
 
+// THE LIVE SETUP. One set of objects, moved, never a fresh set per bar.
+var line  smcLE = na
+var line  smcLS = na
+var line  smcLT = na
+var label smcLL = na
+if barstate.islast and showLive
+    if not na(smcLE)
+        line.delete(smcLE)
+    if not na(smcLS)
+        line.delete(smcLS)
+    if not na(smcLT)
+        line.delete(smcLT)
+    if not na(smcLL)
+        label.delete(smcLL)
+    isB = not na(smcBuyB)
+    isS = not na(smcSellB)
+    if isB or isS
+        e  = isB ? smcBuyPx : smcSellPx
+        sl = isB ? smcBuySl : smcSellSl
+        tp = isB ? smcBuyTp : smcSellTp
+        cc = isB ? cBuy : cSell
+        smcLE := line.new(bar_index, e, bar_index + 25, e, color = cc, width = 2)
+        smcLS := line.new(bar_index, sl, bar_index + 25, sl,
+             color = color.new(cSell, 25), style = line.style_dashed)
+        smcLT := line.new(bar_index, tp, bar_index + 25, tp,
+             color = color.new(cBuy, 25), style = line.style_dashed)
+        rr = math.abs(e - sl) > 0 ? math.abs(tp - e) / math.abs(e - sl) : 0.0
+        smcLL := label.new(bar_index + 25, e,
+             (isB ? "BUY " : "SELL ") + str.tostring(e, format.mintick)
+             + "\nSL " + str.tostring(sl, format.mintick)
+             + "\nTP " + str.tostring(tp, format.mintick)
+             + "\n" + str.tostring(rr, "0.0") + "R",
+             style = label.style_label_left, size = size.small,
+             color = color.new(chart.bg_color, 90), textcolor = cc)
+
+alertcondition(sigSmcB, "SMC BUY",  "SMC BUY {{ticker}} {{interval}}")
+alertcondition(sigSmcS, "SMC SELL", "SMC SELL {{ticker}} {{interval}}")
+alertcondition(smcSwpLo, "Sellside taken", "Sellside liquidity taken")
+alertcondition(smcSwpHi, "Buyside taken",  "Buyside liquidity taken")
 alertcondition(sigLegB, "LEG BUY", "Leg catcher BUY - {{ticker}} {{interval}}")
 alertcondition(sigLegS, "LEG SELL", "Leg catcher SELL - {{ticker}} {{interval}}")
 alertcondition(sigSweepB or sigBrB or sigObB or sigDetB, "LS BUY",  "Liquidity Sniper BUY")

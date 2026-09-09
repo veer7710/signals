@@ -71,6 +71,19 @@ OB_PINE, OB_EA = "useOB", ("InpUseObDetect", "InpUseObReturn")
 # Deliberately unpaired, with the reason. Anything else unpaired is a finding.
 PINE_ONLY = {
     "cleanChart": "the master drawing switch - the EA draws nothing",
+    # THE SMC ENTRY IS CHART-ONLY UNTIL THE EA IMPLEMENTS IT. Listing these
+    # here is a promise to pair them the moment SweepSniper grows the same
+    # sweep-then-CHoCH-then-order-block chain - the sweep it has now fires on a
+    # touch of the level, not on a close back inside it, so the two files are
+    # genuinely running different entries and pairing them would assert a
+    # parity that does not exist.
+    "useSmcEntry": "SMC entry chain - Pine only until the EA implements it",
+    "smcEqTol": "SMC entry, Pine only",
+    "smcSweep": "SMC entry, Pine only",
+    "smcWait": "SMC entry, Pine only",
+    "smcMode": "SMC entry, Pine only",
+    "smcStopBuf": "SMC entry, Pine only",
+    "smcLife": "SMC entry, Pine only",
     "showHour": "E-190 hour readout - panel only, never filters",
     "useLegCatch": "E-184 leg catcher - chart-only until it is measured on money",
     "lcNeed": "leg catcher threshold, chart only",
