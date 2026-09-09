@@ -38,13 +38,35 @@ and both are labelled, because Veer trades M1 and 2018 is the only M1 there is.
 from __future__ import annotations
 import json, os, statistics, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from engine import atr as watr, Series, trail_level
+from engine import atr as watr, Series, trail_level, stop_fill
 from regime import load_plain, resample
 from bias_run import bias_series
 from shift import shift_series
 from partials import stats as pstats
 
-COST = 0.02
+# E-194-RT killed the 0.02 flat charge, and the first attempt to replace it
+# was wrong in the other direction. Charging the 2018 file its OWN recorded
+# spread/ATR gives 0.93 ATR per side - because 2018 gold traded at 1300 with an
+# M1 ATR of 0.25 points, so a 0.23 spread really was most of a bar. Veer does
+# not trade 2018. E-173 is explicit: use the spread you pay TODAY.
+#
+# Today: M1 spread is COST_M1_SPREAD_ATR = 0.11 of the M1 ATR (E-132). The
+# spread is a fixed PRICE and ATR grows as roughly sqrt(time), so the cost in
+# ATR falls as 1/sqrt(minutes-per-bar). Checked against the 2018 file's own
+# measured ATR ratios - M5/M1 = 2.49 against sqrt(5) = 2.24, M15/M1 = 4.65
+# against sqrt(15) = 3.87 - the sqrt model OVERCHARGES the slow clocks, which
+# is the safe direction to be wrong in.
+SPREAD_ATR_M1 = 0.11       # E-132, today's M1 spread as a fraction of M1 ATR
+SLIP_ATR_M1 = 0.048        # 0.10pt round trip against an M1 ATR of ~2.1pt
+COST = 0.02                # the OLD flat charge, kept only to reproduce E-194
+
+
+def cost_atr(minutes):
+    """Round-trip cost on a clock of `minutes` per bar, expressed in ATR.
+
+    M1 0.158, M5 0.071, M15 0.041, M30 0.029, H1 0.020, H4 0.010.
+    """
+    return (SPREAD_ATR_M1 + SLIP_ATR_M1) / (max(minutes, 1) ** 0.5)
 
 
 # ------------------------------------------------------------------ signal --
@@ -155,7 +177,8 @@ def book(s, A, sig, bias, side, stopBuf, tps, unit="R", beAfterTp1=True,
         for k in range(i + 1, min(i + 1 + hold, len(s))):
             hitSl = (s.l[k] <= sl) if t > 0 else (s.h[k] >= sl)
             if hitSl:
-                got += left * t * (sl - entry) / a
+                fx = stop_fill(sl, s.o[k], t)     # E-194-RT: gaps fill worse
+                got += left * t * (fx - entry) / a
                 left = 0.0
                 kk = k
                 break
@@ -232,7 +255,10 @@ def trail_book(s, A, sig, bias, side, stopBuf, give, arm, hold=240, cool=1,
         peak, got, left, kk, done, banked = entry, 0.0, 1.0, None, False, False
         for k in range(i + 1, min(i + 1 + hold, len(s))):
             if (s.l[k] <= sl) if t > 0 else (s.h[k] >= sl):
-                got += left * t * (sl - entry) / a
+                # E-194-RT: a bar that GAPS through the stop fills at the open,
+                # not at the stop. Booking the level flatters every loser.
+                fx = stop_fill(sl, s.o[k], t)
+                got += left * t * (fx - entry) / a
                 kk, done = k, True
                 break
             if k == i + 1:
@@ -478,10 +504,15 @@ def main():
     q4_long_short(P)
     print()
     print("=" * 92)
-    print("  VERDICT: PROMISING, and only in the trailed form.")
-    print("  Fixed targets are REJECTED on every geometry tested.")
-    print("  The recent-data edge is the gold bull run. The one flat sample")
-    print("  pays on both sides but no single row reaches significance.")
+    print("  VERDICT: REJECTED. See E-194-RT.")
+    print("  Fixed targets lose on every geometry tested - that part stands.")
+    print("  The TRAILED form was reported as PROMISING and retracted the")
+    print("  same day: its t was the best cell of the 5x5 grid printed in Q3,")
+    print("  a skill-free signal searching that grid does as well 7.5% of the")
+    print("  time, the direction-randomised null pays +0.098 ATR/trade, and")
+    print("  dropping ten trades out of 2048 makes the whole thing negative.")
+    print("  Numbers above still use the OLD flat 0.02 cost so E-194 can be")
+    print("  reproduced; cost_atr() has the honest per-clock charge.")
     print("=" * 92)
 
 

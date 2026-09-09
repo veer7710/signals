@@ -288,6 +288,40 @@ def test_entry_cannot_fill_better_than_the_market():
           f"{bad} impossible fills")
 
 
+def test_stop_cannot_fill_better_than_the_market():
+    """E-194-RT. The EXIT-side twin of E-165, which was missing for nine
+    experiments. A protective stop fills at its level only if the market is
+    still on the near side when the bar opens; a bar that GAPS past it fills
+    at the open, and that is worse. Booking the level anyway flatters every
+    loser in every study in this repo."""
+    from engine import stop_fill
+
+    # LONG: the stop sits BELOW at 100. The bar opens at 99 - gapped through -
+    # so the fill is 99, a WORSE price for the long.
+    check("long: a bar gapping below the stop fills at the open",
+          stop_fill(100.0, 99.0, +1) == 99.0)
+    check("long: a bar opening above the stop fills at the stop",
+          stop_fill(100.0, 101.0, +1) == 100.0)
+    # SHORT: the stop sits ABOVE at 100. The bar opens at 101 - gapped through.
+    check("short: a bar gapping above the stop fills at the open",
+          stop_fill(100.0, 101.0, -1) == 101.0)
+    check("short: a bar opening below the stop fills at the stop",
+          stop_fill(100.0, 99.0, -1) == 100.0)
+    check("a bar opening exactly at the stop fills at the stop",
+          stop_fill(100.0, 100.0, +1) == 100.0
+          and stop_fill(100.0, 100.0, -1) == 100.0)
+
+    # The property: a stop fill is NEVER better for the trade than its level.
+    bad = 0
+    for d in (+1, -1):
+        for o in range(90, 111):
+            f = stop_fill(100.0, float(o), d)
+            if d * (f - 100.0) > 0:
+                bad += 1
+    check("no stop fill is ever better than its own level", bad == 0,
+          f"{bad} impossible fills")
+
+
 def test_cost_is_a_fixed_price_on_every_clock():
     """E-173. The spread is a fixed PRICE. A slower clock has a larger ATR, and
     that is exactly what makes it cheaper - so the cost charged must NOT be
@@ -327,6 +361,7 @@ def test_cost_is_a_fixed_price_on_every_clock():
 
 test_trail_cannot_be_placed_behind_price()
 test_entry_cannot_fill_better_than_the_market()
+test_stop_cannot_fill_better_than_the_market()
 test_cost_is_a_fixed_price_on_every_clock()
 
 print("\n" + "=" * 66)

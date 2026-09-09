@@ -422,6 +422,32 @@ def entry_fill(level, open_k, d):
 
 
 # ---------------------------------------------------------------------------
+# E-194-RT. THE EXIT-SIDE TWIN OF entry_fill(), WHICH WAS MISSING FOR NINE
+# EXPERIMENTS.
+#
+# entry_fill() above has been in this file since E-165 and every study imports
+# it. Its mirror image never got written, so every backtest here has booked
+# STOP exits at the stop price even when the bar opened past it - a gap, a
+# news spike, a session open. That is the same defect as E-151 and E-165, one
+# layer further down the same trade, and it flatters every loser.
+#
+# A protective stop resting at `level` fills AT `level` only if the market is
+# still on the near side when the bar opens. If the bar opens beyond it, the
+# fill is the open and it is worse, always.
+# ---------------------------------------------------------------------------
+def stop_fill(level, open_k, d):
+    """Where a protective stop at `level` actually fills on bar k.
+
+    d = +1 for a long (the stop is BELOW, triggered by price falling to it),
+    -1 for a short. Returns the open when the bar has already gapped past the
+    stop. Never returns something better than `level`.
+    """
+    if d * (open_k - level) < 0:      # already past: the stop fires at the open
+        return open_k
+    return level
+
+
+# ---------------------------------------------------------------------------
 # E-173. THE COST SCALE, WHICH WAS WRONG ON EVERY CLOCK BUT M1.
 #
 # Cost was computed as  cs = 0.11 / (median_spread / median_ATR)  and then

@@ -9120,3 +9120,281 @@ computed. Build it, then measure it, then ship what measured — in that order,
 every time.**
 
 `JARVIS/research/shift.py` reproduces every number above.
+
+---
+
+---
+
+## E-194 — RETRACTED THE SAME DAY. The trailed SHIFT is TEN TRADES, and the significance was the search.
+
+**Status: REJECTED for trading. Superseded by E-194-RT, which is below and
+which I commissioned to break it.**
+
+I reported **PROMISING**: +0.2234 ATR/trade, t = +2.50, n = 2048, 34% win rate,
+from a give-back trail on the sweep signal. Two of the three parts of that
+sentence were artefacts.
+
+**What was wrong, in order of size:**
+
+1. **The t was the maximum of a 5x5 grid the file itself prints.** The right
+   null is the distribution of the best cell over that same grid under a
+   skill-free signal. Same bars, random direction: a skill-free run reports a
+   best cell at t >= 2.42 **7.5%** of the time. Random bars AND random
+   direction: **39%**. A random strategy searching this grid typically reports
+   t ~ 2.2. Mine reported 2.50.
+
+2. **The null pays.** Same stop, same trail, same cost, direction randomised:
+   **+0.0983 ATR/trade**. Random bars and random direction: **+0.0652**. Thirty
+   to forty-five percent of the headline needs no signal at all.
+
+3. **Ten trades are the result.** Dropping the top 10 of 2048 takes it to
+   **-0.052 ATR/trade, t = -0.97**. Top 1% winsorised: **+0.026, t = +0.44**.
+   The median trade is **-0.65 ATR**. Every one of the largest winners exits at
+   the 241-bar hold limit, so the trail never actually managed the trades that
+   paid - they ran out of clock.
+
+4. **The cost was 5-8x too light on M1.** I charged a flat 0.02 ATR everywhere.
+   Today's M1 spread is 0.11 ATR (E-132) and the spread is a fixed PRICE, so
+   the charge falls as 1/sqrt(minutes): M1 0.158, M15 0.041, H4 0.010.
+   (My first correction over-swung the other way and charged the 2018 file its
+   OWN recorded 0.93 ATR spread - 2018 gold traded at 1300 with a 0.25-point M1
+   ATR. Veer does not trade 2018. E-173 says use the spread you pay TODAY.)
+
+5. **A real bug, and it is the third of its family.** `entry_fill()` has been in
+   `engine.py` since E-165 and its exit-side twin was never written, so every
+   study in this repo has booked STOP exits AT the stop even when the bar
+   OPENED past it. `stop_fill()` now exists, `test_engine.py` guards it, and
+   both books here use it. Same defect as E-151 and E-165, one layer further
+   down the same trade.
+
+6. **There was no out-of-sample test of the trailed form at all.** I wrote the
+   E-150 half-split for the FIXED-TARGET version and never extended it. Built
+   after the fact: 4 forward folds give t = +0.59, +1.09, +2.26, +0.66, and in
+   both directions the published parameters BEAT the in-sample-selected ones
+   out of sample - which is what fitting noise looks like.
+
+7. **The "flat 2018" rescue was false.** Jan +3.25%, then five months down.
+   Per month, corr(gold move, long-minus-short return) = **+0.834**; on
+   2024-2026 per quarter **+0.722**. "Both sides pay" was a drift harvest
+   averaged over a window that trended up and then down. **There is no
+   drift-free sample anywhere in this result.**
+
+**AFTER FIXING THE COST AND THE GAP FILLS, the whole thing reads:**
+
+```
+  clock             cost      n   ATR/trd      t   pts/trd      t
+  15m  2026        0.041     94   -0.0380  -0.15    -0.320  -0.15
+  1h   2024-26     0.020    354   +0.0365  +0.23    +0.443  +0.23
+  4h   2024-26     0.010     90   +0.5907  +0.71   +14.572  +0.71
+  M1   2018        0.158    816   +0.1286  +0.82    +0.032  +0.82
+  M15  2018        0.041    187   +0.2606  +1.15    +0.298  +1.15
+  POOLED                   2048   +0.1541  +1.73    +1.160  +1.06
+  drop top 10              2038   -0.0522  -0.97
+  top 1% winsorised        2048   +0.0258  +0.44
+```
+
+**Not one clock reaches t = 2. In points - E-074's unit, the one that is
+money - the pooled t is +1.06. Remove ten trades and it is negative.**
+
+### One place the red team overreached, checked rather than accepted
+
+It said the 3-of-3 gate "fails CLAUDE.md's own rule" because the REFUSED trades
+had a higher t. The rule is about the MEAN of what a filter throws away, and a
+larger t on 6x the n with a smaller mean is not the refused trades being
+better. Measured on M1 2018:
+
+```
+  ALLOWED need=3   n=  816  mean +0.2717  median -0.7067  t +1.73
+  REFUSED need<3   n= 4770  mean +0.1749  median -0.6106  t +3.49
+```
+
+The gate passes its own rule. It is still true that it discards a large pool of
+similar-signed trades, which is worth knowing and is not what was claimed.
+
+Its duplicate-data finding, which I doubted, is **correct** and I was wrong to
+doubt it: aligned by timestamp, all 31,419 M5 bars and all 10,475 M15 bars are
+**exactly** reproducible from `GOLD_M1_2018.json`. Four of my nine "clocks"
+are one price series. My first check missed it by aggregating on a fixed
+stride instead of on clock boundaries.
+
+### WHAT SURVIVES
+
+**E-193 stands.** The sweep marks where legs BEGIN at 1.3-1.9x its own
+time-shifted control, 1.8-2.8x with three confirmations, on five samples across
+2018-2026 and M1-4h. That was scored against the right null and it replicated.
+
+**E-194 does not follow from it, and never did.** Knowing where a leg starts is
+not knowing how to be paid for it. E-186 said that first, and I rebuilt the
+same mistake with a trail instead of a target.
+
+### WHAT WOULD SETTLE IT
+
+The identical configuration, **frozen before it sees the data**, on gold M1/M5
+2019-2023 - neither sample has seen it - reported **in points**, with the
+max-t-over-grid null attached and the top 1% winsorised. One clock at
+>= +0.05 pts/trade with t >= 2 makes it real. Nothing weaker.
+
+**LESSON: I printed a 5x5 grid, quoted its best cell as the result, and called
+it an interior optimum as though that were the same as a control. It is not.
+The control for "the best of N configurations" is "the best of N configurations
+under no signal", and until that is run, a t-statistic from a swept grid is a
+description of the sweep.**
+
+---
+
+## E-194-RT — RED TEAM OF THE TRAILED SHIFT (`shift_trade.py`): UNPROVEN, and the reported significance does not survive its own grid
+
+The claim under attack: pooled **+0.2234 ATR/trade, t = +2.50, n = 2048, 33.8%
+win**, from `trail_book()` at give=0.7 / arm=2R / hold=240 / stopBuf=0.10 /
+cost 0.02 ATR. Reproduced exactly before attacking it.
+
+### 1. THE HEADLINE: t = 2.50 is the MAXIMUM OF THE GRID THE FILE ITSELF PRINTS
+`q3_trail()` prints a 5x5 `give` x `hold` table and the verdict quotes the best
+cell. The correct null is therefore the distribution of the **max t over that
+same 5x5 grid** under a skill-free signal:
+
+```
+  STRATEGY: best cell of the 5x5 give x hold grid = (0.7, 240), t = +2.42 (gap-fills honest)
+  null[same bars, RANDOM direction  ] max-t: median +1.65  95th +2.54  max +3.16
+      P(skill-free run reports a best cell with t >= 2.42) = 0.075
+  null[RANDOM bars, RANDOM direction] max-t: median +2.21  95th +3.50  max +4.64
+      P(skill-free run reports a best cell with t >= 2.42) = 0.390
+```
+**7.5% and 39%.** A completely random strategy searching this grid *typically*
+reports t = 2.2. The 5% bar is breached; the edge is not established.
+
+### 2. THE SKILL-FREE NULL PAYS ON ITS OWN
+Same stop geometry, same trail, same cost, no signal:
+```
+  NULL A same entry bars, random direction : mean +0.0983 (sd 0.0455)  P(null t>=2.50)=0.028
+  NULL B random entry bars, random direction: mean +0.0652 (sd 0.0448)  P(null t>=2.50)=0.075
+  NULL C random entry bars, same long/short mix: mean +0.0686           P(null t>=2.50)=0.048
+```
+Roughly **30-45% of the reported per-trade result is available with no signal at
+all**. This is E-132 again ("every 11th bar, no range, +0.0156/trade — what is
+holding up is the trail").
+
+### 3. TEN TRADES ARE THE EDGE
+```
+  drop top  1 winner : mean +0.1833 t +2.30     top 1 = 18% of all pnl
+  drop top  5        : mean +0.0882 t +1.41     top 5 = 61%
+  drop top 10        : mean +0.0172 t +0.32     top 10 = 92%
+  99%-winsorised     : mean +0.0899 t +1.56
+  median trade = -0.6534 ATR
+```
+**0.5% of the trades carry 92% of the P&L.** Every one of the top 15 exits at the
+241-bar hold limit — the trail never manages them. Largest is +82.2 ATR.
+
+### 4. THE 2018 "FLAT MARKET" RESCUE IS FALSE
+The window is not flat, it is two opposite trends: **+3.25% Jan, then -2.12 /
++0.74 / -0.81 / -1.19 / -1.56% through June** (1302 -> 1366 -> 1275, 7.1%
+peak-to-trough). Per month, the strategy's long-minus-short return tracks the
+month's move:
+```
+  2018-01  gold +3.25%   longs +1.207  shorts -0.258
+  2018-04  gold -0.81%   longs +0.063  shorts +1.039
+  2018-05  gold -1.19%   longs -0.094  shorts +0.644
+  corr(month move, long-minus-short) = +0.834 over 6 months
+  same test on 2024-26 per quarter    = +0.722 over 10 quarters
+```
+"Both sides pay in 2018" is **the same drift harvest as 2024-26**, averaged over
+a window that trended up and then down. There is no sample here in which the
+drift is not doing the work.
+
+### 5. IN POINTS — THE UNIT THAT BUYS FOOD (E-074) — THE RESULT IS NOISE
+```
+  clock            n   ATR/trade    t     POINTS/trade    t    total pts
+  1h  2024-26    354    +0.0369  +0.23      -1.6168   -0.83     -572.3
+  2h  2024-26    163    +0.2987  +0.85      +7.2295   +1.05    +1178.4
+  M1  2018       816    +0.2666  +1.70      +0.0566   +1.42      +46.2
+  POOLED        2048                        +0.3703   +0.42     +758.5
+```
+**t = +2.50 in ATR becomes t = +0.42 in points.** The ATR-at-entry denominator
+is producing the significance. On the 1h clock the sign flips outright.
+
+### 6. COST — 0.02 FLAT IS 5.5x TOO LIGHT ON M1 (E-173's own numbers)
+E-173 fixes the charge at one PRICE per clock. On the 2018 file that price is
+0.0271 pts, which is **0.11 ATR on M1**, 0.044 on M5, 0.024 on M15.
+```
+  flat 0.02 (as published)          mean +0.2161  t +2.42
+  honest per-clock spread           mean +0.1771  t +1.98
+  honest + 0.05pt slippage/side     mean +0.1369  t +1.53
+  cost that drops pooled t below 2  = 0.0575 ATR/trade
+```
+
+### 7. NO CLOCK IS SIGNIFICANT; THE POOL IS 3 PRICE SERIES, NOT 9
+`GOLD_M5_2018.json` and `GOLD_M15_2018.json` are **byte-exact aggregations of
+GOLD_M1_2018.json** (31,419/31,419 and 10,475/10,475 bars identical). 15m 2026
+sits *inside* the 1h 2024-26 window. Best single clock is M1 2018 at t = +1.73.
+The two genuinely disjoint samples combine (Stouffer) to **t = +1.46**.
+Day-block bootstrap t +2.38, month-block +2.63 — the variance is not the main
+problem; the search and the tail are.
+
+### 8. PARAMETER SURFACE — A CLIFF, NOT A SLOPE
+```
+  give   0.49: -0.0127 t-0.34 | 0.70: +0.2161 t+2.42 | 0.91: +0.1663 t+1.63
+  hold    168: +0.1273 t+1.98 | 240: +0.2161 t+2.42 | 312: +0.2086 t+2.33
+  entry delayed by ONE bar   : +0.0270 t+0.55   (88% of the edge gone)
+```
+Signal-side parameters (sweepAtr, eqTol, pv, stretch, emaLen) barely move the
+result at all (+0.13 to +0.23) — consistent with the signal not being the source
+of the payoff.
+
+### 9. THE 3-of-3 GATE FAILS ITS OWN RULE
+```
+  M1 2018:  ALLOWED n=816  +0.2666 t+1.70   REFUSED n=4770  +0.1539 t+3.05
+  1h      :  ALLOWED n=354  +0.0369 t+0.23   REFUSED n=292   -0.0007 t-0.00
+```
+The refused trades are not worse. The filter is a cost with no measured benefit.
+
+### 10. OTHER MARKETS, IDENTICAL CONFIG — NEGATIVE EVERYWHERE
+```
+  US500 1h  n=80  -0.2672 t-1.45 (during a +46% bull run)
+  GBPUSD 1h n=83  -0.2287 t-1.31     GBPUSD 15m n=25 -0.4254 t-1.87
+  EURUSD 1h n=82  +0.0109 t+0.05     NON-GOLD POOLED n=296 -0.1722 t-1.70
+```
+
+### 11. NO OUT-OF-SAMPLE TEST EXISTED; THE ONE I BUILT IS NOT SIGNIFICANT
+`shift_trade.py` contains no split test of any kind (grep: zero hits for
+half/oos/walk). Walk-forward, choosing give/hold/arm on one half and applying
+to the other:
+```
+  IS 1st half -> OOS 2nd: chose 0.8/240/3.0 -> OOS +0.2576 t+1.61
+  IS 2nd half -> OOS 1st: chose 0.9/400/2.0 -> OOS +0.0589 t+0.43
+  4 forward folds, published config: t +0.59, +1.09, +2.26, +0.66
+```
+In both directions the *published* 0.7/240/2.0 beat the IS-selected parameters
+out of sample — the selection procedure has no skill, it is fitting noise.
+
+### 12. TWO REAL (SMALL) BUGS
+- **Exit stops fill at the level even when the bar GAPS through it.**
+  `engine.entry_fill()` exists for the entry side (E-165) and has no exit-side
+  twin. 23 fills affected, -0.0073 ATR/trade. Real, minor, and the same family
+  as E-151/E-165.
+- Cost as in section 6.
+- **No look-ahead found.** Pivots publish at `i+pv`, `ema`/`atr`/`_wilder` are
+  causal, the 60-bar window is `[i-60:i]`, `bias_series` reads HTF bar
+  `(i//f)-1`. `trail_level`/`trail_apply` are used correctly, including the
+  `nl is None` -> exit-at-close branch. F-001/E-151 are NOT repeated.
+
+### Money, at the size Veer actually trades
+M1 2018, 0.01 lots, GBP0.787/point: +46.2 pts = **+GBP36 over 5.5 months, with a
+GBP18.10 max drawdown (45% of a GBP40 account), 12 consecutive losers, and 3 days
+worse than -5% of the account.** Before the honest spread, which takes roughly
+half of it. 1h 2024-26 at the same size: **-GBP450**.
+
+### VERDICT: **UNPROVEN**, downgraded from PROMISING.
+Not "the trail works and only 2018 is clean". The correct statement is: *the
+give-back trail plus a 240-bar hold harvests whatever drift is in the sample; the
+SHIFT contributes a small relative advantage over random entry (robust-statistic
+p ~ 0.01-0.03, one-sided, before the grid) but not an absolute one — after honest
+cost and with the ten luckiest trades removed the expectancy is **-0.029 ATR/trade**.*
+
+**What would change the mind:** the identical configuration, frozen, run on gold
+price data neither sample has seen (2019-2023 M1/M5), reported in POINTS, with
+the max-t-over-grid null attached. If that shows >= +0.05 pts/trade at t >= 2 on
+a single clock with the tail winsorised, it is real. Nothing short of that.
+
+Reproduce: `python3 JARVIS/research/shift_trade.py` for the claim; the attack
+scripts are in this entry verbatim and rebuild from `rt.py`'s `trail_book3`
+(trail_book plus honest gap fills).
