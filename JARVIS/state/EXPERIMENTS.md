@@ -8939,3 +8939,74 @@ clocks, is why this is the one timing result worth carrying.
 **LESSON: a recommendation from a study is not a finding. E-190's advice was
 sound for the samples it was computed on and wrong for the clock it was aimed
 at, and the only way to know was to measure the premise separately.**
+
+---
+
+## E-192 — I BROKE THE EA LAST SESSION. BELOW £250 IT REFUSED EVERY TRADE.
+
+Veer, live: *"supertredn ainte ven taking the signals it shioul its keant to
+take every tarade"*. He is right, and the cause is a change I made in the
+previous session.
+
+`RiskAllowsEntry()` has always contained:
+```cpp
+if(g_lotClampX > 3.0) { ...refuse... }
+```
+`g_lotClampX` is `minLot / wantedLot` — how many times the 0.01 floor exceeds
+the size `InpRiskPct` actually asks for. It is only ever written inside
+`LotFor()`, which `TryEntry` did not call until 186 lines AFTER the guard, so
+the guard read a stale value and mostly slipped through. Last session I "fixed"
+that staleness by priming `g_lotClampX` in `OnInit()`.
+
+**The guard then fired on every signal:**
+```
+   equity   wanted lots   clampX    verdict
+       40       0.00058     17.2    refused
+      100       0.00146      6.9    refused
+      200       0.00291      3.4    refused
+      250       0.00364      2.8    traded
+```
+**Below about £250 the EA took nothing at all.** And CLAUDE.md names this EA's
+artefact as *"Veer's live PU Prime account, **starting at £40**"* and states
+*"a £40 account must trade M1"*. **My fix made the EA's own primary use case
+impossible, and the staleness bug had been the only thing hiding it.**
+
+The ratio is also the wrong thing to police. E-081: 0.01 lots cannot be smaller,
+so on a small account `InpRiskPct` is not a risk setting — it is a wish, and the
+multiple only measures how far reality is from it. What protects the account is
+exposure in money: `InpMaxMarginPct`, `InpMaxTotalLots`, the daily-loss lock and
+the max-drawdown lock, all of which still run.
+
+**FIXED:** the threshold is now `InpMaxRiskMultX`, default **0 = warn only**. It
+prints the real risk in money and as a % of equity, hourly, and refuses only if
+Veer sets a ceiling.
+
+### And the general fix, because guessing which of thirteen gates fired is not a method
+`TryEntry()` has **thirteen** ways to refuse a flip; `ArmSide()` in
+LiquiditySniper has **eight**. Both now count every refusal by reason and print
+a ledger every 15 minutes and at each day rollover:
+```
+[STS] SIGNALS: 4 taken, 61 refused. dema 22 | adx 9 | bigcandle 3 |
+      cooldown 5 | twopole 0 | stack 14 | chop 6 | deadhour 0 | session 0 |
+      cost 2 | noroom 0 | risk 0 | lots0 0 | pending 0
+[LQS] ARMS: 2 armed, 34 refused. in-a-trade 21 | locked 0 | day-cap 0 |
+      waiting-on-a-limit 8 | no-live-level 3 | level-already-used 2 | ...
+```
+**"It is not taking the signals it should" is now a number, not an argument.**
+
+`InpTakeEverything` disables every optional gate in one switch, leaving only the
+hard safety rules (margin, lot ceiling, daily loss, max drawdown, one position).
+
+### The two reasons LiquiditySniper misses sweeps, both by design
+1. **`InpMaxPositions = 1`** — while a trade is open, NOTHING is armed. Every
+   sweep during a hold is missed by construction. On M15 with a long hold that
+   is most of them.
+2. **`InpArmOncePerLvl = true`** — a level that has traded once is retired for
+   good, so a level price keeps reacting to is armed exactly once.
+
+Both are "as measured" choices and both produce exactly the complaint. They are
+now documented at the input and countable in the ledger.
+
+**LESSON: a fix to a latent bug can activate a worse one. The staleness bug was
+masking a guard that makes the product unusable, and I shipped the unmasking
+without asking what the guard would then do.**

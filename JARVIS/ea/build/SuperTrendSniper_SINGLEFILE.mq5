@@ -71,6 +71,14 @@
 // defined further down the file than its first call, which is a compile
 // error, not a style point - check_mq5.py now catches the whole class.
 void   SkipLog(string dir, string why);
+// WHICH GATE IS EATING THE SIGNALS. Veer, live: "supertrend aint even taking
+// the signals it should its meant to take every trade". There are thirteen
+// places TryEntry() can refuse, and until now the only way to know which one
+// fired was to read the log line by line. These count them, and OnTick prints
+// the tally every 15 minutes and on every new day.
+int g_refDema = 0, g_refAdx = 0, g_refFade = 0, g_refCool = 0, g_refTwoPole = 0;
+int g_refStack = 0, g_refChop = 0, g_refDead = 0, g_refSess = 0, g_refCost = 0;
+int g_refRoom = 0, g_refRisk = 0, g_refLots = 0, g_refPend = 0, g_refTaken = 0;
 string RiskTag();
 double FreezeDist();
 
@@ -1148,6 +1156,10 @@ input group "=== SIZE ==="
 input bool   InpUseFixedLots  = false;  // fixed size instead of % risk
 input double InpFixedLots     = 0.03;   // total size for one entry
 input double InpRiskPct       = 0.50;   // % of equity risked per trade (if not fixed)
+input double InpMaxRiskMultX  = 0.0;    // refuse when the 0.01 lot floor makes the
+                                        // real risk this many times InpRiskPct.
+                                        // 0 = WARN ONLY, and 0 is right for a
+                                        // small account - see RiskAllowsEntry.
 input double InpMaxMarginPct  = 35.0;   // NEVER commit more than this % of free
                                         // margin to one entry. Veer, live: the
                                         // EA "kept tryna fullport so got margin
@@ -1316,6 +1328,15 @@ input double InpRegimeChopX   = 0.70;   // multiplier in dead chop
 input double InpRegimeMixX    = 1.25;   // ...in the middle, where the money is
 input double InpRegimeTrendX  = 0.70;   // ...in an already-running trend
 
+input bool   InpTakeEverything = false; // ONE SWITCH. Disables every optional
+                                        // entry gate and takes every flip the
+                                        // DEMA agrees with. The hard safety
+                                        // rules still run: margin, lot ceiling,
+                                        // daily loss, max drawdown, one
+                                        // position at a time. Use it to find
+                                        // out what the gates are actually
+                                        // costing you - the log counts every
+                                        // refusal by reason either way.
 input bool   InpAutoTune      = true;   // E-178: set the gates from the CHART's
                                         // timeframe, using what was measured on
                                         // that clock. Off = use the inputs as
@@ -2353,12 +2374,58 @@ bool RiskAllowsEntry(string &why)
    // And refuse when the lot floor has turned the configured risk into
    // something else entirely. 3x is the line: below it the account is merely
    // small, above it the EA is not running the strategy that was measured.
-   if(g_lotClampX > 3.0)
+   // THIS REFUSED EVERY TRADE ON THE ACCOUNT THE EA WAS BUILT FOR.
+   //
+   // The threshold was hard-coded at 3.0 and the guard read g_lotClampX, which
+   // LotFor() writes. Last session I "fixed" a staleness bug by priming
+   // g_lotClampX in OnInit so the guard could fire from the first signal. It
+   // then fired on EVERY signal:
+   //
+   //     equity   wanted lots   clampX    verdict
+   //        40       0.00058     17.2     refused
+   //       100       0.00146      6.9     refused
+   //       200       0.00291      3.4     refused
+   //       250       0.00364      2.8     traded
+   //
+   // Below about GBP 250 the EA took nothing at all. CLAUDE.md names this EA's
+   // artefact as "Veer's live PU Prime account, starting at GBP 40" and states
+   // "a GBP 40 account must trade M1" - so the guard made the EA's own primary
+   // use case impossible, and the staleness bug was the only thing that had
+   // been hiding it.
+   //
+   // The ratio is also the wrong thing to police. E-081 says 0.01 lots cannot
+   // be smaller, so on a small account InpRiskPct is not a risk setting at all
+   // - it is a wish, and the multiple just measures how far from it reality is.
+   // What actually protects the account is EXPOSURE in money: InpMaxMarginPct,
+   // InpMaxTotalLots, the daily-loss lock and the max-drawdown lock. Those all
+   // still run.
+   //
+   // So this WARNS by default and refuses only if Veer sets a threshold.
+   if(g_lotClampX > 1.5)
    {
-      why = StringFormat("the broker's minimum lot makes every trade %.1fx the "
-                         "configured %.2f%% risk. E-081: 0.01 lots cannot be "
-                         "smaller, so the account must be larger.",
-                         g_lotClampX, InpRiskPct);
+      static datetime toldClamp = 0;
+      if(TimeCurrent() - toldClamp > 3600)
+      {
+         toldClamp = TimeCurrent();
+         double eqNow = AccountInfoDouble(ACCOUNT_EQUITY);
+         double realRisk = (g_lotClampX > 0.0)
+                         ? eqNow * InpRiskPct / 100.0 * g_lotClampX : 0.0;
+         PrintFormat("[STS] SIZE REALITY: the 0.01 lot floor makes every trade "
+                     "%.1fx the %.2f%% you asked for - about %.2f per trade, "
+                     "%.1f%% of %.2f equity. E-081: 0.01 cannot be smaller, so "
+                     "this is what the account IS trading. Not refusing "
+                     "(InpMaxRiskMultX = %.1f).",
+                     g_lotClampX, InpRiskPct, realRisk,
+                     100.0 * realRisk / MathMax(eqNow, 1e-9), eqNow,
+                     InpMaxRiskMultX);
+      }
+   }
+   if(InpMaxRiskMultX > 0.0 && g_lotClampX > InpMaxRiskMultX)
+   {
+      why = StringFormat("the lot floor makes every trade %.1fx the %.2f%% "
+                         "risk, over your %.1fx ceiling. E-081: 0.01 lots "
+                         "cannot be smaller, so the ACCOUNT has to be bigger.",
+                         g_lotClampX, InpRiskPct, InpMaxRiskMultX);
       return false;
    }
 
@@ -2707,7 +2774,7 @@ void TryEntry()
    // A resting limit already IS this signal. Without this the next flip stacks
    // a second order on the same idea and both can fill within a few points of
    // each other - the same triple-entry fault that had to be fixed in the Pine.
-   if(HasPending()) return;
+   if(HasPending()) { g_refPend++; return; }
 
    // The flip test comes FIRST so that every line logged below corresponds to
    // a real signal. Testing the risk gates first logged a refusal on every
@@ -2720,7 +2787,7 @@ void TryEntry()
 
 
    string why = "";
-   if(!RiskAllowsEntry(why)) { SkipLog(sdir, why); return; }
+   if(!RiskAllowsEntry(why)) { g_refRisk++; SkipLog(sdir, why); return; }
 
    if(InpUseDemaFilter)
    {
@@ -2728,26 +2795,27 @@ void TryEntry()
       double dNow  = DEMA(dLen, 1);
       double dPrev = DEMA(dLen, 3);
       if(dNow <= 0 || dPrev <= 0) return;
-      if(flipUp   && dNow < dPrev) { SkipLog(sdir, "DEMA falling"); return; }
-      if(flipDown && dNow > dPrev) { SkipLog(sdir, "DEMA rising");  return; }
+      if(flipUp   && dNow < dPrev) { g_refDema++; SkipLog(sdir, "DEMA falling"); return; }
+      if(flipDown && dNow > dPrev) { g_refDema++; SkipLog(sdir, "DEMA rising");  return; }
    }
 
    // --- ADX ceiling. The losing bucket on this strategy is entries taken when
    // the trend is ALREADY extended: ADX>35 measured -0.132R while ADX<20
    // measured +0.304R. Skipping the extended ones held out-of-sample.
-   if(g_useAdx)
+   if(g_useAdx && !InpTakeEverything)
    {
       double adx = ADXValue(1);
       if(adx > 0 && adx > InpMaxAdx)
       {
          SkipLog(sdir, StringFormat("ADX %.1f > %.1f, trend already extended",
                                     adx, InpMaxAdx));
+         g_refAdx++;
          return;
       }
    }
 
    // ---- DO NOT TRADE AGAINST A FRESH BIG CANDLE
-   if(InpNoFadeAtr > 0.0)
+   if(InpNoFadeAtr > 0.0 && !InpTakeEverything)
    {
       double aNow = ATR(1);
       for(int k = 1; k <= InpNoFadeBars && aNow > 0.0; k++)
@@ -2761,6 +2829,7 @@ void TryEntry()
             SkipLog(sdir, StringFormat("a %.1f x ATR candle went the OTHER way "
                                        "%d bar(s) ago - this is the pullback, "
                                        "not the trade", rngK / aNow, k));
+            g_refFade++;
             return;
          }
       }
@@ -2780,7 +2849,7 @@ void TryEntry()
    // should have tightened. The risk score was being applied backwards.
    // ---- NOT STRAIGHT BACK IN THE SAME DIRECTION
    int wantDir = flipUp ? 1 : -1;
-   if(InpReentryCool > 0 && g_lastCloseDir == wantDir && g_lastCloseBar > 0)
+   if(InpReentryCool > 0 && !InpTakeEverything && g_lastCloseDir == wantDir && g_lastCloseBar > 0)
    {
       int sinceClose = iBarShift(_Symbol, _Period, g_lastCloseBar, false);
       if(sinceClose < InpReentryCool)
@@ -2788,6 +2857,7 @@ void TryEntry()
          SkipLog(sdir, StringFormat("closed a %s %d bars ago and this is the "
                                     "same way again - waiting %d",
                                     sdir, sinceClose, InpReentryCool));
+         g_refCool++;
          return;
       }
       // and, optionally, only once price has actually gone somewhere new.
@@ -2809,15 +2879,16 @@ void TryEntry()
    }
 
    string tpWhy = "";
-   if(!TwoPoleAllows(flipUp ? 1 : -1, tpWhy)) { SkipLog(sdir, tpWhy); return; }
+   if(!InpTakeEverything && !TwoPoleAllows(flipUp ? 1 : -1, tpWhy))
+   { g_refTwoPole++; SkipLog(sdir, tpWhy); return; }
 
    string sw = "";
-   if(!StackAllows(flipUp ? 1 : -1, sw)) { SkipLog(sdir, sw); return; }
+   if(!StackAllows(flipUp ? 1 : -1, sw)) { g_refStack++; SkipLog(sdir, sw); return; }
 
    // CHOP GUARD. Off by default - see the input group for why the measurement
    // does not support turning it on. Left switchable so the journal can
    // settle it on Veer's own fills instead of on my 15m data.
-   if(g_useChop)
+   if(g_useChop && !InpTakeEverything)
    {
       double er = EfficiencyRatio(InpChopErLen);
       if(er < InpMinEffRatio)
@@ -2825,6 +2896,7 @@ void TryEntry()
          SkipLog(sdir, StringFormat("efficiency %.3f over %d bars is below "
                                     "%.3f - the market is going nowhere",
                                     er, InpChopErLen, InpMinEffRatio));
+         g_refChop++;
          return;
       }
       int fl = FlipsIn(InpChopFlipLen);
@@ -2833,6 +2905,7 @@ void TryEntry()
          SkipLog(sdir, StringFormat("%d flips in %d bars - one range being "
                                     "sliced, not %d setups",
                                     fl, InpChopFlipLen, fl));
+         g_refChop++;
          return;
       }
    }
@@ -2861,7 +2934,7 @@ void TryEntry()
    // So this is the ONE timing rule that is not already covered, and it ships
    // OFF: E-190 measured leg geometry, not money, and this project does not
    // turn on a filter until the trades it refuses are shown to be worse.
-   if(InpDeadHours)
+   if(InpDeadHours && !InpTakeEverything)
    {
       MqlDateTime dh;
       TimeToStruct(TimeGMT(), dh);
@@ -2870,12 +2943,13 @@ void TryEntry()
          SkipLog(sdir, StringFormat("%02d:00 UTC is inside the 15-21 dead "
                                     "window - leg starts there run at 0.50-0.70 "
                                     "of control (E-190)", dh.hour));
+         g_refDead++;
          return;
       }
    }
 
    // --- session filter
-   if(InpUseSession)
+   if(InpUseSession && !InpTakeEverything)
    {
       MqlDateTime dt_;
       TimeToStruct(TimeCurrent(), dt_);
@@ -2883,7 +2957,7 @@ void TryEntry()
       bool inSess = (InpSessFromUTC <= InpSessToUTC)
                   ? (h >= InpSessFromUTC && h < InpSessToUTC)
                   : (h >= InpSessFromUTC || h < InpSessToUTC);
-      if(!inSess) { SkipLog(sdir, "outside session"); return; }
+      if(!inSess) { g_refSess++; SkipLog(sdir, "outside session"); return; }
    }
 
    double atr = ATR(1);
@@ -2924,7 +2998,7 @@ void TryEntry()
    // COST GATE. The one thing here that needs no backtest: the EA reads the
    // spread that exists right now. If the whole round trip eats more than
    // InpMaxCostFrac of the stop, the trade is mostly a fee and is refused.
-   if(InpUseCostGate)
+   if(InpUseCostGate && !InpTakeEverything)
    {
       double cost = RoundTripCost();
       double frac = (stopDist > 0.0) ? cost / stopDist : 1.0;
@@ -2934,6 +3008,7 @@ void TryEntry()
                                     "over the %.1f%% ceiling",
                                     cost, 100.0 * frac, stopDist,
                                     100.0 * InpMaxCostFrac));
+         g_refCost++;
          return;
       }
    }
@@ -2941,7 +3016,7 @@ void TryEntry()
    // NO ROOM, NO TRADE. A signal pointing straight into a level a few points
    // away is not the same trade as one with open air ahead of it, and taking
    // both at the same size is how the small ones pay for nothing.
-   if(InpUseLevels && InpSkipNoRoom)
+   if(InpUseLevels && InpSkipNoRoom && !InpTakeEverything)
    {
       double px   = iClose(_Symbol, _Period, 1);
       double wall = NearestLevel(px, flipUp ? +1 : -1);
@@ -2952,6 +3027,7 @@ void TryEntry()
          {
             SkipLog(sdir, StringFormat("only %.2fR of room, level at %.*f",
                                        roomR, (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS), wall));
+            g_refRoom++;
             return;
          }
       }
@@ -2963,7 +3039,7 @@ void TryEntry()
    // signal after every attach the guard read its initialiser of 1.0 and could
    // not fire; after that it was always one entry stale.
    double lots = LotFor(stopDist);
-   if(lots <= 0) { SkipLog(sdir, "lot size rounded to zero"); return; }
+   if(lots <= 0) { g_refLots++; SkipLog(sdir, "lot size rounded to zero"); return; }
 
    // TRENDS DO NOT LAST FOREVER. A signal in the same direction as a run that
    // is already old, already stretched and already crowded is not the same
@@ -3091,7 +3167,7 @@ void TryEntry()
                            RiskTag(stopDist, dg)))
          {
             PB_NoteOrder(trade.ResultOrder(), ask);
-            g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
+            g_tradesToday++; g_refTaken++; RegisterEntry(flipUp ? 1 : -1);
             Journal("LIMIT", "long", lim, lots, lsl, ltp, 0, "waiting for pullback");
             Log(StringFormat("BUY LIMIT %.2f at %.*f  sl %.*f  tp %.*f",
                              lots, dg, lim, dg, lsl, dg, ltp));
@@ -3106,7 +3182,7 @@ void TryEntry()
       {
          g_spEntrySum += spAtEntry; g_spEntryN++;
          if(spAtEntry > g_spEntryMax) g_spEntryMax = spAtEntry;
-         g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
+         g_tradesToday++; g_refTaken++; RegisterEntry(flipUp ? 1 : -1);
          Journal("ENTRY", "long", ask, lots, sl, tp, 0,
                  StringFormat("spread %.*f stop %.*f cost/stop %.3f",
                               dg, spAtEntry, dg, stopDist,
@@ -3144,7 +3220,7 @@ void TryEntry()
                             RiskTag(stopDist, dg)))
          {
             PB_NoteOrder(trade.ResultOrder(), bid);
-            g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
+            g_tradesToday++; g_refTaken++; RegisterEntry(flipUp ? 1 : -1);
             Journal("LIMIT", "short", lim, lots, lsl, ltp, 0, "waiting for pullback");
             Log(StringFormat("SELL LIMIT %.2f at %.*f  sl %.*f  tp %.*f",
                              lots, dg, lim, dg, lsl, dg, ltp));
@@ -3159,7 +3235,7 @@ void TryEntry()
       {
          g_spEntrySum += spAtEntry; g_spEntryN++;
          if(spAtEntry > g_spEntryMax) g_spEntryMax = spAtEntry;
-         g_tradesToday++; RegisterEntry(flipUp ? 1 : -1);
+         g_tradesToday++; g_refTaken++; RegisterEntry(flipUp ? 1 : -1);
          Journal("ENTRY", "short", bid, lots, sl, tp, 0,
                  StringFormat("spread %.*f stop %.*f cost/stop %.3f",
                               dg, spAtEntry, dg, stopDist,
@@ -5272,6 +5348,33 @@ void AutoTune()
             "assumed from a slower one.");
 }
 
+// THE REFUSAL LEDGER. Prints every 15 minutes and at each day rollover.
+// Thirteen places can refuse a flip; this says which ones actually did, so the
+// answer to "it is not taking the signals it should" is a number instead of an
+// argument. `reset` clears it at the day boundary so each day stands alone.
+void RefusalLedger(bool reset)
+{
+   int tot = g_refDema + g_refAdx + g_refFade + g_refCool + g_refTwoPole
+           + g_refStack + g_refChop + g_refDead + g_refSess + g_refCost
+           + g_refRoom + g_refRisk + g_refLots + g_refPend;
+   if(tot == 0 && g_refTaken == 0) return;
+   PrintFormat("[STS] SIGNALS: %d taken, %d refused. dema %d | adx %d | "
+               "bigcandle %d | cooldown %d | twopole %d | stack %d | chop %d | "
+               "deadhour %d | session %d | cost %d | noroom %d | risk %d | "
+               "lots0 %d | pending %d%s",
+               g_refTaken, tot, g_refDema, g_refAdx, g_refFade, g_refCool,
+               g_refTwoPole, g_refStack, g_refChop, g_refDead, g_refSess,
+               g_refCost, g_refRoom, g_refRisk, g_refLots, g_refPend,
+               InpTakeEverything ? "   [TAKE-EVERYTHING is ON]" : "");
+   if(reset)
+   {
+      g_refDema = 0; g_refAdx = 0; g_refFade = 0; g_refCool = 0;
+      g_refTwoPole = 0; g_refStack = 0; g_refChop = 0; g_refDead = 0;
+      g_refSess = 0; g_refCost = 0; g_refRoom = 0; g_refRisk = 0;
+      g_refLots = 0; g_refPend = 0; g_refTaken = 0;
+   }
+}
+
 int OnInit()
 {
    if(!TfGuard("STS", InpMaxTF)) return INIT_FAILED;
@@ -5380,6 +5483,9 @@ void OnTick()
    // restart.
    static datetime lastPk = 0;
    if(TimeCurrent() - lastPk >= 60) { lastPk = TimeCurrent(); PersistGuards(); }
+   static datetime lastLedger = 0;
+   if(TimeCurrent() - lastLedger >= 900)
+   { lastLedger = TimeCurrent(); RefusalLedger(false); }
 
    int ds = DayStamp();
    if(ds != g_dayStamp)
@@ -5402,6 +5508,7 @@ void OnTick()
       // is reached for.
       PersistGuards();
       Log("new trading day, daily counters reset and PERSISTED");
+      RefusalLedger(true);
    }
 
    // ---- EVERY TICK: watch the profit and protect it.

@@ -977,7 +977,18 @@ input double InpTgtMaxR       = 0.0;    // 0 = uncapped (capping measured worse)
 //    GOLD 15m n=199 +0.510R +565 pts; the added trades score +0.697R; 6/6; +3.4 sd.
 input int    InpArmLife       = 600;    // a zone stops being armable this many bars after birth
 input int    InpArmWait       = 60;     // an unfilled limit is cancelled after this many bars
-input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED
+input bool   InpArmOncePerLvl = true;   // never re-arm a level that has actually TRADED.
+                                        // Veer, live: "missed like 20 liquidity
+                                        // sweeps and reactions to levels". This
+                                        // is one of the two reasons - a level
+                                        // that has traded once is retired for
+                                        // good, so a level price keeps reacting
+                                        // to is armed exactly once. Set FALSE to
+                                        // let a level work more than once.
+                                        // The other reason is InpMaxPositions
+                                        // below: while a trade is open NOTHING
+                                        // is armed, so every sweep during a hold
+                                        // is missed by construction.
 input double InpEntryLots     = 0.02;   // size for one entry
 input int    InpMaxPositions  = 1;      // one at a time, as measured
 
@@ -1214,6 +1225,29 @@ double MinStopDist();
 int    PosCount();
 
 //==================== HELPERS ======================================
+// WHICH RULE IS EATING THE SWEEPS. Ten places can refuse an arm, and until now
+// the only way to know which fired was to read the log line by line. OnTick
+// prints the tally every 15 minutes.
+int g_lqBusy = 0, g_lqLocked = 0, g_lqCap = 0, g_lqWait = 0, g_lqNoLvl = 0;
+int g_lqUsed = 0, g_lqRisk = 0, g_lqStop = 0, g_lqArmed = 0;
+
+void LqLedger(bool reset)
+{
+   int tot = g_lqBusy + g_lqLocked + g_lqCap + g_lqWait + g_lqNoLvl
+           + g_lqUsed + g_lqRisk + g_lqStop;
+   if(tot == 0 && g_lqArmed == 0) return;
+   PrintFormat("[LQS] ARMS: %d armed, %d refused. in-a-trade %d | locked %d | "
+               "day-cap %d | waiting-on-a-limit %d | no-live-level %d | "
+               "level-already-used %d | risk %d | stop-too-tight %d",
+               g_lqArmed, tot, g_lqBusy, g_lqLocked, g_lqCap, g_lqWait,
+               g_lqNoLvl, g_lqUsed, g_lqRisk, g_lqStop);
+   if(reset)
+   {
+      g_lqBusy = 0; g_lqLocked = 0; g_lqCap = 0; g_lqWait = 0; g_lqNoLvl = 0;
+      g_lqUsed = 0; g_lqRisk = 0; g_lqStop = 0; g_lqArmed = 0;
+   }
+}
+
 void Log(string m)
 {
    if(InpVerboseLog) Print(m);
@@ -1719,9 +1753,9 @@ void MarkUsed(double lvl)
 
 void ArmSide(int dir)
 {
-   if(g_lockedDay || g_lockedPerm || g_lockedProf || g_passed) return;
-   if(PosCount() >= InpMaxPositions) return;
-   if(g_tradesToday >= InpMaxTradesDay) return;
+   if(g_lockedDay || g_lockedPerm || g_lockedProf || g_passed) { g_lqLocked++; return; }
+   if(PosCount() >= InpMaxPositions) { g_lqBusy++; return; }
+   if(g_tradesToday >= InpMaxTradesDay) { g_lqCap++; return; }
 
    // an order already resting and not yet expired is LEFT ALONE
    ulong tkNow = (dir > 0) ? g_tkBuy : g_tkSell;
@@ -1729,7 +1763,7 @@ void ArmSide(int dir)
    int   barNo = Bars(_Symbol, _Period) - 1;
    if(tkNow != 0 && OrderSelect(tkNow))
    {
-      if(barNo - bAt <= InpArmWait) return;
+      if(barNo - bAt <= InpArmWait) { g_lqWait++; return; }
       KillSide(dir, StringFormat("unfilled after %d bars", InpArmWait));
    }
 
@@ -1747,12 +1781,12 @@ void ArmSide(int dir)
    // touched wins, one position at a time.
    string src = "";
    double raw = BestLevel(dir, (dir > 0) ? bid : ask, a, src);
-   if(raw == 0.0) { KillSide(dir, "no live level on this side"); return; }
+   if(raw == 0.0) { g_lqNoLvl++; KillSide(dir, "no live level on this side"); return; }
 
    int dg   = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double lvl = NormalizeDouble(raw, dg);
 
-   if(InpArmOncePerLvl && LevelUsed(lvl)) return;
+   if(InpArmOncePerLvl && LevelUsed(lvl)) { g_lqUsed++; return; }
 
    // already resting at this exact level for this exact zone: leave it alone.
    // Re-sending it every bar would churn the order book and reset its age.
@@ -1774,7 +1808,7 @@ void ArmSide(int dir)
    }
    double stop = NormalizeDouble(lvl - dir * stopDist, dg);
    double risk = (lvl - stop) * dir;
-   if(risk <= 0.0) return;
+   if(risk <= 0.0) { g_lqRisk++; return; }
    // E-106: with the uncapped exit there is no broker TP at all - the trade is
    // closed by the ratcheting give-back stop in ManageOpen(). A TP and an
    // uncapped run are contradictory instructions, so only one may be live.
@@ -1826,6 +1860,7 @@ void ArmSide(int dir)
                         ORDER_TIME_GTC, 0, "LQS toptick");
    if(ok)
    {
+      g_lqArmed++;
       if(dir > 0) { g_tkBuy = trade.ResultOrder();  g_lvlBuy = lvl;  g_barBuy = barNo; }
       else        { g_tkSell = trade.ResultOrder(); g_lvlSell = lvl; g_barSell = barNo; }
       // what the market cost at the moment we decided. Everything the resting
@@ -2476,9 +2511,14 @@ void OnTick()
 {
    // THE FIRM'S CLOCK, not the broker's midnight. FundedDayStamp() offsets by
    // the preset's reset hour, so the baseline lands where the firm puts it.
+   // The arm ledger: every 15 minutes, and once at each day rollover.
+   static datetime lqLast = 0;
+   if(TimeCurrent() - lqLast >= 900) { lqLast = TimeCurrent(); LqLedger(false); }
+
    int ds = FundedDayStamp();
    if(ds != g_dayStamp)
    {
+      LqLedger(true);
       if(g_tradesToday > 0) g_daysTraded++;
       g_dayStamp     = ds;
       g_dayStartEq   = AccountInfoDouble(ACCOUNT_EQUITY);
