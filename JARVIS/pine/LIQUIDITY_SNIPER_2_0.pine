@@ -188,7 +188,8 @@ smcWait   = input.int(20, "CHoCH must arrive within N bars", group = gSMC, minva
 smcMode   = input.string("Limit at the order block", "Entry", group = gSMC,
      options = ["Limit at the order block", "Market on the CHoCH"],
      tooltip = "LIMIT is the better price and misses the setups that never come back. MARKET never misses and pays more. E-177 measured this trade-off on the SuperTrend entry: every pullback distance was worse than paying the market, and the miss rate ran 14-48%.")
-smcStopBuf = input.float(0.20, "Stop beyond the sweep extreme (ATR)", group = gSMC, step = 0.05)
+smcStopBuf = input.float(0.20, "Stop beyond the sweep extreme (ATR)", group = gSMC, step = 0.05,
+     tooltip = "E-194 WARNING ABOUT THE TARGET THIS ENTRY DRAWS. The same sweep signal was booked with three take-profits and three partials - the structure Veer says he trades - across four stop buffers and six ladders, pooled over nine clocks, n=2300-2700 per cell. ALL 24 GEOMETRIES LOST, and the pattern says why: the closer the ladder, the higher the banked % and the WORSE the expectancy (0.3/0.6/1.2 ATR banked 77% and lost 0.094 ATR a trade). That is a driftless walk paying a spread.\n\nThe same entry with a GIVE-BACK TRAIL and no target at all was positive (+0.22 ATR/trade, t=2.50, 34% win rate). A leg-start signal knows DIRECTION, not DISTANCE, and a fixed target throws away the tail that pays for the losers.\n\nSo the TP line this entry draws is a level, not a plan. Read it as where the opposing liquidity sits.")
 smcLife   = input.int(30, "Cancel an untouched order block after N bars", group = gSMC, minval = 1)
 
 gSH = "1a · SHIFT  (the reversal mark, the ribbon, the zone)"
@@ -207,11 +208,11 @@ gSH = "1a · SHIFT  (the reversal mark, the ribbon, the zone)"
 // same thing rendered twice.
 showShift = input.bool(true, "SHIFT label at the reversal", group = gSH,
      tooltip = "The screenshot's headline mark. It prints on a CONFIRMED close, never a wick, so it cannot repaint and it is never taken away once printed.")
-shiftQual = input.string("sweep + all 3 agree", "A SHIFT is", group = gSH,
-     options = ["sweep + all 3 agree", "sweep + 2 of 3 agree",
-     "sweep + rejection wick", "the sweep alone", "sweep then CHoCH",
-     "every change of character"],
-     tooltip = "E-193 MEASURED ALL SIX. Lift is against a time-shifted copy of the same series - identical shape and frequency, timing destroyed - on five samples: 1h 2024-2026, 15m 2026, and M15/M5/M1 2018. Above 1.0 beats the control, below 1.0 is worse than random.\n\n  sweep + all 3 agree      1.82  2.15  1.82  2.31  2.80   ~5-7 per 1000 bars\n  sweep + rejection wick   1.58  1.81  1.82  2.17  2.30   ~17-22\n  sweep + 2 of 3           1.49  1.51  1.67  1.72  2.24   ~32-37\n  the sweep alone          1.30  1.37  1.45  1.47  1.87   ~90-104\n  sweep then CHoCH         0.10  0.31  0.33  0.40  0.52\n  every CHoCH              0.14  0.25  0.32  0.36  0.44\n\nREAD THE BOTTOM TWO ROWS. Waiting for the change of character does not filter the sweep, it DESTROYS it - on every sample, 2018 and 2026, M1 to 4h. That is not a surprise once said out loud: structure can only break after price has already moved, so by the time it breaks the leg has started without you. It is what 'caught the pullback' looks like when you measure it.\n\nThe three that agree are E-184's own top scorers, all read on the sweep bar itself: stretched from the 50 EMA, a 60% rejection wick, and the discount/premium half of the last 60 bars. They must agree with the SWEEP's direction, not with each other.\n\nThis is a claim about where legs BEGIN. It is NOT a claim about money - E-186 measured leg starts and trade survival as different events.")
+shiftQual = input.string("AUTO — by timeframe", "A SHIFT is", group = gSH,
+     options = ["AUTO — by timeframe", "sweep + all 3 agree",
+     "sweep + 2 of 3 agree", "sweep + rejection wick", "the sweep alone",
+     "sweep then CHoCH", "every change of character"],
+     tooltip = "E-193 MEASURED ALL SIX. Lift is against a time-shifted copy of the same series - identical shape and frequency, timing destroyed - on five samples: 1h 2024-2026, 15m 2026, and M15/M5/M1 2018. Above 1.0 beats the control, below 1.0 is worse than random.\n\n  sweep + all 3 agree      1.82  2.15  1.82  2.31  2.80   ~5-7 per 1000 bars\n  sweep + rejection wick   1.58  1.81  1.82  2.17  2.30   ~17-22\n  sweep + 2 of 3           1.49  1.51  1.67  1.72  2.24   ~32-37\n  the sweep alone          1.30  1.37  1.45  1.47  1.87   ~90-104\n  sweep then CHoCH         0.10  0.31  0.33  0.40  0.52\n  every CHoCH              0.14  0.25  0.32  0.36  0.44\n\nREAD THE BOTTOM TWO ROWS. Waiting for the change of character does not filter the sweep, it DESTROYS it - on every sample, 2018 and 2026, M1 to 4h. That is not a surprise once said out loud: structure can only break after price has already moved, so by the time it breaks the leg has started without you. It is what 'caught the pullback' looks like when you measure it.\n\nThe three that agree are E-184's own top scorers, all read on the sweep bar itself: stretched from the 50 EMA, a 60% rejection wick, and the discount/premium half of the last 60 bars. They must agree with the SWEEP's direction, not with each other.\n\nAUTO is the default and is what makes this work on any chart without retuning. E-194: the gate is a rate per BAR and a trade is a rate per DAY, and a day is 1440 M1 bars but six 4-hour ones. Holding 3-of-3 everywhere gave 986 SHIFTs on M1 and SEVEN on 4h - nothing to trade on the slow clocks. So AUTO loosens the gate as the clock slows: 3 up to M5, 2 up to M30, 1 up to H2, then the sweep alone. It is fitted to the TRADE COUNT, which is a property of the clock, and never to the returns.\n\nThis is a claim about where legs BEGIN. It is NOT a claim about money - E-186 measured leg starts and trade survival as different events, and E-194 measured this signal with three fixed take-profits and it LOST on every geometry tried.")
 shiftBig  = input.bool(true, "Big label", group = gSH,
      tooltip = "Off makes it a small tag. On M1 with the sweep requirement there are few enough that big is readable.")
 showRibbon = input.bool(true, "Trend ribbon", group = gSH,
@@ -1383,7 +1384,26 @@ shAgree = swDir == 0 ? 0
      : (lcStr == swDir ? 1 : 0) + (lcWick == swDir ? 1 : 0)
       + (lcPrem == swDir ? 1 : 0)
 
-shiftRaw = shiftQual == "sweep + all 3 agree" ? (swDir != 0 and shAgree >= 3 ? swDir : 0)
+// AUTO. Veer: "on any timeframe we should catch the trade". E-194 measured
+// trades per DAY at each gate on nine clocks, and the answer is that the gate
+// has to loosen as the clock slows or the slow charts have nothing on them:
+//
+//   clock   need=3   need=2   need=1   need=0    trades/day
+//   M1         5.9     30.3     49.6     84.3
+//   M5         1.3      6.2     10.7     18.0
+//   M15        0.3      2.0      3.6      6.1
+//   M30        0.2      1.0      1.6      3.1
+//   1h         0.1      0.6      1.0      1.6
+//   4h        0.02      0.1      0.2      0.3
+//
+// The rule below is the strictest gate that still gives roughly 1-8 trades a
+// day on that clock. It is fitted to the COUNT, never to the returns.
+tfSec = timeframe.in_seconds()
+shNeedAuto = tfSec <= 300 ? 3 : tfSec <= 1800 ? 2 : tfSec <= 7200 ? 1 : 0
+
+shiftRaw = shiftQual == "AUTO — by timeframe"
+     ? (swDir != 0 and shAgree >= shNeedAuto ? swDir : 0)
+     : shiftQual == "sweep + all 3 agree" ? (swDir != 0 and shAgree >= 3 ? swDir : 0)
      : shiftQual == "sweep + 2 of 3 agree" ? (swDir != 0 and shAgree >= 2 ? swDir : 0)
      : shiftQual == "sweep + rejection wick" ? (swDir != 0 and lcWick == swDir ? swDir : 0)
      : shiftQual == "the sweep alone" ? swDir
@@ -2213,9 +2233,11 @@ if barstate.islast and showPanel
     if showShift
         f_row(r, "SHIFT",
                  shiftDir == 0 ? "none yet" : shiftDir > 0 ? "UP" : "DOWN",
-                 na(shiftBar) ? "-"
-                     : str.tostring(bar_index - shiftBar) + " bars ago   "
-                       + str.tostring(nShiftDay) + " today",
+                 (na(shiftBar) ? "none"
+                     : str.tostring(bar_index - shiftBar) + " bars ago")
+                     + "   " + str.tostring(nShiftDay) + " today   gate "
+                     + (shiftQual == "AUTO — by timeframe"
+                      ? str.tostring(shNeedAuto) + "/3 auto" : "manual"),
                  shiftDir == 0 ? cVal : shiftDir > 0 ? cPos : cNeg)
         r += 1
     // THE TREND STACK. Veer's own model: "a m15 changes from m5 which changes
