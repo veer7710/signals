@@ -9010,3 +9010,113 @@ now documented at the input and countable in the ledger.
 **LESSON: a fix to a latent bug can activate a worse one. The staleness bug was
 masking a guard that makes the product unusable, and I shipped the unmasking
 without asking what the guard would then do.**
+
+---
+
+## E-193 — THE SHIFT. THE CHANGE OF CHARACTER IS THE WORST BAR TO MARK, AND I SHIPPED IT AS THE DEFAULT FIRST.
+
+**Status: SUPPORTED** (replicated on five samples spanning 2018–2026 and M1→4h;
+it is a claim about where legs BEGIN, not about money).
+
+Veer sent a screenshot of someone's indicator — big red/green **SHIFT** labels
+at reversals, a coloured trend ribbon, blue zone boxes — and said: *"someone
+made this with claude catching massive moves based of reversals and fvg ifvg
+that kinda stuff but i wanna make the same thing just include smc and liquidity
+yk if we perfect an indicator then we can do funded accounts dude"*.
+
+### What I built first, and why it was wrong
+
+The obvious reading: a SHIFT is the **change of character**, so put a big label
+on every CHoCH that followed a liquidity sweep. That is step 2 of the SMC entry
+already in `LIQUIDITY_SNIPER_2_0.pine`, so the picture and the trade could not
+disagree. I built it, all eight checks passed, and it was ready to send.
+
+Then I measured it, with E-184's method unchanged — one question, *does this bar
+mark the START of a leg?*, scored as **lift against a time-shifted copy of the
+same series** so shape and frequency are identical and only timing is destroyed.
+
+```
+                        1h 24-26   15m 2026   M15 2018    M5 2018    M1 2018
+  every CHoCH               0.14       0.25       0.43       0.36       0.32
+  sweep then CHoCH          0.10       0.48       0.52       0.31       0.33
+  the sweep alone           1.30       1.87       1.47       1.45       1.37
+```
+
+**A change of character marks a bar two to ten times LESS likely to begin a leg
+than a random one.** On every sample. Requiring a liquidity sweep first does not
+rescue it. The thing I was about to make the headline mark of the indicator is
+worse than a coin flip, and it is worse in the same way on 2018 M1 and on 2026
+15m, which rules out regime.
+
+It is also not new. **E-184 already had BOS at 0.55–0.61** and wrote the reason
+down — *"fires in the MIDDLE of a leg, once the move is already running"* — and
+then nobody carried it through to CHoCH, which is the same object. Structure can
+only break **after** price has moved. A mark on the break is a mark on a move you
+have already missed. That is exactly Veer's complaint from two sessions ago:
+*"pullbacks were caught as a signal"*.
+
+### What the mark actually is
+
+The **sweep** — a pool of equal highs/lows run by 0.05 ATR and then **closed back
+inside**. 1.30–1.87 on all five samples. But it fires on ~9% of bars (90–104 per
+1000), which is ~130 labels a day on M1 and is not an indicator, it is wallpaper.
+
+So: which gate makes it rarer without making it worse? The gates are E-184's own
+top scorers, all read **on the sweep bar itself** and all required to agree with
+the **sweep's** direction: stretched ≥1.5 ATR from the 50 EMA, a ≥60% rejection
+wick, and the discount/premium third of the last 60 bars.
+
+```
+  LIFT                     1h 24-26   15m 2026   M15 2018    M5 2018    M1 2018
+  sweep                        1.30       1.87       1.47       1.45       1.37
+  sweep + stretched            1.42       1.73       1.74       1.64       1.50
+  sweep + 2 of 3               1.51       2.24       1.67       1.72       1.49
+  sweep + rejection wick       1.58       2.30       1.82       2.17       1.81
+  sweep + ALL 3                2.31       2.80       1.82       2.15       1.87
+
+  FIRES PER 1000 BARS
+  sweep                       103.6       95.5       98.9       96.6       90.4
+  sweep + rejection wick       22.1       17.6       18.6       18.9       17.2
+  sweep + ALL 3                 4.9        6.8        5.3        7.0        6.3
+```
+
+**sweep + all 3** is the default: 1.82–2.80 lift, 5–7 fires per 1000 bars, which
+on M1 is about **nine a day** — the density in the screenshot Veer sent. It never
+drops below 1.82 and it never drops below its control. `sweep + rejection wick`
+is the looser setting for anyone who wants three times the marks at 1.58–2.30.
+
+One negative worth recording: **"sweep of an EQUAL pool"** — requiring the two
+swings to be within 0.10 ATR — scored **0.87** on 1h. E-184 had equal-highs-taken
+at 1.30–1.42 and it does *not* hold as a standalone strictness knob.
+
+### What changed in the file
+
+`LIQUIDITY_SNIPER_2_0.pine`: the SHIFT label fires on the **sweep**, not the
+CHoCH. `shiftQual` keeps all six options with the measured lift for each written
+into the tooltip, including the two that lose, so the losing setting is visible
+rather than deleted. The zone box is now **the sweep itself** — wick tip back to
+the pool — and it dies on a *close* beyond the far edge, which is a real
+invalidation you can see. The ribbon is coloured by the last SHIFT and claims
+nothing; its shape is two EMAs.
+
+**The SMC entry chain is untouched.** SHIFT is the turn, `sigSmcB`/`sigSmcS` is
+the confirmation, and they are now deliberately different bars.
+
+### Two compile-breakers found on the way
+
+`sigSmcB` and `sigSmcS`, shipped last commit, had their `and barstate.isconfirmed`
+continuation indented **8 spaces**. Four spaces means a block in Pine, so that is
+"end of line without line continuation" on the line above — the file could not
+have compiled. `check_pine.py` skipped them because `check_continuation()` had a
+**bracket exemption**: it ignored any line inside an unclosed `(` on the belief
+that Pine ignores indentation there, a belief never tested against a TradingView
+compile. Dropping the exemption flags **zero** lines across all three Pine files,
+so it was buying nothing and risking a compile error. It is gone.
+
+**LESSON: I built the whole visual layer on the obvious reading, and the obvious
+reading was the single worst of the six options measured. The screenshot said
+"reversals"; I heard "change of character" because that is what the file already
+computed. Build it, then measure it, then ship what measured — in that order,
+every time.**
+
+`JARVIS/research/shift.py` reproduces every number above.

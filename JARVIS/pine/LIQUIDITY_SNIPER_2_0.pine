@@ -191,6 +191,38 @@ smcMode   = input.string("Limit at the order block", "Entry", group = gSMC,
 smcStopBuf = input.float(0.20, "Stop beyond the sweep extreme (ATR)", group = gSMC, step = 0.05)
 smcLife   = input.int(30, "Cancel an untouched order block after N bars", group = gSMC, minval = 1)
 
+gSH = "1a · SHIFT  (the reversal mark, the ribbon, the zone)"
+// Veer sent a screenshot of an indicator that marks reversals with a big SHIFT
+// label, runs a coloured ribbon behind price and drops zone boxes: "i wanna
+// make the same thing just include smc and liquidity yk".
+//
+// The one thing that layer must NOT be is a second, unrelated model bolted on
+// for looks. So it is driven entirely by what this file already computes. A
+// SHIFT is not a new signal - it is the change of character in step 2 of the
+// SMC entry above, drawn loudly. The ribbon is coloured by that same structure
+// state. The zone is the discount half of the leg the shift left behind, which
+// is where the limit entry sits.
+//
+// Which means the picture and the trade cannot disagree, because they are the
+// same thing rendered twice.
+showShift = input.bool(true, "SHIFT label at the reversal", group = gSH,
+     tooltip = "The screenshot's headline mark. It prints on a CONFIRMED close, never a wick, so it cannot repaint and it is never taken away once printed.")
+shiftQual = input.string("sweep + all 3 agree", "A SHIFT is", group = gSH,
+     options = ["sweep + all 3 agree", "sweep + 2 of 3 agree",
+     "sweep + rejection wick", "the sweep alone", "sweep then CHoCH",
+     "every change of character"],
+     tooltip = "E-193 MEASURED ALL SIX. Lift is against a time-shifted copy of the same series - identical shape and frequency, timing destroyed - on five samples: 1h 2024-2026, 15m 2026, and M15/M5/M1 2018. Above 1.0 beats the control, below 1.0 is worse than random.\n\n  sweep + all 3 agree      1.82  2.15  1.82  2.31  2.80   ~5-7 per 1000 bars\n  sweep + rejection wick   1.58  1.81  1.82  2.17  2.30   ~17-22\n  sweep + 2 of 3           1.49  1.51  1.67  1.72  2.24   ~32-37\n  the sweep alone          1.30  1.37  1.45  1.47  1.87   ~90-104\n  sweep then CHoCH         0.10  0.31  0.33  0.40  0.52\n  every CHoCH              0.14  0.25  0.32  0.36  0.44\n\nREAD THE BOTTOM TWO ROWS. Waiting for the change of character does not filter the sweep, it DESTROYS it - on every sample, 2018 and 2026, M1 to 4h. That is not a surprise once said out loud: structure can only break after price has already moved, so by the time it breaks the leg has started without you. It is what 'caught the pullback' looks like when you measure it.\n\nThe three that agree are E-184's own top scorers, all read on the sweep bar itself: stretched from the 50 EMA, a 60% rejection wick, and the discount/premium half of the last 60 bars. They must agree with the SWEEP's direction, not with each other.\n\nThis is a claim about where legs BEGIN. It is NOT a claim about money - E-186 measured leg starts and trade survival as different events.")
+shiftBig  = input.bool(true, "Big label", group = gSH,
+     tooltip = "Off makes it a small tag. On M1 with the sweep requirement there are few enough that big is readable.")
+showRibbon = input.bool(true, "Trend ribbon", group = gSH,
+     tooltip = "The band behind price. Its SHAPE is a smoothed price envelope - two EMAs, nothing predictive. Its COLOUR is the structure state set by the last SHIFT. It is a read of where you are, not a signal; nothing in this file trades off it.")
+ribLen    = input.int(21, "Ribbon length", group = gSH, minval = 2)
+showShiftZone = input.bool(true, "Shift zones", group = gSH,
+     tooltip = "The box the shift leaves behind: the lower half of the up-leg after a bullish shift, the upper half of the down-leg after a bearish one - discount and premium. It keeps extending right until price trades back into it, then it goes dotted and stops. That tap is the limit entry the SMC model is waiting for.")
+shiftZoneN = input.int(6, "Zones to keep on the chart", group = gSH, minval = 1, maxval = 40)
+cShUp = input.color(#00E676, "Shift up",   group = gSH, inline = "sh1")
+cShDn = input.color(#FF1744, "Shift down", group = gSH, inline = "sh1")
+
 gLC = "1b · LEG CATCHER  (E-184 — the only thing measured to mark leg STARTS)"
 useLegCatch = input.bool(true, "Leg catcher signals", group = gLC,
      tooltip = "E-184 scored every ICT/SMC concept on ONE question - does it mark the START of a leg (pivot to pivot, 2+ ATR)? - against a time-shifted copy of itself, on four samples including 157,051 M1 bars.\n\nWORST on every sample: FVG 0.34-0.37, displacement 0.45-0.57, BOS 0.55-0.61. An FVG marks a bar about THREE TIMES LESS likely to begin a leg than a random one. All three fire in the MIDDLE of a leg, once the move is already running - which is why they read as 'caught the pullback'.\n\nFLAT: the liquidity sweep, 0.93-1.04. It does not mark a leg start at all.\n\nBEST: stretched from the mean 1.23-1.34, premium/discount 1.14-1.23, equal highs/lows taken 1.30-1.42, rejection wick 1.07-1.19, volume 1.17. Stacked they compound: 1.23 -> 1.32 -> 1.53 -> 2.18 as more agree, and out of sample the ladder reproduces almost exactly (first half 1.22/1.33/1.48/1.94, second 1.22/1.31/1.50/2.19).\n\nThis marks where moves BEGIN. It is not a claim that it makes money - the stop, the target and the cost are separate questions and are not settled.")
@@ -1299,14 +1331,127 @@ if not na(smcSellB) and bar_index - smcSellB > smcLife
 // ---- THE FILL
 sigSmcB = smcMode == "Market on the CHoCH" ? smcBuyRaw
      : (not na(smcBuyB) and bar_index > smcBuyB and low <= smcBuyPx
-        and barstate.isconfirmed)
+      and barstate.isconfirmed)
 sigSmcS = smcMode == "Market on the CHoCH" ? smcSellRaw
      : (not na(smcSellB) and bar_index > smcSellB and high >= smcSellPx
-        and barstate.isconfirmed)
+      and barstate.isconfirmed)
 if sigSmcB
     smcBuyB := na
 if sigSmcS
     smcSellB := na
+
+// ============================== THE SHIFT ==================================
+// The visual layer from Veer's screenshot, built out of this file's own model
+// rather than beside it.
+//
+// It was built first as step 2 of the SMC entry - a big label on the change of
+// character - because that is the obvious reading of the screenshot. Then it
+// was measured, and the measurement said no.
+//
+// E-193: a CHoCH marks a bar 2 to 10 times LESS likely to begin a leg than a
+// random bar (lift 0.14-0.44 on five samples, 2018 to 2026, M1 to 4h). Making
+// it wait for a liquidity sweep first does not rescue it - 0.10-0.52. It is
+// the same finding E-184 already had for BOS at 0.55-0.61 and never followed
+// through on: structure breaks AFTER the move, so a mark on the break is a
+// mark on a move you have already missed.
+//
+// The SWEEP is the mark. 1.30-1.87 on the same five samples, and 1.82-2.80
+// when E-184's three best reads agree with it on the same bar.
+//
+// So the label goes on the sweep, and the SMC entry above is left exactly as
+// it was - they are now two different events on purpose, and the chart shows
+// both so Veer can see the turn and the confirmation separately.
+//
+// Everything here reads only confirmed closes. smcSwpHi/smcSwpLo carry
+// barstate.isconfirmed and lcStr/lcWick/lcPrem are read on the sweep bar
+// itself. Nothing in this block can repaint, and nothing in it is ever
+// deleted once printed.
+
+// ---- 1. WHAT COUNTS AS A SHIFT. E-193, in one line: the SWEEP is the mark,
+//         and every extra structural condition laid on top of it makes it
+//         worse, not better. The sweep alone runs 1.30-1.87 lift on five
+//         samples. Waiting for the change of character after it drops that to
+//         0.10-0.52 - BELOW its own control, on every sample - because a break
+//         of structure can only happen after price has already moved.
+//
+//         What DOES sharpen it is agreement on the sweep bar itself, from
+//         E-184's three top-scoring reads. 3 of 3 puts lift at 1.82-2.80 and
+//         fires 5-7 times per 1000 bars: about nine a day on M1, which is the
+//         density in the screenshot Veer sent.
+swDir = smcSwpLo ? 1 : smcSwpHi ? -1 : 0
+shAgree = swDir == 0 ? 0
+     : (lcStr == swDir ? 1 : 0) + (lcWick == swDir ? 1 : 0)
+      + (lcPrem == swDir ? 1 : 0)
+
+shiftRaw = shiftQual == "sweep + all 3 agree" ? (swDir != 0 and shAgree >= 3 ? swDir : 0)
+     : shiftQual == "sweep + 2 of 3 agree" ? (swDir != 0 and shAgree >= 2 ? swDir : 0)
+     : shiftQual == "sweep + rejection wick" ? (swDir != 0 and lcWick == swDir ? swDir : 0)
+     : shiftQual == "the sweep alone" ? swDir
+     : shiftQual == "sweep then CHoCH"
+      ? ((not na(swpLoB) and chochUp and bar_index - swpLoB <= smcWait) ? 1
+         : (not na(swpHiB) and chochDn and bar_index - swpHiB <= smcWait) ? -1 : 0)
+     : (chochUp ? 1 : chochDn ? -1 : 0)
+
+shiftUp = shiftRaw > 0
+shiftDn = shiftRaw < 0
+
+var int shiftDir = 0
+var int shiftBar = na
+var int nShiftDay = 0
+if newDay
+    nShiftDay := 0
+if shiftUp
+    shiftDir := 1
+    shiftBar := bar_index
+if shiftDn
+    shiftDir := -1
+    shiftBar := bar_index
+if shiftUp or shiftDn
+    nShiftDay += 1
+
+// ---- 2. THE ZONE. Not the leg - the leg has not happened yet, which is the
+//         entire point of marking the turn instead of the break. The zone is
+//         THE SWEEP ITSELF: from the wick that ran the stops back to the pool
+//         it ran. Price closing beyond the far edge of that box says the run
+//         was real and the reversal was not, so the box stops there and goes
+//         dotted. It is an invalidation line you can see, not a target.
+var array<box> shBx   = array.new<box>()
+var array<int> shLive = array.new<int>()
+var array<int> shSide = array.new<int>()
+
+if showShiftZone and (shiftUp or shiftDn)
+    zLo = shiftUp ? low : nz(poolHiPx, close)
+    zHi = shiftUp ? nz(poolLoPx, close) : high
+    if zHi > zLo
+        zcol = shiftUp ? cShUp : cShDn
+        array.push(shBx, box.new(bar_index, zHi, bar_index + 1, zLo,
+             border_color = color.new(zcol, 45), border_width = 1,
+             bgcolor = color.new(zcol, 88)))
+        array.push(shLive, 1)
+        array.push(shSide, shiftUp ? 1 : -1)
+
+// the drop count is taken BEFORE the loop - array.size() changes on every
+// shift, and a bound that re-reads it would trim the wrong number of boxes
+nDrop = math.max(array.size(shBx) - shiftZoneN, 0)
+if nDrop > 0
+    for i = 1 to nDrop
+        box.delete(array.shift(shBx))
+        dropLive = array.shift(shLive)
+        dropSide = array.shift(shSide)
+
+if array.size(shBx) > 0
+    for i = 0 to array.size(shBx) - 1
+        if array.get(shLive, i) == 1
+            bx = array.get(shBx, i)
+            box.set_right(bx, bar_index + 1)
+            // a CLOSE beyond the far edge, and only on a later bar - the bar
+            // that made the box closed back inside the pool by definition
+            dead = bar_index > box.get_left(bx) and barstate.isconfirmed
+                 and (array.get(shSide, i) > 0 ? close < box.get_bottom(bx)
+                      : close > box.get_top(bx))
+            if dead
+                array.set(shLive, i, 0)
+                box.set_border_style(bx, line.style_dotted)
 
 sigSweepB = useSweep and sessOk and fillB and gradeOk
 sigSweepS = useSweep and sessOk and fillS and gradeOk
@@ -1829,6 +1974,35 @@ if posDir != 0 and showLive and not na(pEnt)
 // Veer: "we need clear levels like smc idniactor amrekd out". The level is a
 // fact about price; whether a simulated trade is open is not a reason to take
 // it off his chart, and `posDir == 0` here used to do exactly that.
+// THE RIBBON. Shape is a smoothed price envelope and claims nothing. Colour is
+// the structure state set by the last SHIFT, so the band behind price says
+// which side the model is on without adding a signal to the chart. Drawn first
+// so the marks below sit on top of it.
+ribCol = shiftDir > 0 ? cShUp : shiftDir < 0 ? cShDn : color.new(color.gray, 0)
+ribF = ta.ema(hl2, ribLen)
+ribS = ta.ema(hl2, ribLen * 2)
+pRibF = plot(showRibbon ? ribF : na, "Ribbon (fast)",
+     color = color.new(ribCol, 35), linewidth = 2)
+pRibS = plot(showRibbon ? ribS : na, "Ribbon (slow)",
+     color = color.new(ribCol, 70), linewidth = 1)
+fill(pRibF, pRibS, color = color.new(ribCol, 86), title = "Ribbon")
+
+// THE SHIFT MARK. plotshape, so it is on the bar forever - Veer's rule that a
+// printed signal is never taken away. Two calls per side because plotshape's
+// size argument has to be a compile-time constant.
+plotshape(showShift and shiftBig and shiftUp, "SHIFT up", shape.labelup,
+     location.belowbar, color = cShUp, text = "SHIFT",
+     textcolor = color.white, size = size.large)
+plotshape(showShift and shiftBig and shiftDn, "SHIFT down", shape.labeldown,
+     location.abovebar, color = cShDn, text = "SHIFT",
+     textcolor = color.white, size = size.large)
+plotshape(showShift and not shiftBig and shiftUp, "SHIFT up (small)",
+     shape.labelup, location.belowbar, color = cShUp, text = "SHIFT",
+     textcolor = color.white, size = size.tiny)
+plotshape(showShift and not shiftBig and shiftDn, "SHIFT down (small)",
+     shape.labeldown, location.abovebar, color = cShDn, text = "SHIFT",
+     textcolor = color.white, size = size.tiny)
+
 plot(showLvl and not na(poolHiPx) ? poolHiPx : na, "Buyside liquidity",
      color = color.new(cSell, 40), style = plot.style_linebr, linewidth = 2)
 plot(showLvl and not na(poolLoPx) ? poolLoPx : na, "Sellside liquidity",
@@ -1843,9 +2017,15 @@ plot(showLvl and not na(lvlB) ? lvlB : na, "Buy-side level",
 // Nothing is deleted - Veer: "make sure like signals dont disappear".
 // THE SMC ENTRY — this file's primary signal. Big labels, because this is the
 // one Veer trades; the sweep and leg marks below are smaller on purpose.
-plotshape(sigSmcB, "SMC BUY", shape.labelup, location.belowbar, color = cBuy,
+// SHIFT is the turn, this is the confirmation, and they are different bars by
+// construction now (E-193) - the sweep first, the entry after. The guard is
+// only here so that on the rare bar where both land, one label prints instead
+// of two stacked on top of each other.
+plotshape(sigSmcB and not (showShift and shiftUp), "SMC BUY", shape.labelup,
+     location.belowbar, color = cBuy,
      text = "BUY", textcolor = color.white, size = size.normal)
-plotshape(sigSmcS, "SMC SELL", shape.labeldown, location.abovebar, color = cSell,
+plotshape(sigSmcS and not (showShift and shiftDn), "SMC SELL", shape.labeldown,
+     location.abovebar, color = cSell,
      text = "SELL", textcolor = color.white, size = size.normal)
 // where the liquidity actually got taken - the bar the stops came out
 plotshape(smcSwpLo, "sellside taken", shape.xcross, location.belowbar,
@@ -1856,9 +2036,14 @@ plotshape(smcSwpHi, "buyside taken", shape.xcross, location.abovebar,
 // THE LEG CATCHER'S OWN MARKS. Deliberately a different shape from the sweep
 // so the two can be told apart on the chart and judged separately - E-184 says
 // they are measuring completely different things.
-plotshape(sigLegB, "LEG BUY", shape.arrowup, location.belowbar,
+// A SHIFT at 3-of-3 is the leg catcher's own stack anchored on a sweep, so on
+// many bars these two fire together. Drop the arrow when the SHIFT label is
+// already there saying the same thing.
+plotshape(sigLegB and not (showShift and shiftUp), "LEG BUY", shape.arrowup,
+     location.belowbar,
      color = cBuy, text = "LEG", textcolor = color.white, size = size.small)
-plotshape(sigLegS, "LEG SELL", shape.arrowdown, location.abovebar,
+plotshape(sigLegS and not (showShift and shiftDn), "LEG SELL", shape.arrowdown,
+     location.abovebar,
      color = cSell, text = "LEG", textcolor = color.white, size = size.small)
 
 plotshape(sigSweepB and (not htfDim or withB), "BUY  sweep",
@@ -1935,6 +2120,7 @@ if barstate.islast and showPanel
          + 4                                   // today / if traded / trades / win
          + (showSplit ? 1 + nSigOn : 0)         // -- which signal is paying --
          + 2                                   // cost paid / enter by
+         + (showShift ? 1 : 0)                  // the SHIFT row
          + (showCheck ? 5 : 0)                  // -- checklist -- + 4 grade rows
          + (showHour ? 1 : 0)                   // this hour
          + (mtfOn ? 1 : 0)                      // trend stack
@@ -2020,6 +2206,18 @@ if barstate.islast and showPanel
              posDir == 0 ? "flat" : f_num(chasePts, "0.0") + "pt of chase left",
              posDir == 0 ? cVal : (chasePts > 0 ? cPos : cNeg))
     r += 1
+    // THE SHIFT ROW. E-193: this is the mark with the measured lift, so the
+    // panel says which way it last pointed, how long ago, and how many have
+    // printed today - so a screenshot of the panel answers "is it firing?"
+    // without counting labels on the chart.
+    if showShift
+        f_row(r, "SHIFT",
+                 shiftDir == 0 ? "none yet" : shiftDir > 0 ? "UP" : "DOWN",
+                 na(shiftBar) ? "-"
+                     : str.tostring(bar_index - shiftBar) + " bars ago   "
+                       + str.tostring(nShiftDay) + " today",
+                 shiftDir == 0 ? cVal : shiftDir > 0 ? cPos : cNeg)
+        r += 1
     // THE TREND STACK. Veer's own model: "a m15 changes from m5 which changes
     // from m1" - the lower clock makes the new trend first, so an H1 downtrend
     // is where the M15 buy lives. Four directions, one row, no interpretation
@@ -2121,6 +2319,7 @@ if barstate.islast and showPanel
                              : f_ccy(posDir * (close - posEntry)), cVal)
 
 plot(posDir, "Position (1 long, -1 short)", display = display.status_line)
+plot(shiftDir, "Shift (1 up, -1 down)", display = display.status_line)
 plot(posSrc, "Source (1 sweep, 2 B+R, 3 OB)", display = display.status_line)
 plot(posDir != 0 ? posEntry : na, "Entry", display = display.status_line)
 plot(atr, "ATR(14)", display = display.status_line)
@@ -2160,6 +2359,8 @@ if barstate.islast and showLive
              style = label.style_label_left, size = size.small,
              color = color.new(chart.bg_color, 90), textcolor = cc)
 
+alertcondition(shiftUp, "SHIFT up",   "SHIFT UP {{ticker}} {{interval}} {{close}}")
+alertcondition(shiftDn, "SHIFT down", "SHIFT DOWN {{ticker}} {{interval}} {{close}}")
 alertcondition(sigSmcB, "SMC BUY",  "SMC BUY {{ticker}} {{interval}}")
 alertcondition(sigSmcS, "SMC SELL", "SMC SELL {{ticker}} {{interval}}")
 alertcondition(smcSwpLo, "Sellside taken", "Sellside liquidity taken")

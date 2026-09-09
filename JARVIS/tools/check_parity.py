@@ -84,6 +84,19 @@ PINE_ONLY = {
     "smcMode": "SMC entry, Pine only",
     "smcStopBuf": "SMC entry, Pine only",
     "smcLife": "SMC entry, Pine only",
+    # THE SHIFT LAYER IS A RENDERING, NOT A SIGNAL. shiftUp/shiftDn are the SMC
+    # entry's own change of character drawn loudly - there is no separate
+    # condition here for the EA to mirror. When SweepSniper grows the SMC chain
+    # it inherits the event; these inputs stay Pine-only forever because the EA
+    # draws nothing.
+    "showShift": "the SHIFT label - drawing only",
+    "shiftQual": "which CHoCH gets a SHIFT label - drawing only, the entry is unchanged",
+    "shiftBig": "SHIFT label size - drawing only",
+    "showRibbon": "the trend ribbon - drawing only, nothing trades off it",
+    "ribLen": "ribbon EMA length - drawing only",
+    "showShiftZone": "the shift zone boxes - drawing only",
+    "shiftZoneN": "how many shift zones to keep - drawing only",
+    "cShUp": "drawing", "cShDn": "drawing",
     "showHour": "E-190 hour readout - panel only, never filters",
     "useLegCatch": "E-184 leg catcher - chart-only until it is measured on money",
     "lcNeed": "leg catcher threshold, chart only",

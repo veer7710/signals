@@ -122,14 +122,24 @@ def check_continuation(src):
     """A continuation line indented by a multiple of 4 reads as a new block, so
     a multi-line boolean silently becomes a statement that does nothing.
 
-    This only applies OUTSIDE brackets. Inside an unclosed ( or [ Pine ignores
-    indentation entirely, so a ternary wrapped across lines inside a function
-    call is fine - flagging those was pure noise."""
+    THE BRACKET EXEMPTION IS GONE. This used to skip any line inside an
+    unclosed ( or [ on the belief that Pine ignores indentation there, and
+    "flagging those was pure noise". That belief was never tested against a
+    TradingView compile, and it let two lines ship in LIQUIDITY_SNIPER at
+    exactly 8 spaces:
+
+        : (not na(smcBuyB) and bar_index > smcBuyB and low <= smcBuyPx
+            and barstate.isconfirmed)
+
+    Dropping the exemption flags ZERO lines across all three Pine files, so
+    the exemption was buying nothing and risking a compile error. Indenting a
+    wrapped line 5 or 6 spaces instead of 8 costs nothing and is safe under
+    either reading of the language."""
     out = []
     depth = 0
     for i, l in enumerate(src, 1):
         code = re.sub(r'"(\\.|[^"\\])*"', '""', strip_comment(l))
-        if depth == 0 and code.strip():
+        if code.strip():
             # ANY operator can start a wrapped line, not just and/or. The
             # version of this check that only looked for and/or/?/: let a
             # `* ccyPerPt` continuation through, and both indicators failed to
