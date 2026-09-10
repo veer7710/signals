@@ -9398,3 +9398,125 @@ a single clock with the tail winsorised, it is real. Nothing short of that.
 Reproduce: `python3 JARVIS/research/shift_trade.py` for the claim; the attack
 scripts are in this entry verbatim and rebuild from `rt.py`'s `trail_book3`
 (trail_book plus honest gap fills).
+
+---
+
+## E-195 — FORTY-FOUR CONCEPTS, A BEST-OF-N NULL, AND THE ANSWER IS THAT LIQUIDITY WORKS AND STRUCTURE DOES NOT
+
+**Status: SUPPORTED** for a short list; **DISPROVEN** for most of the famous
+vocabulary. Reproduce with `python3 JARVIS/research/smc_score.py`.
+
+Veer: *"just build me based of ict smc liquidity concepts so research each and
+check every part of them eg smc has so many diffrent structures or liquidity has
+high resistance low distances sweeps bsl ssl bla bla"*.
+
+Forty-four concepts — E-184's seventeen plus twenty-seven new ones in
+`smc_library.py`: BSL/SSL pools, high- versus low-resistance runs, trendline
+liquidity, previous day/week levels, the Asia range, inducement, protected
+levels, MSS, internal structure, breaker / mitigation / propulsion / rejection
+blocks, IFVG, BPR, volume imbalance, consequent encroachment, the unicorn, the
+killzones, the silver bullet hour, the judas swing, power of 3, liquidity voids
+and SMT divergence against US500.
+
+### THE METHOD CHANGE, WHICH IS THE POINT
+
+E-194-RT killed a result of mine because I searched a 5×5 grid and reported its
+best cell. **Scoring 44 concepts and reporting the best three is the same
+mistake at a larger scale.** So every concept is measured against two bars:
+
+1. **its own time-shifted control** — E-184's test, necessary;
+2. **the BEST-OF-N LINE** — the 95th percentile of the *maximum* lift across all
+   44 when none of them has any edge. Computed exactly, not simulated: with no
+   edge a concept firing `f` times catches Binomial(f, ctrl) legs, so sampling
+   all 44 and taking the max gives the distribution of what an empty library
+   would have reported. It never looks at the data, so it cannot be
+   contaminated by it.
+
+The line lands at **1.24–1.74** depending on the sample. **E-184's own
+endorsement of "equal highs taken at 1.30–1.42" sits below that line on most
+samples.** That endorsement was the best of seventeen and was never controlled
+for being the best of seventeen.
+
+### WHAT CLEARED, AND THEN CLEARED AGAIN OUT OF SAMPLE
+
+Lift by sample; the line for each is in the file's output.
+
+```
+  concept                    15m    30m     1h     4h     M1     M5    M15   clears
+  best-of-N line ->         1.73   1.74   1.63   1.69   1.24   1.64   1.64
+  low-resistance run        2.17   1.68   1.72   2.21   1.75   1.80   1.84     6
+  trendline liquidity run   2.41      -   1.85      -   1.96   2.13   2.63     5
+  liquidity void               -      -   1.82      -   2.00   1.87   2.25     4
+  SMT divergence            1.96   1.54   1.86   1.82      -      -      -     3
+  inducement taken          1.84   1.49   1.26   1.87   1.38   1.48   1.50     3
+  high-resistance run          -      -      -      -   1.96   2.18      -     2
+```
+
+Split each sample in half (E-150) and re-score:
+
+- **trendline liquidity** clears BOTH halves on 1h, M1, M5 and M15.
+- **liquidity void** clears BOTH halves on 1h, M1 and M5.
+- **low-resistance run** clears BOTH halves on M1 and M5, and one half on
+  every other sample; it never scores below 1.30 anywhere.
+- **high-resistance run** clears both halves on M1 (2.10, 2.09) and is too rare
+  to score elsewhere.
+- **SMT divergence** clears both halves on 30m — recent data only, since 2018
+  has no second market in the repo.
+
+**HOW MANY INDEPENDENT SAMPLES IS THAT REALLY?** Three, not seven. E-194-RT
+established that `GOLD_M5_2018` and `GOLD_M15_2018` are *exactly* reproducible
+from `GOLD_M1_2018`, and 15m 2026 sits inside the 1h window. The honest
+grouping is 15m/30m 2026, 1h/4h 2024-26, and the 2018 M1 series. Trendline
+liquidity and liquidity void clear both halves in two of those three groups;
+low-resistance run appears in all three.
+
+### THE GRAVEYARD, and it is most of what gets taught
+
+Below 1.0 means the bar is LESS likely to start a leg than a random bar.
+
+```
+  FVG / imbalance          0.15 - 0.40   on all seven samples
+  protected level broken   0.07 - 0.45
+  propulsion block         0.21 - 0.33
+  MSS + displacement       0.23 - 0.43
+  internal structure break 0.24 - 0.62
+  displacement candle      0.38 - 0.64
+  silver bullet hour       0.32 - 0.84
+  BOS                      0.46 - 0.63
+  London killzone          0.45 - 0.81
+  inside bar               0.71 - 0.80
+  BPR                      0.74 - 1.16
+  unicorn                  0.80 - 1.20
+  order block              0.60 - 1.17
+  IFVG                     0.70 - 1.01
+  breaker block            0.52 - 1.20
+  OTE 0.62-0.79            0.83 - 1.05
+  round number             0.88 - 1.01
+  sweep a swing high/low   0.94 - 1.04   FLAT - and this matters, see below
+```
+
+**The single most useful line in the whole study:** a plain sweep of a swing
+scores **1.0 — nothing**. The same sweep, split by whether the level was
+defended once or three-plus times, scores **1.7–2.2 (low-resistance)** and
+**2.0–2.2 (high-resistance)**. The concept Veer named — *"liquidity has high
+resistance low distances"* — is the discrimination that turns a worthless
+signal into the best one in the library. E-184 scored "the sweep" and called it
+flat; it was flat because two different events had been averaged together.
+
+**And the pattern across the graveyard is not random.** Every *structure*
+concept — BOS, CHoCH, MSS, internal breaks, protected levels, displacement — is
+below 1.0. Every *liquidity* concept that survived is above 1.7. Structure can
+only break after price has already moved, so a mark on the break is a mark on a
+move that started without you. E-193 said this about CHoCH; E-195 says it about
+the entire structural vocabulary.
+
+### WHAT THIS IS NOT
+
+It is a claim about where legs BEGIN. **It is not a claim about money.** E-186
+measured leg-start classification and trade survival as different events, and
+E-194 tried to bridge that gap with an entry, a stop and a target and was
+retracted the same day. Nothing in E-195 has been traded.
+
+**LESSON: the best of N is not a measurement until you know what the best of N
+looks like with nothing in it. That line costs twenty lines of code and it
+invalidated one of this repo's own standing findings the first time it was run.**
