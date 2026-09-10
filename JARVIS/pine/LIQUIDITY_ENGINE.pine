@@ -17,25 +17,50 @@
 //
 //   trendline liquidity   1.85-2.63    three highs on a slope, the newest run
 //   liquidity void        1.82-2.25    a 3+ ATR bar, price returns to fill it
-//   low-resistance pool   1.68-2.21    a level defended ONCE, then run
-//   high-resistance pool  1.96-2.18    a level defended 3+ times, then run
+//   the pool run itself   1.64-1.96    nearest 3 pools, each counted ONCE
+//     defended 3+ branch  1.87-2.43    a rarer, better subset of the above
 //   SMT divergence        1.54-1.96    new extreme here, not on the partner
 //   inducement            1.26-1.87    the minor level taken before the pool
 //
-// THE SINGLE MOST IMPORTANT LINE: a plain sweep of a swing scores 1.0 -
-// NOTHING. The same sweep, split by whether the level had been defended once
-// or three-plus times, scores 1.7-2.2. Veer named that distinction himself
-// ("liquidity has high resistance low distances") and it is the difference
-// between a worthless signal and the best one in the library.
+// THE SINGLE MOST IMPORTANT LINE, corrected by E-196. A plain sweep of a swing
+// scores 1.0 - NOTHING. The same sweep scores 1.64-1.96 with two lines of
+// bookkeeping added, and those two lines are the whole mechanism:
+//
+//   1. A POOL IS CONSUMED WHEN IT IS RUN. Without this, "a level was run"
+//      stays true on every later bar that wicks near the same price, so most
+//      of the fires land deep inside a move that already started. That is why
+//      E-184 measured the sweep as flat.
+//   2. ONLY THE THREE NEAREST POOLS ARE ELIGIBLE. Scan forty levels and
+//      "price ran a level" is true on 60% of bars, which describes price
+//      wandering, not an event.
+//
+// E-195 credited the high/low-resistance GRADING for this and that was wrong.
+// Ungraded the run scores 1.64-1.96; graded it scores 1.67-1.81 on the common
+// branch. The grading is a small secondary effect on a rare branch (419 fires
+// out of 14,251 on M1), not the mechanism. The canonical ICT reading of
+// high-resistance - two or more unswept swings between price and the target -
+// scores 1.60-2.08, the same band as everything else. Every version of the
+// label lands in one band, so the label is not doing the work.
+//
+// The grading is still SHOWN, because a pool defended three-plus times scores
+// 1.87-2.43 and is worth seeing. It is a garnish on the signal, not the signal.
 //
 // WHAT IS DELIBERATELY NOT IN THIS FILE, because it was measured below 1.0 -
 // less likely to start a leg than a random bar:
 //
 //   FVG 0.15-0.40 · protected level 0.07-0.45 · propulsion block 0.21-0.33
 //   MSS+displacement 0.23-0.43 · internal structure 0.24-0.62
-//   displacement 0.38-0.64 · silver bullet hour 0.32-0.84 · BOS 0.46-0.63
-//   London killzone 0.45-0.81 · BPR 0.74-1.16 · unicorn 0.80-1.20
-//   order block 0.60-1.17 · IFVG 0.70-1.01 · breaker 0.52-1.20 · OTE 0.83-1.05
+//   displacement 0.38-0.64 · BOS 0.46-0.63 · BPR 0.74-1.16
+//   unicorn 0.80-1.20 · order block 0.60-1.17 · IFVG 0.70-1.01
+//   breaker 0.52-1.20 · OTE 0.83-1.05
+//
+// AND THE KILLZONES, which got a second hearing. The first test used windows
+// an hour off for the 8 months a year New York is on DST. Re-scored with real
+// timezone conversion from America/New_York, all five published windows:
+// London open 0.66-0.78, NY AM narrow 0.71-1.20, NY AM wide 0.74-1.29,
+// NY PM 0.42-0.73, silver bullet 0.59-1.12. Not one clears its line on any
+// sample. The clock does predict VOLATILITY (E-190: 13:00-14:00 UTC moves
+// 1.65-1.88x the median hour) - it does not predict where a leg begins.
 //
 // Every STRUCTURE concept is below 1.0 and every surviving LIQUIDITY concept
 // is above 1.7. Structure can only break after price has already moved, so a
@@ -63,7 +88,7 @@ sweepClr = input.float(0.05, "A run must clear the pool by (ATR)", group = gP,
      step = 0.05, minval = 0.0)
 hiResN = input.int(3, "High-resistance = defended this many times", group = gP,
      minval = 2, maxval = 10,
-     tooltip = "Below this count a pool is LOW resistance: made once, clean air to it. At or above it the level has been defended repeatedly and the path is littered. Both score 1.7-2.2 and they are different trades - low-resistance runs tend to continue, high-resistance runs tend to reverse hard.")
+     tooltip = "How many swings formed at this one price. E-196: this grading is NOT what makes the signal work - the run scores 1.64-1.96 ungraded and 1.67-1.81 on the once-defended branch, so the grading adds almost nothing there. What it does do is mark a rarer, better branch: a pool defended three or more times scores 1.87-2.43.\n\nNote also that this is not ICT's own definition. The published prose measures how many UNSWEPT OPPOSING SWINGS sit between price and the target pool, which is a different number; SMC_SPEC.md found no public implementation of either and two incompatible meanings in circulation. Scored both ways the answer is the same band, 1.6-2.1.")
 poolKeep = input.int(6, "Live pools to keep per side", group = gP, minval = 1,
      maxval = 20)
 
@@ -535,9 +560,9 @@ if barstate.islast and showPanel
          nTL > 0 ? cTx : cMu)
     f_r(4, "liquidity void", str.tostring(nVd), "lift 1.82-2.25",
          nVd > 0 ? cTx : cMu)
-    f_r(5, "low-res run", str.tostring(nRun - nHi), "lift 1.68-2.21",
+    f_r(5, "defended once", str.tostring(nRun - nHi), "lift 1.67-1.81",
          (nRun - nHi) > 0 ? cTx : cMu)
-    f_r(6, "high-res run", str.tostring(nHi), "lift 1.96-2.18",
+    f_r(6, "defended 3+", str.tostring(nHi), "lift 1.87-2.43",
          nHi > 0 ? cTx : cMu)
     f_r(7, "inducement", str.tostring(nIdm), "lift 1.26-1.87",
          nIdm > 0 ? cTx : cMu)

@@ -9520,3 +9520,113 @@ retracted the same day. Nothing in E-195 has been traded.
 **LESSON: the best of N is not a measurement until you know what the best of N
 looks like with nothing in it. That line costs twenty lines of code and it
 invalidated one of this repo's own standing findings the first time it was run.**
+
+---
+
+## E-196 — THE SPEC AGENT CORRECTED E-195's HEADLINE. THE LIFT IS POOL BOOKKEEPING, NOT THE RESISTANCE GRADING.
+
+**Status: E-195's finding SURVIVES. E-195's EXPLANATION of it was WRONG and is
+corrected here.** Reproduce with `smc_library.features_v2()`.
+
+Veer sent five YouTube links. YouTube is blocked at this container's gateway
+and so is nearly every trading-education domain — but `raw.githubusercontent.com`
+is not, and the Pine source of most published ICT/SMC indicators is mirrored
+there. ~45 indicator sources and the `joshyattridge/smart-money-concepts`
+package were read into `JARVIS/research/SMC_SPEC.md` (1,933 lines). Two of its
+findings were directly testable against E-195 and both were run.
+
+### 1. I ATTRIBUTED E-195's BEST RESULT TO THE WRONG MECHANISM
+
+E-195 said: *"a plain sweep of a swing scores 1.0. The same sweep split by
+whether the level was defended once or three-plus times scores 1.7–2.2. The
+distinction Veer named is what turns a worthless signal into the best one in
+the library."*
+
+The spec says no published implementation of high/low-resistance liquidity
+exists, that the term has **two incompatible meanings**, and that every prose
+source measures something I did not: **how many UNSWEPT OPPOSING SWINGS sit
+between price and the target pool** — not how many swings formed at the level,
+which is what I counted. So both readings were scored, and then the run was
+scored with no grading at all:
+
+```
+                                                 15m     1h     M1     M5
+  E-184 sweep (any of 40 levels, never consumed) 1.01   0.97   0.94   0.98
+  pool run, UNGRADED (nearest 3, consumed)       1.96   1.64   1.75   1.82
+    ...of which defended once                    1.89   1.67   1.74   1.81
+    ...of which defended 3+                        -      -    1.87   2.43
+  best-of-N line                                 1.18   1.10   1.15   1.55
+```
+
+**The ungraded run already scores 1.64–1.96.** Grading it adds almost nothing
+on the common branch (1.67–1.81 against 1.64–1.96 ungraded) and a little on the
+rare one (419 fires out of 14,251 on M1). The canonical ICT reading —
+HRLR as two-or-more unswept swings in the way — scores 1.60–2.08, i.e. the
+same as everything else. **Every version of the label lands in one band. The
+label is not doing the work.**
+
+What IS doing the work is the two lines of bookkeeping E-184's version lacks:
+
+- **the pool is CONSUMED when it is run.** Without this, "a level was run" stays
+  true on every later bar that wicks near the same price, so most fires land
+  deep inside a move that already started. This is E-073 again — *"any result
+  whose n far exceeds the number of independent decisions behind it is wrong
+  until re-counted"* — and it is why E-184 measured the sweep as flat.
+- **only the THREE NEAREST pools are eligible.** Scanning forty levels makes
+  "price ran a level" true on 60% of bars, which is a description of price
+  wandering, not an event.
+
+**The corrected statement: a liquidity sweep marks leg starts at 1.6–2.0× base
+rate, but only if each pool is counted once and only the pool nearest price is
+eligible. The high/low-resistance grading is a small secondary effect on a rare
+branch, not the mechanism.**
+
+### 2. THE KILLZONE VERDICT SURVIVES A REAL TIMEZONE ATTACK
+
+E-195 used 07:00–10:00 and 12:00–15:00 UTC. The spec's table of six published
+scripts shows the majority define killzones in `America/New_York`, which in EDT
+is 06:00–09:00 and 11:00–14:00 UTC — **so my windows were an hour late for the
+~8 months a year the US is on DST**, and killzones scored 0.45–0.81. A window
+an hour off is a good enough reason for that to have to be ruled out.
+
+Re-scored with real `zoneinfo` conversion from `America/New_York`, all five
+published windows:
+
+```
+                                15m     1h     M1     M5
+  London open KZ               0.70   0.78   0.76   0.66
+  NY AM narrow (08:30-11:00)   1.20   0.79   0.71   0.74
+  NY AM wide (07:00-10:00)     1.10   1.29   0.74   0.94
+  NY PM KZ                     0.58   0.42   0.73   0.57
+  silver bullet (10:00-11:00)  1.12   0.59   0.67   0.66
+  best-of-N line               1.28   1.45   1.25   1.51
+```
+
+**Not one window clears its line on any sample, and most sit below 1.0.** The
+timezone objection is answered: the killzones were not failing because the
+clock was wrong. As a marker of where legs begin they do nothing on XAUUSD.
+(E-190 separately found 13:00–14:00 UTC moves 1.65–1.88× the median hour — the
+clock predicts VOLATILITY. It does not predict where a leg starts.)
+
+### 3. NAMING TRAPS FROM THE SPEC WORTH KEEPING
+
+- **MSS and CHoCH are the same object.** LuxAlgo's own source prints
+  `os == -1 ? 'MSS' : 'MSB'` — CHoCH and BOS with the names swapped. E-195
+  scored them as two features (0.23–0.43 and 0.76–0.88); they should have been
+  one, and both were below 1.0 anyway.
+- **"IFVG" means two different patterns** from the same vendor: Inversion FVG
+  (a gap traded through, now flipped) and Implied FVG (a wick-midpoint pattern
+  with no gap at all). E-195 implemented the inversion. The implied version is
+  untested.
+- **`SMC-PY.fvg()` uses `shift(-1)` — it looks ahead.** A widely used Python
+  package. Any result built on it is invalid.
+- **"Standard deviation projections" are not standard deviations** — they are
+  range multiples of the CBDR/Asia box. `ta.stdev` gives silently wrong levels.
+- Across ~45 published indicators there is **not one validated performance
+  claim** — no win rate with a sample size, date range and cost assumption.
+  Four vendors ship dashboards that COMPUTE a base rate rather than publish one.
+
+**LESSON: I named a mechanism without testing the mechanism. "Grading the
+sweep is what makes it work" was a story that fit the numbers; the ablation —
+run it ungraded — took two minutes and says the grading is nearly irrelevant.
+Test the part you are crediting, not just the whole.**

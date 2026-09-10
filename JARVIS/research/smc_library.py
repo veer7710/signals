@@ -468,3 +468,123 @@ def features(s, A, V=None, pv=3, tol=0.10, other=None):
                 if mineLo and not thLo:
                     F["SMT divergence"][i] = 1
     return F
+
+
+# ===========================================================================
+# E-196 — THE CORRECTIONS SMC_SPEC.md FORCED.
+#
+# Two of E-195's features were implemented from my reading rather than from a
+# published source, and the spec agent's survey of ~45 indicator sources says
+# both readings were wrong in a way that is testable:
+#
+# 1. HIGH/LOW-RESISTANCE LIQUIDITY. I counted how many SWINGS FORMED at the
+#    level - the size of the equal-highs cluster. Every prose source measures
+#    something else: how many UNSWEPT OPPOSING SWINGS sit BETWEEN price and
+#    the target pool. The two are different numbers and only one of them is
+#    what ICT means. Since "low-resistance run" is E-195's strongest single
+#    finding, the canonical version has to be scored or the finding is mine
+#    and not the concept's.
+#
+# 2. KILLZONES. I used 07:00-10:00 and 12:00-15:00 UTC. The spec's table of
+#    six published scripts says the majority define them in America/New_York,
+#    which in EDT is 06:00-09:00 and 11:00-14:00 UTC - so my windows were an
+#    HOUR LATE for the ~8 months a year the US is on DST. They scored
+#    0.45-0.81. A window an hour off is a good reason for that, and it has to
+#    be ruled out before "killzones do not mark leg starts" can stand.
+# ===========================================================================
+def features_v2(s, A, pv=3, tol=0.10, clear=0.05, hrlrN=2):
+    """The corrected pair, plus the honest renaming of the originals."""
+    try:
+        from zoneinfo import ZoneInfo
+        NY = ZoneInfo("America/New_York")
+    except Exception:
+        NY = None
+    n = len(s)
+    K = ("LRLR (clean path)", "HRLR (2+ in the way)",
+         "pool defended once", "pool defended 3+",
+         "London open KZ (tz-correct)", "NY AM narrow KZ (tz-correct)",
+         "NY AM wide KZ (tz-correct)", "NY PM KZ (tz-correct)",
+         "silver bullet (tz-correct)")
+    F = {k: [0] * n for k in K}
+
+    hi_at, lo_at = _pivots(s, pv)
+    liveHi, liveLo = [], []          # (price, swings_that_formed_here)
+    for i in range(n):
+        a = A[i] if A[i] else 0.0
+        if i in hi_at:
+            p = hi_at[i]
+            m = next((x for x in liveHi if abs(x[0] - p) <= tol * max(a, 1e-9)), None)
+            if m:
+                liveHi.remove(m)
+                liveHi.append((max(m[0], p), m[1] + 1))
+            else:
+                liveHi.append((p, 1))
+            liveHi = liveHi[-40:]
+        if i in lo_at:
+            p = lo_at[i]
+            m = next((x for x in liveLo if abs(x[0] - p) <= tol * max(a, 1e-9)), None)
+            if m:
+                liveLo.remove(m)
+                liveLo.append((min(m[0], p), m[1] + 1))
+            else:
+                liveLo.append((p, 1))
+            liveLo = liveLo[-40:]
+        if a <= 0 or i < 80:
+            continue
+
+        # ---- THE RUN, identical to E-195's so only the LABEL differs -----
+        d = 0
+        cnt = 0
+        for (p, k) in sorted(liveHi, key=lambda x: abs(x[0] - s.c[i]))[:3]:
+            if s.h[i] > p + clear * a and s.c[i] < p:
+                d, cnt = -1, k
+                liveHi.remove((p, k))
+                break
+        if d == 0:
+            for (p, k) in sorted(liveLo, key=lambda x: abs(x[0] - s.c[i]))[:3]:
+                if s.l[i] < p - clear * a and s.c[i] > p:
+                    d, cnt = 1, k
+                    liveLo.remove((p, k))
+                    break
+        liveHi = [x for x in liveHi if s.c[i] <= x[0] + 0.5 * a]
+        liveLo = [x for x in liveLo if s.c[i] >= x[0] - 0.5 * a]
+
+        if d != 0:
+            # E-195's labels, renamed to what they ACTUALLY measure. "Defended
+            # once" is the size of the equal-highs cluster at the level, not
+            # the resistance on the path to it.
+            F["pool defended 3+" if cnt >= 3 else "pool defended once"][i] = d
+
+            # THE CANONICAL VERSION. Target = the opposing pool. Resistance =
+            # the count of UNSWEPT opposing swings strictly BETWEEN price and
+            # that target. Zero in the way is LRLR; two or more is HRLR.
+            if d > 0 and liveHi:
+                tgt = max(x[0] for x in liveHi)
+                res = sum(1 for (p, _) in liveHi if s.c[i] < p < tgt)
+            elif d < 0 and liveLo:
+                tgt = min(x[0] for x in liveLo)
+                res = sum(1 for (p, _) in liveLo if tgt < p < s.c[i])
+            else:
+                res = None
+            if res is not None:
+                if res == 0:
+                    F["LRLR (clean path)"][i] = d
+                elif res >= hrlrN:
+                    F["HRLR (2+ in the way)"][i] = d
+
+        # ---- KILLZONES, converted from New York with real DST ------------
+        if NY is not None:
+            t = _dt.datetime.fromtimestamp(s.ts[i], NY)
+            mins = t.hour * 60 + t.minute
+            bi = 1 if s.c[i] > s.o[i] else -1
+            if 2 * 60 <= mins < 5 * 60:
+                F["London open KZ (tz-correct)"][i] = bi
+            if 8 * 60 + 30 <= mins < 11 * 60:
+                F["NY AM narrow KZ (tz-correct)"][i] = bi
+            if 7 * 60 <= mins < 10 * 60:
+                F["NY AM wide KZ (tz-correct)"][i] = bi
+            if 13 * 60 + 30 <= mins < 16 * 60:
+                F["NY PM KZ (tz-correct)"][i] = bi
+            if 10 * 60 <= mins < 11 * 60:
+                F["silver bullet (tz-correct)"][i] = bi
+    return F
