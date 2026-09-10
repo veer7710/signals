@@ -1,0 +1,553 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0
+// at https://mozilla.org/MPL/2.0/
+// © veer7710
+//
+// ===========================================================================
+// LIQUIDITY ENGINE — built from what survived E-195, and nothing else.
+// ===========================================================================
+//
+// Veer asked for an indicator built on ICT / SMC / liquidity with every part
+// of it checked. Forty-four concepts were implemented and scored on one
+// question - does this bar mark the START of a leg? - as LIFT against a
+// time-shifted copy of the same series, and then against a BEST-OF-44 LINE:
+// the score the best concept in an EMPTY library would report by luck. The
+// line lands at 1.24-1.74 depending on the sample.
+//
+// SIX THINGS CLEARED IT AND THEN CLEARED IT AGAIN ON BOTH HALVES:
+//
+//   trendline liquidity   1.85-2.63    three highs on a slope, the newest run
+//   liquidity void        1.82-2.25    a 3+ ATR bar, price returns to fill it
+//   low-resistance pool   1.68-2.21    a level defended ONCE, then run
+//   high-resistance pool  1.96-2.18    a level defended 3+ times, then run
+//   SMT divergence        1.54-1.96    new extreme here, not on the partner
+//   inducement            1.26-1.87    the minor level taken before the pool
+//
+// THE SINGLE MOST IMPORTANT LINE: a plain sweep of a swing scores 1.0 -
+// NOTHING. The same sweep, split by whether the level had been defended once
+// or three-plus times, scores 1.7-2.2. Veer named that distinction himself
+// ("liquidity has high resistance low distances") and it is the difference
+// between a worthless signal and the best one in the library.
+//
+// WHAT IS DELIBERATELY NOT IN THIS FILE, because it was measured below 1.0 -
+// less likely to start a leg than a random bar:
+//
+//   FVG 0.15-0.40 · protected level 0.07-0.45 · propulsion block 0.21-0.33
+//   MSS+displacement 0.23-0.43 · internal structure 0.24-0.62
+//   displacement 0.38-0.64 · silver bullet hour 0.32-0.84 · BOS 0.46-0.63
+//   London killzone 0.45-0.81 · BPR 0.74-1.16 · unicorn 0.80-1.20
+//   order block 0.60-1.17 · IFVG 0.70-1.01 · breaker 0.52-1.20 · OTE 0.83-1.05
+//
+// Every STRUCTURE concept is below 1.0 and every surviving LIQUIDITY concept
+// is above 1.7. Structure can only break after price has already moved, so a
+// mark on the break is a mark on a move that started without you.
+//
+// THIS IS A CLAIM ABOUT WHERE LEGS BEGIN. IT IS NOT A CLAIM ABOUT MONEY.
+// E-186 measured leg-start classification and trade survival as different
+// events. E-194 tried to bridge them with an entry, a stop and a target and
+// was retracted the same day: its significance was the best cell of a grid.
+// The stop and target this file draws are LEVELS, not a system.
+// ===========================================================================
+//@version=6
+indicator("LIQUIDITY ENGINE", "LIQ", overlay = true, max_lines_count = 500,
+     max_labels_count = 500, max_boxes_count = 500, max_bars_back = 1000)
+
+// ------------------------------------------------------------------ inputs -
+gP = "1 · POOLS  (the only thing that scored)"
+pvLen = input.int(3, "A swing needs this many bars either side", group = gP,
+     minval = 1, maxval = 20,
+     tooltip = "A pivot is only KNOWN this many bars after it forms, and that is the bar this file publishes it on. Nothing here can repaint. E-179: 3 is right on fast clocks, raise it to 8 on H4 and above.")
+eqTol = input.float(0.10, "Two swings are ONE pool within (ATR)", group = gP,
+     step = 0.05, minval = 0.0,
+     tooltip = "Swings this close together are one price with one pile of stops behind it. Each time a pool is re-tested its DEFENDED count goes up, and that count is what separates high- from low-resistance liquidity - the single strongest distinction in E-195.")
+sweepClr = input.float(0.05, "A run must clear the pool by (ATR)", group = gP,
+     step = 0.05, minval = 0.0)
+hiResN = input.int(3, "High-resistance = defended this many times", group = gP,
+     minval = 2, maxval = 10,
+     tooltip = "Below this count a pool is LOW resistance: made once, clean air to it. At or above it the level has been defended repeatedly and the path is littered. Both score 1.7-2.2 and they are different trades - low-resistance runs tend to continue, high-resistance runs tend to reverse hard.")
+poolKeep = input.int(6, "Live pools to keep per side", group = gP, minval = 1,
+     maxval = 20)
+
+gC = "2 · THE OTHER FIVE"
+useTL = input.bool(true, "Trendline liquidity  (1.85-2.63)", group = gC,
+     tooltip = "Three highs on a descending slope, or three lows on a rising one, and price runs the newest. The stops sit along a LINE, not at a price. Highest-scoring concept in the whole library and it clears both halves on four samples.")
+useVoid = input.bool(true, "Liquidity voids  (1.82-2.25)", group = gC,
+     tooltip = "A bar whose range is 3+ ATR leaves a vacuum behind it that price is said to return to. Scored 1.82-2.25 and clears both halves on three samples. It is drawn as a box that stays until price trades back through it.")
+voidAtr = input.float(3.0, "A void is a bar bigger than (ATR)", group = gC,
+     step = 0.5, minval = 1.0)
+useIdm = input.bool(true, "Inducement  (1.26-1.87)", group = gC,
+     tooltip = "The minor high or low sitting just INSIDE the real pool. Price is induced to enter there, that level is taken, and only then does the real move go. Clears both halves on M1.")
+useSmt = input.bool(false, "SMT divergence  (1.54-1.96)", group = gC,
+     tooltip = "This market makes a new 20-bar extreme and a correlated market does NOT. Scored on recent data only - the 2018 sample has no partner market in the repo - where it clears both halves on 30m. OFF by default because it needs you to pick a sensible partner below.")
+smtSym = input.symbol("OANDA:SPX500USD", "SMT partner", group = gC)
+smtLen = input.int(20, "SMT lookback (bars)", group = gC, minval = 5)
+
+gE = "3 · THE MARK"
+minStack = input.int(1, "How many must agree", group = gE,
+     minval = 1, maxval = 5,
+     tooltip = "The pool run, trendline liquidity, a liquidity void, inducement and SMT - five slots, because high- and low-resistance are the same run graded differently and cannot both be true.\n\n1 prints every concept that scored. Raise it to stack them. STACKING IS NOT MEASURED HERE - E-184 found the leg-catcher stack compounds, but that was a different set of concepts, and assuming it carries over is exactly the kind of unchecked step this repo keeps getting caught by. The panel counts each concept separately so you can see what is actually firing.")
+markMode = input.string("On the run", "Print the mark", group = gE,
+     options = ["On the run", "On the close back inside"],
+     tooltip = "The run and the close back inside are the same bar in the tested definition - price must pierce the level AND close back through it on one confirmed bar. The second option waits one more bar for a confirming close, which is later and rarer and is NOT what scored 1.7-2.2.")
+
+gT = "4 · STOP AND TARGET  (levels, not a system)"
+showTrade = input.bool(true, "Draw a stop and a target", group = gT,
+     tooltip = "READ THIS. E-194 took this exact signal and booked it with a structural stop and three take-profits across 24 geometries. ALL 24 LOST. Then with a give-back trail it looked positive and THAT WAS RETRACTED THE SAME DAY - the t-statistic was the best cell of a 5x5 grid, and dropping ten trades out of 2048 turned it negative.\n\nSo these two lines are LEVELS, not a plan. The stop is past the wick that took the stops, which is where the idea is wrong if price goes back through it. The target is the opposing pool, which is where the next pile of stops sits. Neither has been shown to make money and this file will not pretend otherwise.")
+stopBuf = input.float(0.20, "Stop beyond the run's extreme (ATR)", group = gT,
+     step = 0.05)
+
+gD = "5 · CHART"
+cUp = input.color(#26D07C, "Up", group = gD, inline = "c")
+cDn = input.color(#FF4D6A, "Down", group = gD, inline = "c")
+cHi = input.color(#8B5CF6, "High-res", group = gD, inline = "c")
+showPools = input.bool(true, "Pools", group = gD, inline = "d")
+showTags = input.bool(true, "Pool tags", group = gD, inline = "d")
+showPanel = input.bool(true, "Panel", group = gD, inline = "d")
+panelPos = input.string("Top right", "Panel", group = gD,
+     options = ["Top right", "Bottom right", "Bottom left", "Top left"])
+
+// ============================== THE ENGINE =================================
+atr = ta.atr(14)
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low, pvLen, pvLen)
+
+// ---- THE POOLS. Price, and how many times it has been DEFENDED. The count
+//      is the whole finding: the same run scores 1.0 undifferentiated and
+//      1.7-2.2 once it is split by this number.
+var array<float> poolH  = array.new<float>()
+var array<int>   poolHn = array.new<int>()
+var array<int>   poolHb = array.new<int>()
+var array<float> poolL  = array.new<float>()
+var array<int>   poolLn = array.new<int>()
+var array<int>   poolLb = array.new<int>()
+
+f_near(arr, px, tol) =>
+    idx = -1
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            if math.abs(array.get(arr, i) - px) <= tol
+                idx := i
+                break
+    idx
+
+if not na(ph)
+    j = f_near(poolH, ph, eqTol * atr)
+    if j >= 0
+        array.set(poolH, j, math.max(array.get(poolH, j), ph))
+        array.set(poolHn, j, array.get(poolHn, j) + 1)
+        array.set(poolHb, j, bar_index)
+    else
+        array.push(poolH, ph)
+        array.push(poolHn, 1)
+        array.push(poolHb, bar_index)
+if not na(pl)
+    j = f_near(poolL, pl, eqTol * atr)
+    if j >= 0
+        array.set(poolL, j, math.min(array.get(poolL, j), pl))
+        array.set(poolLn, j, array.get(poolLn, j) + 1)
+        array.set(poolLb, j, bar_index)
+    else
+        array.push(poolL, pl)
+        array.push(poolLn, 1)
+        array.push(poolLb, bar_index)
+
+// ---- THE RUN. Pierce the pool and CLOSE BACK INSIDE it. A close BEYOND is a
+//      break, and a break is not this signal - that difference is why the
+//      plain "sweep" in E-184 measured flat.
+var int   runDir = 0
+var float runPx  = na
+var int   runN   = 0
+var float runExt = na
+var int   runBar = na
+runDir := 0
+
+if barstate.isconfirmed and array.size(poolH) > 0
+    for i = array.size(poolH) - 1 to 0
+        p = array.get(poolH, i)
+        if high > p + sweepClr * atr and close < p
+            runDir := -1
+            runPx  := p
+            runN   := array.get(poolHn, i)
+            runExt := high
+            runBar := bar_index
+            // LIQUIDITY IS TAKEN ONCE. Leaving the pool live re-fired the same
+            // level on every bar that wicked near it and put the measured rate
+            // at 60% of all bars, which is not a concept.
+            array.remove(poolH, i)
+            array.remove(poolHn, i)
+            array.remove(poolHb, i)
+            break
+if runDir == 0 and barstate.isconfirmed and array.size(poolL) > 0
+    for i = array.size(poolL) - 1 to 0
+        p = array.get(poolL, i)
+        if low < p - sweepClr * atr and close > p
+            runDir := 1
+            runPx  := p
+            runN   := array.get(poolLn, i)
+            runExt := low
+            runBar := bar_index
+            array.remove(poolL, i)
+            array.remove(poolLn, i)
+            array.remove(poolLb, i)
+            break
+
+// a pool price has CLOSED decisively through is gone - it was a break, and
+// there are no stops left behind it to run
+if barstate.isconfirmed and array.size(poolH) > 0
+    for i = array.size(poolH) - 1 to 0
+        if close > array.get(poolH, i) + 0.5 * atr
+            array.remove(poolH, i)
+            array.remove(poolHn, i)
+            array.remove(poolHb, i)
+if barstate.isconfirmed and array.size(poolL) > 0
+    for i = array.size(poolL) - 1 to 0
+        if close < array.get(poolL, i) - 0.5 * atr
+            array.remove(poolL, i)
+            array.remove(poolLn, i)
+            array.remove(poolLb, i)
+
+while array.size(poolH) > poolKeep
+    array.shift(poolH)
+    array.shift(poolHn)
+    array.shift(poolHb)
+while array.size(poolL) > poolKeep
+    array.shift(poolL)
+    array.shift(poolLn)
+    array.shift(poolLb)
+
+isHiRes = runDir != 0 and runN >= hiResN
+isLoRes = runDir != 0 and runN < hiResN
+
+// ---- TRENDLINE LIQUIDITY. Three highs on a falling slope, or three lows on a
+//      rising one, and the newest is run. The stops sit along a LINE. Best
+//      score in the library: 1.85-2.63, both halves on four samples.
+var float tlA = na
+var float tlB = na
+var float tlC = na
+var float tlD = na
+var float tlE = na
+var float tlF = na
+if not na(ph)
+    tlA := tlB
+    tlB := tlC
+    tlC := ph
+if not na(pl)
+    tlD := tlE
+    tlE := tlF
+    tlF := pl
+tlDn = not na(tlA) and tlA > tlB and tlB > tlC
+tlUp = not na(tlD) and tlD < tlE and tlE < tlF
+sigTL = useTL and ((runDir < 0 and tlDn) or (runDir > 0 and tlUp))
+
+// ---- LIQUIDITY VOID. A bar of 3+ ATR leaves a vacuum. 1.82-2.25.
+isVoid = useVoid and barstate.isconfirmed and (high - low) >= voidAtr * atr
+voidDir = isVoid ? (close < open ? 1 : -1) : 0
+
+// ---- INDUCEMENT. The minor level sitting INSIDE the real pool: price is
+//      induced to enter there, that level is taken, then the real move goes.
+var float idmHi = na
+var float idmLo = na
+if not na(ph)
+    idmHi := ph
+if not na(pl)
+    idmLo := pl
+// NOT a ternary. Pine evaluates both arms, and array.max() on an EMPTY array
+// is a runtime error that stops the script drawing entirely - the same class
+// of bug as allocating a line in a ternary branch.
+majH = float(na)
+majL = float(na)
+if array.size(poolH) > 0
+    majH := array.max(poolH)
+if array.size(poolL) > 0
+    majL := array.min(poolL)
+sigIdmB = useIdm and not na(idmLo) and not na(majL) and idmLo > majL
+     and low < idmLo and close > idmLo and barstate.isconfirmed
+sigIdmS = useIdm and not na(idmHi) and not na(majH) and idmHi < majH
+     and high > idmHi and close < idmHi and barstate.isconfirmed
+
+// ---- SMT DIVERGENCE. A new extreme here that the partner market does not
+//      confirm. lookahead_off on a [1] offset is the only non-repainting way
+//      to read another symbol.
+smtH = request.security(smtSym, timeframe.period,
+     ta.highest(high, smtLen)[1], lookahead = barmerge.lookahead_off)
+smtL = request.security(smtSym, timeframe.period,
+     ta.lowest(low, smtLen)[1], lookahead = barmerge.lookahead_off)
+smtC = request.security(smtSym, timeframe.period, close[1],
+     lookahead = barmerge.lookahead_off)
+mineHi = high >= ta.highest(high, smtLen)[1]
+mineLo = low <= ta.lowest(low, smtLen)[1]
+sigSmtS = useSmt and mineHi and not na(smtH) and not na(smtC) and smtC < smtH
+     and barstate.isconfirmed
+sigSmtB = useSmt and mineLo and not na(smtL) and not na(smtC) and smtC > smtL
+     and barstate.isconfirmed
+
+// ---- THE STACK. Five slots: the pool run, trendline liquidity, a void,
+//      inducement, SMT. High- and low-resistance are the same run graded
+//      differently, so they share one slot.
+//
+//      STACKING IS NOT MEASURED. E-184 found ITS stack compounded; assuming
+//      that carries to a different set of concepts is the unchecked step this
+//      repo keeps getting caught by. The panel counts each concept on its own.
+upN = (runDir > 0 ? 1 : 0) + (sigTL and runDir > 0 ? 1 : 0)
+     + (voidDir > 0 ? 1 : 0) + (sigIdmB ? 1 : 0) + (sigSmtB ? 1 : 0)
+dnN = (runDir < 0 ? 1 : 0) + (sigTL and runDir < 0 ? 1 : 0)
+     + (voidDir < 0 ? 1 : 0) + (sigIdmS ? 1 : 0) + (sigSmtS ? 1 : 0)
+
+rawB = upN >= minStack and upN > dnN and barstate.isconfirmed
+rawS = dnN >= minStack and dnN > upN and barstate.isconfirmed
+sigB = markMode == "On the run" ? rawB : rawB[1] and close > close[1]
+sigS = markMode == "On the run" ? rawS : rawS[1] and close < close[1]
+
+// ================================ DRAWING ==================================
+// Every mark is a plotshape on a CONFIRMED bar, so it can never be deleted,
+// moved or repainted off the chart once printed.
+plotshape(sigB and isHiRes, "BUY  high-resistance", shape.labelup,
+     location.belowbar, color = cHi, text = "BUY",
+     textcolor = color.white, size = size.small)
+plotshape(sigS and isHiRes, "SELL high-resistance", shape.labeldown,
+     location.abovebar, color = cHi, text = "SELL",
+     textcolor = color.white, size = size.small)
+plotshape(sigB and not isHiRes, "BUY", shape.labelup, location.belowbar,
+     color = cUp, text = "BUY", textcolor = color.white, size = size.small)
+plotshape(sigS and not isHiRes, "SELL", shape.labeldown, location.abovebar,
+     color = cDn, text = "SELL", textcolor = color.white, size = size.small)
+plotshape(runDir > 0 and not sigB, "sellside taken", shape.xcross,
+     location.belowbar, color = color.new(cUp, 55), size = size.tiny)
+plotshape(runDir < 0 and not sigS, "buyside taken", shape.xcross,
+     location.abovebar, color = color.new(cDn, 55), size = size.tiny)
+
+// ---- THE POOLS, drawn as what they are: a price with a defended count.
+var array<line>  poolLnH = array.new<line>()
+var array<label> poolLbH = array.new<label>()
+var array<line>  poolLnL = array.new<line>()
+var array<label> poolLbL = array.new<label>()
+
+f_clear(ls, lbs) =>
+    while array.size(ls) > 0
+        line.delete(array.shift(ls))
+    while array.size(lbs) > 0
+        label.delete(array.shift(lbs))
+    true
+
+if barstate.islast and showPools
+    f_clear(poolLnH, poolLbH)
+    f_clear(poolLnL, poolLbL)
+    if array.size(poolH) > 0
+        for i = 0 to array.size(poolH) - 1
+            pxv = array.get(poolH, i)
+            k  = array.get(poolHn, i)
+            b  = array.get(poolHb, i)
+            col = k >= hiResN ? cHi : cDn
+            array.push(poolLnH, line.new(b, pxv, bar_index + 8, pxv,
+                 color = color.new(col, 25), width = k >= hiResN ? 2 : 1))
+            if showTags
+                array.push(poolLbH, label.new(bar_index + 8, pxv,
+                     "BSL ×" + str.tostring(k)
+                     + (k >= hiResN ? "  HIGH-RES" : ""),
+                     style = label.style_label_left, size = size.tiny,
+                     color = color.new(chart.bg_color, 100),
+                     textcolor = color.new(col, 10)))
+    if array.size(poolL) > 0
+        for i = 0 to array.size(poolL) - 1
+            pxv = array.get(poolL, i)
+            k  = array.get(poolLn, i)
+            b  = array.get(poolLb, i)
+            col = k >= hiResN ? cHi : cUp
+            array.push(poolLnL, line.new(b, pxv, bar_index + 8, pxv,
+                 color = color.new(col, 25), width = k >= hiResN ? 2 : 1))
+            if showTags
+                array.push(poolLbL, label.new(bar_index + 8, pxv,
+                     "SSL ×" + str.tostring(k)
+                     + (k >= hiResN ? "  HIGH-RES" : ""),
+                     style = label.style_label_left, size = size.tiny,
+                     color = color.new(chart.bg_color, 100),
+                     textcolor = color.new(col, 10)))
+
+// ---- LIQUIDITY VOIDS, drawn as the vacuum they are and closed when filled.
+var array<box> voidBx = array.new<box>()
+var array<int> voidUp = array.new<int>()
+if isVoid
+    vc = voidDir > 0 ? cUp : cDn
+    array.push(voidBx, box.new(bar_index, high, bar_index + 1, low,
+         border_color = color.new(vc, 60), border_width = 1,
+         bgcolor = color.new(vc, 90)))
+    array.push(voidUp, voidDir)
+nDropV = math.max(array.size(voidBx) - 12, 0)
+if nDropV > 0
+    for i = 1 to nDropV
+        box.delete(array.shift(voidBx))
+        dv = array.shift(voidUp)
+if array.size(voidBx) > 0
+    for i = 0 to array.size(voidBx) - 1
+        bx = array.get(voidBx, i)
+        if bar_index > box.get_left(bx)
+            // a void is FILLED when price has traded back through its middle
+            mid = (box.get_top(bx) + box.get_bottom(bx)) / 2.0
+            if low <= mid and high >= mid
+                box.set_border_style(bx, line.style_dotted)
+            else
+                box.set_right(bx, bar_index + 1)
+
+// ---- TRENDLINE LIQUIDITY, drawn as the sloped line the stops actually sit on
+var line tlLine = na
+if sigTL and barstate.isconfirmed
+    if not na(tlLine)
+        line.delete(tlLine)
+    // NOT a ternary: both branches of a ternary ALLOCATE, so a line object
+    // is created and leaked on every bar whichever way the test goes.
+    if runDir < 0
+        tlLine := line.new(bar_index - 2 * pvLen, tlB, bar_index, tlC,
+             color = color.new(cDn, 25), width = 2, extend = extend.right)
+    else
+        tlLine := line.new(bar_index - 2 * pvLen, tlE, bar_index, tlF,
+             color = color.new(cUp, 25), width = 2, extend = extend.right)
+
+// ---- THE STOP AND THE TARGET. Two LEVELS. Read the tooltip on the group -
+//      E-194 measured this exact signal with a stop and targets and every
+//      geometry lost. These say where the idea is wrong and where the next
+//      pile of stops is, and nothing more than that.
+var float tEntry = na
+var float tStop  = na
+var float tTgt   = na
+var int   tDir   = 0
+var line  tlnE = na
+var line  tlnS = na
+var line  tlnT = na
+var label tlbS = na
+var label tlbT = na
+
+if (sigB or sigS) and showTrade
+    tDir   := sigB ? 1 : -1
+    tEntry := close
+    tStop  := sigB ? nz(runExt, low) - stopBuf * atr
+         : nz(runExt, high) + stopBuf * atr
+    // the target is the OPPOSING pool - the next place stops are stacked -
+    // and na when there is not one, rather than an invented R multiple
+    tTgt := na
+    if sigB and array.size(poolH) > 0
+        tTgt := array.max(poolH)
+    if sigS and array.size(poolL) > 0
+        tTgt := array.min(poolL)
+
+if barstate.islast and showTrade and tDir != 0 and not na(tEntry)
+    if not na(tlnE)
+        line.delete(tlnE)
+    if not na(tlnS)
+        line.delete(tlnS)
+    if not na(tlnT)
+        line.delete(tlnT)
+    if not na(tlbS)
+        label.delete(tlbS)
+    if not na(tlbT)
+        label.delete(tlbT)
+    tc = tDir > 0 ? cUp : cDn
+    tlnE := line.new(bar_index - 20, tEntry, bar_index + 12, tEntry,
+         color = color.new(tc, 40), style = line.style_dotted)
+    tlnS := line.new(bar_index - 20, tStop, bar_index + 12, tStop,
+         color = color.new(cDn, 20), width = 2)
+    tlbS := label.new(bar_index + 12, tStop,
+         "STOP  " + str.tostring(math.abs(tEntry - tStop), format.mintick)
+         + "pt", style = label.style_label_left, size = size.tiny,
+         color = color.new(chart.bg_color, 100),
+         textcolor = color.new(cDn, 10))
+    if not na(tTgt)
+        rr = math.abs(tEntry - tStop) > 0
+             ? math.abs(tTgt - tEntry) / math.abs(tEntry - tStop) : 0.0
+        tlnT := line.new(bar_index - 20, tTgt, bar_index + 12, tTgt,
+             color = color.new(cUp, 20), width = 2)
+        tlbT := label.new(bar_index + 12, tTgt,
+             "POOL  " + str.tostring(math.abs(tTgt - tEntry), format.mintick)
+             + "pt   " + str.tostring(rr, "0.0") + "R",
+             style = label.style_label_left, size = size.tiny,
+             color = color.new(chart.bg_color, 100),
+             textcolor = color.new(cUp, 10))
+
+// ================================ THE PANEL ================================
+// What actually fired today, per concept, with each concept's MEASURED lift
+// beside it. The lift is a fact from E-195 and does not change with the
+// chart; the count is what this chart has done since midnight.
+var int nRun = 0
+var int nHi  = 0
+var int nTL  = 0
+var int nVd  = 0
+var int nIdm = 0
+var int nSmt = 0
+var int nSig = 0
+newDay = ta.change(time("D")) != 0
+if newDay
+    nRun := 0
+    nHi  := 0
+    nTL  := 0
+    nVd  := 0
+    nIdm := 0
+    nSmt := 0
+    nSig := 0
+if runDir != 0
+    nRun += 1
+if isHiRes
+    nHi += 1
+if sigTL
+    nTL += 1
+if isVoid
+    nVd += 1
+if sigIdmB or sigIdmS
+    nIdm += 1
+if sigSmtB or sigSmtS
+    nSmt += 1
+if sigB or sigS
+    nSig += 1
+
+var table tp = na
+
+// Pine requires functions at GLOBAL scope. Declared inside the drawing block
+// this reads as three undeclared identifiers and does not compile.
+f_r(r, a, b, c, col) =>
+    table.cell(tp, 0, r, a, text_color = color.new(#7E93AD, 0),
+         text_size = size.tiny, text_halign = text.align_left)
+    table.cell(tp, 1, r, b, text_color = col, text_size = size.small,
+         text_halign = text.align_right)
+    table.cell(tp, 2, r, c, text_color = color.new(#7E93AD, 0),
+         text_size = size.tiny, text_halign = text.align_right)
+
+if barstate.islast and showPanel
+    pos = panelPos == "Top right" ? position.top_right
+         : panelPos == "Bottom right" ? position.bottom_right
+         : panelPos == "Top left" ? position.top_left
+         : position.bottom_left
+    // built ONCE. table.new on every last bar allocates a new table each tick.
+    if na(tp)
+        tp := table.new(pos, 3, 10, border_width = 1,
+             bgcolor = color.new(#0B1220, 6),
+             border_color = color.new(#22304A, 45),
+             frame_color = color.new(#22304A, 25), frame_width = 1)
+    cTx = color.new(#DCE6F2, 0)
+    cMu = color.new(#7E93AD, 0)
+    table.cell(tp, 0, 0, "LIQUIDITY ENGINE", text_color = cTx,
+         text_size = size.small, text_halign = text.align_left)
+    table.cell(tp, 1, 0, "", text_color = cTx)
+    table.cell(tp, 2, 0, timeframe.period + "  ×" + str.tostring(minStack),
+         text_color = cMu, text_size = size.tiny,
+         text_halign = text.align_right)
+    f_r(1, "today", str.tostring(nSig) + " marks",
+         str.format_time(time, "EEE dd MMM"), cTx)
+    f_r(2, "pools run", str.tostring(nRun),
+         str.tostring(nHi) + " high-res", cTx)
+    f_r(3, "trendline liq", str.tostring(nTL), "lift 1.85-2.63",
+         nTL > 0 ? cTx : cMu)
+    f_r(4, "liquidity void", str.tostring(nVd), "lift 1.82-2.25",
+         nVd > 0 ? cTx : cMu)
+    f_r(5, "low-res run", str.tostring(nRun - nHi), "lift 1.68-2.21",
+         (nRun - nHi) > 0 ? cTx : cMu)
+    f_r(6, "high-res run", str.tostring(nHi), "lift 1.96-2.18",
+         nHi > 0 ? cTx : cMu)
+    f_r(7, "inducement", str.tostring(nIdm), "lift 1.26-1.87",
+         nIdm > 0 ? cTx : cMu)
+    f_r(8, "SMT", useSmt ? str.tostring(nSmt) : "off", "lift 1.54-1.96",
+         nSmt > 0 ? cTx : cMu)
+    f_r(9, "live pools",
+         str.tostring(array.size(poolH)) + " / "
+         + str.tostring(array.size(poolL)), "BSL / SSL", cTx)
+
+alertcondition(sigB, "LIQ BUY",  "LIQ BUY {{ticker}} {{interval}} {{close}}")
+alertcondition(sigS, "LIQ SELL", "LIQ SELL {{ticker}} {{interval}} {{close}}")
+alertcondition(runDir > 0, "sellside taken", "SSL taken {{ticker}} {{interval}}")
+alertcondition(runDir < 0, "buyside taken",  "BSL taken {{ticker}} {{interval}}")
