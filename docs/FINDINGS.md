@@ -42,12 +42,32 @@ GOLD 15m and 1h, 1 ATR stop / 1 ATR target:
 | SuperTrend flip **not** on a big candle | 0.88 | 1.06 |
 | FVG | 1.02 | 1.05 |
 | Displacement bar | 1.03 | 1.01 |
-| Liquidity sweep (consumed, nearest-3) | 0.91 | 0.87 |
+| Liquidity sweep — **shipped logic** | **1.02** | **0.95** |
+| Liquidity sweep, destroying-pools variant | 0.91 | 0.87 |
 | Liquidity sweep, not consumed | 0.96 | 0.83 |
 | Liquidity sweep, nearest-40 pools | 0.92 | 0.89 |
 
 The best-of-10 null line sits at **lift 1.16**. Only one cell clears it and
 it has n=60 on a single timeframe.
+
+### Correction made during this build
+
+The first version of the sweep scored 0.87–0.91 using a pool list that
+**deleted** any pool outside the nearest-3. That is wrong: a pool that is
+currently 4th-nearest can become nearest again when price moves, and
+deleting it also made the EA and the Pine capable of firing on different
+bars. The shipped logic treats nearest-N as **eligibility, not deletion**.
+
+Re-measured with the shipped logic the sweep scores **1.02 (15m) / 0.95
+(1h)** at 12.9 and 3.2 events per day — better than the destroying variant,
+still not above the 1.16 best-of-N line. The conclusion is unchanged.
+
+One further correction: the first eligibility implementation stored a
+*reference* to the same mutable pool list on every bar, so every snapshot
+showed the final buffer state. It reported exactly 48 sweeps on two
+different datasets (24 highs + 24 lows, consumed once each). It is now a
+single forward pass that carries state bar to bar, the way the EA and the
+Pine actually run. `research/core.py:sweep_engine` is the reference.
 
 **This contradicts the handover you were given**, which recorded the
 liquidity sweep at 1.64–1.96×. On my data, with the pool-consumption and

@@ -34,6 +34,10 @@ armAtR   = input.float(1.0, "ARM the trail at (R)", group = grpX, step = 0.1,
              "Measured average winner was $5.06. Arming at 1R was worth " +
              "+$2.70/trade (t=2.48) on 498 paired GOLD 15m entries.")
 maxHold  = input.int(120,   "Max bars in trade",    group = grpX, minval = 5)
+hardTpR  = input.float(0.0, "Fixed TP at (R), 0 = trail only", group = grpX, step = 0.25,
+   tooltip = "0 means no fixed target: the ATR trail decides the exit. " +
+             "Set >0 to draw and use a hard TP. Measured: fixed 2R was worth " +
+             "+$2.15/trade vs the old exit, the ATR-3 trail +$4.54.")
 
 grpV = "Visuals"
 showBox  = input.bool(true,  "Live position box",   group = grpV)
@@ -86,6 +90,8 @@ var box    pBox   = na
 var line   lEnt   = na
 var line   lSl    = na
 
+var line  lTp  = na
+var label lTpL = na
 closePos() =>
     pDir := 0
     pArmed := false
@@ -97,8 +103,10 @@ if confirmed
         fav = (pDir == 1 ? high - pEnt : pEnt - low)
         pPeak := math.max(pPeak, fav)
         hitStop = pDir == 1 ? low <= pStop : high >= pStop
+        hitTp   = hardTpR > 0 and (pDir == 1 ? high >= pEnt + hardTpR * pDist
+                                             : low  <= pEnt - hardTpR * pDist)
         aged    = bar_index - pBar >= maxHold
-        if hitStop or aged
+        if hitStop or hitTp or aged
             closePos()
         else
             if pPeak >= armAtR * pDist
@@ -148,6 +156,10 @@ if barstate.islast
         line.delete(lEnt)
     if not na(lSl)
         line.delete(lSl)
+    if not na(lTp)
+        line.delete(lTp)
+    if not na(lTpL)
+        label.delete(lTpL)
     if pDir != 0 and showBox
         col = pDir == 1 ? cUp : cDn
         pBox := box.new(pBar, math.max(pEnt, pStop), bar_index + 6,
@@ -158,6 +170,14 @@ if barstate.islast
                          color = col, width = 2)
         lSl  := line.new(pBar, pStop, bar_index + 6, pStop,
                          color = cStop, width = 1, style = line.style_dashed)
+    if pDir != 0 and showBox and hardTpR > 0
+        colT = pDir == 1 ? cUp : cDn
+        tpLvl = pDir == 1 ? pEnt + hardTpR * pDist : pEnt - hardTpR * pDist
+        lTp := line.new(pBar, tpLvl, bar_index + 6, tpLvl, color = colT,
+                        width = 1, style = line.style_dotted)
+        lTpL := label.new(bar_index + 6, tpLvl, "TP " + str.tostring(tpLvl, format.mintick),
+                          style = label.style_label_left, size = size.tiny,
+                          color = color.new(colT, 80), textcolor = colT)
 
 // ------------------------------------------------- session panel
 sessName() =>

@@ -225,3 +225,75 @@ def displacement(d, k=1.5, n_med=50):
         m = np.median(rng[i - n_med:i])
         if m > 0 and rng[i] >= k * m: out[i] = True
     return out
+
+
+def sweep_engine(d, left=3, right=3, max_live=3, tol_atr=0.10,
+                 pierce_atr=0.05, buf=24):
+    """Single forward pass -- pools and sweeps together, exactly the way
+    LiquidityEngine.mq5 and LIQUIDITY_ENGINE.pine run: state is carried
+    bar to bar, never snapshotted.
+
+    (An earlier version of this built a list of per-bar snapshots and stored
+    a REFERENCE to the same mutable list on every bar, so every snapshot
+    showed the final buffer state. It measured 48 sweeps on two different
+    datasets -- 24 highs + 24 lows consumed once each -- which is what that
+    class of bug looks like from the outside.)
+
+    RULE 1  a pool is consumed when it is run: one event per level.
+    RULE 2  only the nearest `max_live` pools are ELIGIBLE on a given bar.
+            Eligibility, not deletion -- price moves and a pool can become
+            eligible again.
+    A run = pierce by pierce_atr*ATR and CLOSE BACK INSIDE. A close beyond
+    is a break, and is not this event.
+    """
+    ph, pl = pivots(d, left, right)
+    a = atr(d, 14)
+    n = d["n"]
+    highs, lows = [], []
+    sig = np.zeros(n, dtype=np.int8)
+    wick = np.full(n, np.nan)
+    for i in range(n):
+        if np.isnan(a[i]) or a[i] <= 0:
+            continue
+        tol = a[i] * tol_atr
+        j = i - right
+        if j >= left:
+            if ph[j]:
+                lv = d["h"][j]
+                if highs and abs(highs[-1]["level"] - lv) <= tol:
+                    highs[-1]["level"] = max(highs[-1]["level"], lv)
+                    highs[-1]["hits"] += 1
+                else:
+                    highs.append(dict(level=lv, hits=1, used=False))
+                    if len(highs) > buf: highs.pop(0)
+            if pl[j]:
+                lv = d["l"][j]
+                if lows and abs(lows[-1]["level"] - lv) <= tol:
+                    lows[-1]["level"] = min(lows[-1]["level"], lv)
+                    lows[-1]["hits"] += 1
+                else:
+                    lows.append(dict(level=lv, hits=1, used=False))
+                    if len(lows) > buf: lows.pop(0)
+
+        c = d["c"][i]
+        pe = pierce_atr * a[i]
+        dl = sorted(c - p["level"] for p in lows if not p["used"] and p["level"] < c)
+        lo_cut = dl[min(max_live - 1, len(dl) - 1)] if dl else 0.0
+        if lo_cut > 0:
+            for p in lows:
+                if p["used"]: continue
+                dd = c - p["level"]
+                if dd <= 0 or dd > lo_cut: continue
+                if d["l"][i] <= p["level"] - pe and c > p["level"]:
+                    p["used"] = True; sig[i] = 1; wick[i] = d["l"][i]; break
+        if sig[i] == 0:
+            dh = sorted(p["level"] - c for p in highs if not p["used"] and p["level"] > c)
+            hi_cut = dh[min(max_live - 1, len(dh) - 1)] if dh else 0.0
+            if hi_cut > 0:
+                for p in highs:
+                    if p["used"]: continue
+                    dd = p["level"] - c
+                    if dd <= 0 or dd > hi_cut: continue
+                    if d["h"][i] >= p["level"] + pe and c < p["level"]:
+                        p["used"] = True; sig[i] = -1; wick[i] = d["h"][i]; break
+    return sig, wick

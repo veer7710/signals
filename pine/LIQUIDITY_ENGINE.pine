@@ -41,6 +41,10 @@ maxStop  = input.float(4.0, "Skip if stop wider than (ATR)", group = grpX, step 
 trailATR = input.float(3.0, "ATR trail multiple",     group = grpX, step = 0.1)
 armAtR   = input.float(1.0, "Arm trail at (R)",       group = grpX, step = 0.1)
 maxHold  = input.int(150,   "Max bars in trade",      group = grpX)
+hardTpR  = input.float(0.0, "Fixed TP at (R), 0 = trail only", group = grpX, step = 0.25,
+   tooltip = "0 means no fixed target: the ATR trail decides the exit. " +
+             "Set >0 to draw and use a hard TP. Measured: fixed 2R was worth " +
+             "+$2.15/trade vs the old exit, the ATR-3 trail +$4.54.")
 
 grpV = "SMC context"
 showFVG  = input.bool(true, "Fair value gaps",  group = grpV)
@@ -59,23 +63,21 @@ cOb   = input.color(#78909c, "Order block", group = grpV)
 atr = ta.atr(14)
 
 // ------------------------------------------------- pools
-// arrays hold live (unconsumed) pools only; a run removes the entry
+// A pool is a confirmed swing high/low. Two rules decide whether a sweep
+// of one means anything:
+//   RULE 1  consume the pool when it is run  -> one event per level
+//   RULE 2  only the NEAREST maxPools are eligible, measured from the
+//           current close every bar. This is "nearest", NOT "most recent"
+//           -- the EA prunes by distance, so the chart must too or the
+//           two fire on different bars.
 var float[] hiLvl = array.new_float()
-var int[]   hiBar = array.new_int()
 var float[] loLvl = array.new_float()
-var int[]   loBar = array.new_int()
 var line[]  hiLn  = array.new_line()
 var line[]  loLn  = array.new_line()
+BUF = 24                                   // pools retained before eligibility
 
 ph = ta.pivothigh(high, pvLen, pvLen)
 pl = ta.pivotlow(low,  pvLen, pvLen)
-
-dropOldest(float[] lv, int[] bi, line[] ln) =>
-    if array.size(lv) > maxPools
-        if showPools and array.size(ln) > 0
-            line.delete(array.shift(ln))
-        array.shift(lv)
-        array.shift(bi)
 
 if not na(ph)
     tol = eqTol * atr
@@ -87,11 +89,13 @@ if not na(ph)
             merged := true
     if not merged
         array.push(hiLvl, ph)
-        array.push(hiBar, bar_index - pvLen)
-        if showPools
-            array.push(hiLn, line.new(bar_index - pvLen, ph, bar_index, ph,
-                       color = color.new(cPool, 45), width = 1))
-        dropOldest(hiLvl, hiBar, hiLn)
+        array.push(hiLn, showPools ? line.new(bar_index - pvLen, ph, bar_index, ph,
+                   color = color.new(cPool, 45), width = 1) : na)
+        if array.size(hiLvl) > BUF
+            old = array.shift(hiLn)
+            if not na(old)
+                line.delete(old)
+            array.shift(hiLvl)
 
 if not na(pl)
     tol = eqTol * atr
@@ -103,60 +107,93 @@ if not na(pl)
             merged := true
     if not merged
         array.push(loLvl, pl)
-        array.push(loBar, bar_index - pvLen)
-        if showPools
-            array.push(loLn, line.new(bar_index - pvLen, pl, bar_index, pl,
-                       color = color.new(cPool, 45), width = 1))
-        dropOldest(loLvl, loBar, loLn)
+        array.push(loLn, showPools ? line.new(bar_index - pvLen, pl, bar_index, pl,
+                   color = color.new(cPool, 45), width = 1) : na)
+        if array.size(loLvl) > BUF
+            old = array.shift(loLn)
+            if not na(old)
+                line.delete(old)
+            array.shift(loLvl)
+
+// RULE 2: the distance of the maxPools-th nearest pool on each side.
+// A pool further than this is not eligible this bar.
+loCut = 0.0
+if array.size(loLvl) > 0
+    dl = array.new_float()
+    for i = 0 to array.size(loLvl) - 1
+        d = close - array.get(loLvl, i)
+        if d > 0
+            array.push(dl, d)
+    if array.size(dl) > 0
+        array.sort(dl, order.ascending)
+        loCut := array.get(dl, math.min(maxPools - 1, array.size(dl) - 1))
+
+hiCut = 0.0
+if array.size(hiLvl) > 0
+    dh = array.new_float()
+    for i = 0 to array.size(hiLvl) - 1
+        d = array.get(hiLvl, i) - close
+        if d > 0
+            array.push(dh, d)
+    if array.size(dh) > 0
+        array.sort(dh, order.ascending)
+        hiCut := array.get(dh, math.min(maxPools - 1, array.size(dh) - 1))
 
 // keep pool lines stretching to the right edge
 if showPools and barstate.islast
-    for i = 0 to math.max(array.size(hiLn) - 1, 0)
-        if array.size(hiLn) > 0
-            line.set_x2(array.get(hiLn, i), bar_index + 8)
-    for i = 0 to math.max(array.size(loLn) - 1, 0)
-        if array.size(loLn) > 0
-            line.set_x2(array.get(loLn, i), bar_index + 8)
+    if array.size(hiLn) > 0
+        for i = 0 to array.size(hiLn) - 1
+            ln = array.get(hiLn, i)
+            if not na(ln)
+                line.set_x2(ln, bar_index + 8)
+    if array.size(loLn) > 0
+        for i = 0 to array.size(loLn) - 1
+            ln = array.get(loLn, i)
+            if not na(ln)
+                line.set_x2(ln, bar_index + 8)
 
 // ------------------------------------------------- detect a RUN
-sweptDir = 0     // +1 a LOW was run, -1 a HIGH was run
-sweptLvl = 0.0
+// pierce by pierce*ATR and CLOSE BACK INSIDE. A close beyond is a BREAK,
+// drawn but never traded.
+sweptDir  = 0        // +1 a LOW was run, -1 a HIGH was run
 sweptWick = 0.0
-brokeDir = 0     // close BEYOND -> a break, drawn but never traded
+brokeDir  = 0
 
-if array.size(loLvl) > 0
+if array.size(loLvl) > 0 and loCut > 0
     for i = array.size(loLvl) - 1 to 0
-        lv = array.get(loLvl, i)
-        if low <= lv - pierce * atr
-            if close > lv and sweptDir == 0
-                sweptDir := 1
-                sweptLvl := lv
-                sweptWick := low
-                array.remove(loLvl, i)      // RULE 1: consume
-                array.remove(loBar, i)
-                if showPools and array.size(loLn) > i
-                    line.set_color(array.get(loLn, i), color.new(cRun, 20))
-                    line.set_style(array.get(loLn, i), line.style_dotted)
-                    array.remove(loLn, i)
-            else if close <= lv
-                brokeDir := -1
+        if i < array.size(loLvl)
+            lv = array.get(loLvl, i)
+            if lv < close and close - lv <= loCut and low <= lv - pierce * atr
+                if close > lv and sweptDir == 0
+                    sweptDir  := 1
+                    sweptWick := low
+                    array.remove(loLvl, i)                 // RULE 1: consume
+                    if array.size(loLn) > i
+                        ln = array.get(loLn, i)
+                        if not na(ln)
+                            line.set_color(ln, color.new(cRun, 20))
+                            line.set_style(ln, line.style_dotted)
+                        array.remove(loLn, i)
+                else if close <= lv
+                    brokeDir := -1
 
-if sweptDir == 0 and array.size(hiLvl) > 0
+if sweptDir == 0 and array.size(hiLvl) > 0 and hiCut > 0
     for i = array.size(hiLvl) - 1 to 0
-        lv = array.get(hiLvl, i)
-        if high >= lv + pierce * atr
-            if close < lv and sweptDir == 0
-                sweptDir := -1
-                sweptLvl := lv
-                sweptWick := high
-                array.remove(hiLvl, i)
-                array.remove(hiBar, i)
-                if showPools and array.size(hiLn) > i
-                    line.set_color(array.get(hiLn, i), color.new(cRun, 20))
-                    line.set_style(array.get(hiLn, i), line.style_dotted)
-                    array.remove(hiLn, i)
-            else if close >= lv
-                brokeDir := 1
+        if i < array.size(hiLvl)
+            lv = array.get(hiLvl, i)
+            if lv > close and lv - close <= hiCut and high >= lv + pierce * atr
+                if close < lv and sweptDir == 0
+                    sweptDir  := -1
+                    sweptWick := high
+                    array.remove(hiLvl, i)
+                    if array.size(hiLn) > i
+                        ln = array.get(hiLn, i)
+                        if not na(ln)
+                            line.set_color(ln, color.new(cRun, 20))
+                            line.set_style(ln, line.style_dotted)
+                        array.remove(hiLn, i)
+                else if close >= lv
+                    brokeDir := 1
 
 confirmed = barstate.isconfirmed or barstate.ishistory
 tradeDir  = sweptDir == 0 ? 0 : (mode == "Reversal" ? sweptDir : -sweptDir)
@@ -206,7 +243,9 @@ if confirmed
     if pDir != 0
         fav = pDir == 1 ? high - pEnt : pEnt - low
         pPeak := math.max(pPeak, fav)
-        if (pDir == 1 ? low <= pStop : high >= pStop) or bar_index - pBar >= maxHold
+        hitTp = hardTpR > 0 and (pDir == 1 ? high >= pEnt + hardTpR * pDist
+                                            : low  <= pEnt - hardTpR * pDist)
+        if (pDir == 1 ? low <= pStop : high >= pStop) or hitTp or bar_index - pBar >= maxHold
             pDir := 0
             pArmed := false
             pPeak := 0.0
@@ -226,6 +265,8 @@ if confirmed
 var box  posBox = na
 var line posEnt = na
 var line posSl  = na
+var line posTp  = na
+var label posTpL = na
 if barstate.islast
     if not na(posBox)
         box.delete(posBox)
@@ -233,6 +274,10 @@ if barstate.islast
         line.delete(posEnt)
     if not na(posSl)
         line.delete(posSl)
+    if not na(posTp)
+        line.delete(posTp)
+    if not na(posTpL)
+        label.delete(posTpL)
     if pDir != 0 and showBox
         col = pDir == 1 ? cUp : cDn
         posBox := box.new(pBar, math.max(pEnt, pStop), bar_index + 6, math.min(pEnt, pStop),
@@ -240,6 +285,14 @@ if barstate.islast
         posEnt := line.new(pBar, pEnt,  bar_index + 6, pEnt,  color = col, width = 2)
         posSl  := line.new(pBar, pStop, bar_index + 6, pStop, color = cDn, width = 1,
                            style = line.style_dashed)
+    if pDir != 0 and showBox and hardTpR > 0
+        colT = pDir == 1 ? cUp : cDn
+        tpLvl = pDir == 1 ? pEnt + hardTpR * pDist : pEnt - hardTpR * pDist
+        posTp := line.new(pBar, tpLvl, bar_index + 6, tpLvl, color = colT,
+                          width = 1, style = line.style_dotted)
+        posTpL := label.new(bar_index + 6, tpLvl, "TP " + str.tostring(tpLvl, format.mintick),
+                            style = label.style_label_left, size = size.tiny,
+                            color = color.new(colT, 80), textcolor = colT)
 
 // ------------------------------------------------- markers
 plotshape(sigLong,  "BUY",  shape.labelup,   location.belowbar, cUp,

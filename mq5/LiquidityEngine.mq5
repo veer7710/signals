@@ -205,48 +205,71 @@ bool IsPivotLow(int sh)
    return true;
 }
 
-//--- keep only the nearest-N unused pools on each side
-void PrunePools(double px)
-{
-   Pool keep[];
-   // highs above price, nearest first
-   ArrayResize(keep, 0);
-   for(int pass = 0; pass < InpMaxPools; pass++)
-   {
-      int best = -1; double bd = DBL_MAX;
-      for(int i = 0; i < ArraySize(poolHi); i++)
-      {
-         if(poolHi[i].used || poolHi[i].level <= px) continue;
-         bool taken = false;
-         for(int j = 0; j < ArraySize(keep); j++) if(keep[j].level == poolHi[i].level) taken = true;
-         if(taken) continue;
-         double dd = poolHi[i].level - px;
-         if(dd < bd) { bd = dd; best = i; }
-      }
-      if(best < 0) break;
-      int n = ArraySize(keep); ArrayResize(keep, n+1); keep[n] = poolHi[best];
-   }
-   ArrayResize(poolHi, ArraySize(keep));
-   for(int i = 0; i < ArraySize(keep); i++) poolHi[i] = keep[i];
+//--- RULE 2: eligibility, not deletion.
+//    A pool outside the nearest-N is IGNORED this bar, not destroyed --
+//    price moves and it can become eligible again. Deleting it would make
+//    the EA and the Pine fire on different bars.
+//    Only the retention buffer is capped, oldest dropped first.
+#define POOL_BUF 24
 
-   ArrayResize(keep, 0);
-   for(int pass = 0; pass < InpMaxPools; pass++)
+void CapBuffer()
+{
+   int n = ArraySize(poolHi);
+   if(n > POOL_BUF)
    {
-      int best = -1; double bd = DBL_MAX;
-      for(int i = 0; i < ArraySize(poolLo); i++)
-      {
-         if(poolLo[i].used || poolLo[i].level >= px) continue;
-         bool taken = false;
-         for(int j = 0; j < ArraySize(keep); j++) if(keep[j].level == poolLo[i].level) taken = true;
-         if(taken) continue;
-         double dd = px - poolLo[i].level;
-         if(dd < bd) { bd = dd; best = i; }
-      }
-      if(best < 0) break;
-      int n = ArraySize(keep); ArrayResize(keep, n+1); keep[n] = poolLo[best];
+      int drop = n - POOL_BUF;
+      for(int i = 0; i + drop < n; i++) poolHi[i] = poolHi[i+drop];
+      ArrayResize(poolHi, POOL_BUF);
    }
-   ArrayResize(poolLo, ArraySize(keep));
-   for(int i = 0; i < ArraySize(keep); i++) poolLo[i] = keep[i];
+   n = ArraySize(poolLo);
+   if(n > POOL_BUF)
+   {
+      int drop = n - POOL_BUF;
+      for(int i = 0; i + drop < n; i++) poolLo[i] = poolLo[i+drop];
+      ArrayResize(poolLo, POOL_BUF);
+   }
+}
+
+//--- distance of the InpMaxPools-th nearest live pool. Anything further
+//--- than this is not eligible on this bar. Returns 0 if none.
+double LowCut(double px)
+{
+   double d[]; ArrayResize(d, 0);
+   for(int i = 0; i < ArraySize(poolLo); i++)
+   {
+      if(poolLo[i].used) continue;
+      double dd = px - poolLo[i].level;
+      if(dd <= 0) continue;
+      int n = ArraySize(d); ArrayResize(d, n+1); d[n] = dd;
+   }
+   if(ArraySize(d) == 0) return 0.0;
+   ArraySort(d);
+   int idx = MathMin(InpMaxPools - 1, ArraySize(d) - 1);
+   return d[idx];
+}
+
+double HighCut(double px)
+{
+   double d[]; ArrayResize(d, 0);
+   for(int i = 0; i < ArraySize(poolHi); i++)
+   {
+      if(poolHi[i].used) continue;
+      double dd = poolHi[i].level - px;
+      if(dd <= 0) continue;
+      int n = ArraySize(d); ArrayResize(d, n+1); d[n] = dd;
+   }
+   if(ArraySize(d) == 0) return 0.0;
+   ArraySort(d);
+   int idx = MathMin(InpMaxPools - 1, ArraySize(d) - 1);
+   return d[idx];
+}
+
+int LiveCount(bool high)
+{
+   int n = 0;
+   if(high) { for(int i=0;i<ArraySize(poolHi);i++) if(!poolHi[i].used) n++; }
+   else     { for(int i=0;i<ArraySize(poolLo);i++) if(!poolLo[i].used) n++; }
+   return n;
 }
 
 int HtfBias()
@@ -276,7 +299,7 @@ void OnTick()
       if(IsPivotHigh(sh)) AddPool(true,  iHigh(_Symbol,_Period,sh), iTime(_Symbol,_Period,sh), tol);
       if(IsPivotLow(sh))  AddPool(false, iLow(_Symbol,_Period,sh),  iTime(_Symbol,_Period,sh), tol);
    }
-   PrunePools(iClose(_Symbol,_Period,1));
+   CapBuffer();
 
    if(GuardsBlock()) return;
    if(CountOpen() >= InpMaxOpen) return;
@@ -285,16 +308,21 @@ void OnTick()
    double pierce = InpPierceATR * a;
    int    swept = 0; double wick = 0;
 
-   for(int i = 0; i < ArraySize(poolLo); i++)
+   double loCut = LowCut(c1), hiCut = HighCut(c1);
+   for(int i = 0; i < ArraySize(poolLo) && loCut > 0; i++)
    {
       if(poolLo[i].used) continue;
+      double dd = c1 - poolLo[i].level;
+      if(dd <= 0 || dd > loCut) continue;                  // RULE 2: eligibility
       if(lo1 <= poolLo[i].level - pierce && c1 > poolLo[i].level)
       { poolLo[i].used = true; swept = 1; wick = lo1; nSweeps++; break; }   // RULE 1: consume
    }
    if(swept == 0)
-      for(int i = 0; i < ArraySize(poolHi); i++)
+      for(int i = 0; i < ArraySize(poolHi) && hiCut > 0; i++)
       {
          if(poolHi[i].used) continue;
+         double dd = poolHi[i].level - c1;
+         if(dd <= 0 || dd > hiCut) continue;
          if(hi1 >= poolHi[i].level + pierce && c1 < poolHi[i].level)
          { poolHi[i].used = true; swept = -1; wick = hi1; nSweeps++; break; }
       }
@@ -444,7 +472,7 @@ void DrawPanel()
       _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
       InpMode==SWEEP_REVERSAL?"reversal":"continuation",
       SessionNow(), TimeToString(TimeGMT(),TIME_MINUTES),
-      ArraySize(poolHi), ArraySize(poolLo), nSweeps,
+      LiveCount(true), LiveCount(false), nSweeps,
       nTrades, nTrades>0?100.0*nWins/nTrades:0.0, sumR, sumPts, cap, nCapture,
       nSkipWide, nSkipSize,
       gHalted?("HALTED "+gHaltWhy):"ok",

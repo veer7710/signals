@@ -37,6 +37,10 @@ maxStop   = input.float(4.0, "Skip if stop > (ATR)", group = grpX, step = 0.1)
 trailATR  = input.float(3.0, "ATR trail multiple", group = grpX, step = 0.1)
 armAtR    = input.float(1.0, "Arm trail at (R)",   group = grpX, step = 0.1)
 maxHold   = input.int(150,   "Max bars in trade",  group = grpX)
+hardTpR  = input.float(0.0, "Fixed TP at (R), 0 = trail only", group = grpX, step = 0.25,
+   tooltip = "0 means no fixed target: the ATR trail decides the exit. " +
+             "Set >0 to draw and use a hard TP. Measured: fixed 2R was worth " +
+             "+$2.15/trade vs the old exit, the ATR-3 trail +$4.54.")
 
 grpV = "Visuals"
 showRange = input.bool(true, "Range box",      group = grpV)
@@ -106,7 +110,9 @@ if confirmed
     if pDir != 0
         fav = pDir == 1 ? high - pEnt : pEnt - low
         pPeak := math.max(pPeak, fav)
-        if (pDir == 1 ? low <= pStop : high >= pStop) or bar_index - pBar >= maxHold
+        hitTp = hardTpR > 0 and (pDir == 1 ? high >= pEnt + hardTpR * pDist
+                                            : low  <= pEnt - hardTpR * pDist)
+        if (pDir == 1 ? low <= pStop : high >= pStop) or hitTp or bar_index - pBar >= maxHold
             pDir := 0
             pArmed := false
             pPeak := 0.0
@@ -126,6 +132,8 @@ if confirmed
 var box  posBox = na
 var line posEnt = na
 var line posSl  = na
+var line posTp  = na
+var label posTpL = na
 if barstate.islast
     if not na(posBox)
         box.delete(posBox)
@@ -133,6 +141,10 @@ if barstate.islast
         line.delete(posEnt)
     if not na(posSl)
         line.delete(posSl)
+    if not na(posTp)
+        line.delete(posTp)
+    if not na(posTpL)
+        label.delete(posTpL)
     if pDir != 0 and showBox
         col = pDir == 1 ? cUp : cDn
         posBox := box.new(pBar, math.max(pEnt, pStop), bar_index + 6, math.min(pEnt, pStop),
@@ -140,6 +152,14 @@ if barstate.islast
         posEnt := line.new(pBar, pEnt,  bar_index + 6, pEnt,  color = col, width = 2)
         posSl  := line.new(pBar, pStop, bar_index + 6, pStop, color = cDn, width = 1,
                            style = line.style_dashed)
+    if pDir != 0 and showBox and hardTpR > 0
+        colT = pDir == 1 ? cUp : cDn
+        tpLvl = pDir == 1 ? pEnt + hardTpR * pDist : pEnt - hardTpR * pDist
+        posTp := line.new(pBar, tpLvl, bar_index + 6, tpLvl, color = colT,
+                          width = 1, style = line.style_dotted)
+        posTpL := label.new(bar_index + 6, tpLvl, "TP " + str.tostring(tpLvl, format.mintick),
+                            style = label.style_label_left, size = size.tiny,
+                            color = color.new(colT, 80), textcolor = colT)
 
 plot(rReady ? rHi : na, "Range high", color.new(cRng, 20), 1, plot.style_linebr)
 plot(rReady ? rLo : na, "Range low",  color.new(cRng, 20), 1, plot.style_linebr)
