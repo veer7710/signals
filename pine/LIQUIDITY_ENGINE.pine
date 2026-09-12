@@ -1,0 +1,287 @@
+//@version=5
+// =====================================================================
+//  LIQUIDITY ENGINE  --  chart twin of LiquidityEngine.mq5
+//
+//  Shows the SMC furniture (pools, sweeps, FVGs, order blocks, voids)
+//  AND marks only the events the EA actually trades, so you can see
+//  the difference between context and a signal.
+//
+//  The two rules that make a sweep mean anything:
+//    1. a pool is CONSUMED when it is run (one event per level)
+//    2. only the nearest N pools are eligible
+//  Break both and "a level was run" is true on most bars.
+//
+//  A RUN = pierce by PierceATR and CLOSE BACK INSIDE.
+//  A CLOSE BEYOND is a BREAK, drawn differently, never traded.
+//
+//  Signals only ever appear on a CONFIRMED bar, so nothing that shows
+//  up will later vanish.
+// =====================================================================
+indicator("Liquidity Engine", overlay = true, max_boxes_count = 500,
+          max_lines_count = 500, max_labels_count = 500)
+
+grpP = "Liquidity pools"
+pvLen    = input.int(3,    "Swing strength (bars each side)", group = grpP, minval = 1)
+maxPools = input.int(3,    "Nearest pools eligible",  group = grpP, minval = 1, maxval = 10,
+   tooltip = "Raising this is how the signal dies: scan forty levels and 'a level was run' is true on most bars.")
+eqTol    = input.float(0.10,"Equal-highs merge tol (ATR)", group = grpP, step = 0.05)
+pierce   = input.float(0.05,"Pierce depth (ATR)",     group = grpP, step = 0.01)
+showPools= input.bool(true, "Draw pools",             group = grpP)
+
+grpD = "Direction"
+mode     = input.string("Continuation", "Sweep is read as",
+   options = ["Continuation", "Reversal"], group = grpD,
+   tooltip = "Measured on GOLD 15m + 1h with the stop beyond the wick: " +
+             "Reversal lost on both (lift 0.87-1.02). Continuation was the " +
+             "mildly positive one (1.04-1.11). Neither clears a best-of-N null.")
+
+grpX = "Stop / exit"
+bufATR   = input.float(0.25,"Stop buffer beyond wick (ATR)", group = grpX, step = 0.05)
+maxStop  = input.float(4.0, "Skip if stop wider than (ATR)", group = grpX, step = 0.1)
+trailATR = input.float(3.0, "ATR trail multiple",     group = grpX, step = 0.1)
+armAtR   = input.float(1.0, "Arm trail at (R)",       group = grpX, step = 0.1)
+maxHold  = input.int(150,   "Max bars in trade",      group = grpX)
+
+grpV = "SMC context"
+showFVG  = input.bool(true, "Fair value gaps",  group = grpV)
+showOB   = input.bool(true, "Order blocks",     group = grpV)
+showVoid = input.bool(true, "Liquidity voids",  group = grpV)
+showSess = input.bool(true, "Session panel",    group = grpV)
+showBox  = input.bool(true, "Live position box",group = grpV)
+
+cUp   = input.color(#26a69a, "Long",        group = grpV)
+cDn   = input.color(#ef5350, "Short",       group = grpV)
+cPool = input.color(#ffb74d, "Pool",        group = grpV)
+cRun  = input.color(#ab47bc, "Swept pool",  group = grpV)
+cFvg  = input.color(#42a5f5, "FVG",         group = grpV)
+cOb   = input.color(#78909c, "Order block", group = grpV)
+
+atr = ta.atr(14)
+
+// ------------------------------------------------- pools
+// arrays hold live (unconsumed) pools only; a run removes the entry
+var float[] hiLvl = array.new_float()
+var int[]   hiBar = array.new_int()
+var float[] loLvl = array.new_float()
+var int[]   loBar = array.new_int()
+var line[]  hiLn  = array.new_line()
+var line[]  loLn  = array.new_line()
+
+ph = ta.pivothigh(high, pvLen, pvLen)
+pl = ta.pivotlow(low,  pvLen, pvLen)
+
+dropOldest(float[] lv, int[] bi, line[] ln) =>
+    if array.size(lv) > maxPools
+        if showPools and array.size(ln) > 0
+            line.delete(array.shift(ln))
+        array.shift(lv)
+        array.shift(bi)
+
+if not na(ph)
+    tol = eqTol * atr
+    merged = false
+    if array.size(hiLvl) > 0
+        last = array.get(hiLvl, array.size(hiLvl) - 1)
+        if math.abs(last - ph) <= tol
+            array.set(hiLvl, array.size(hiLvl) - 1, math.max(last, ph))
+            merged := true
+    if not merged
+        array.push(hiLvl, ph)
+        array.push(hiBar, bar_index - pvLen)
+        if showPools
+            array.push(hiLn, line.new(bar_index - pvLen, ph, bar_index, ph,
+                       color = color.new(cPool, 45), width = 1))
+        dropOldest(hiLvl, hiBar, hiLn)
+
+if not na(pl)
+    tol = eqTol * atr
+    merged = false
+    if array.size(loLvl) > 0
+        last = array.get(loLvl, array.size(loLvl) - 1)
+        if math.abs(last - pl) <= tol
+            array.set(loLvl, array.size(loLvl) - 1, math.min(last, pl))
+            merged := true
+    if not merged
+        array.push(loLvl, pl)
+        array.push(loBar, bar_index - pvLen)
+        if showPools
+            array.push(loLn, line.new(bar_index - pvLen, pl, bar_index, pl,
+                       color = color.new(cPool, 45), width = 1))
+        dropOldest(loLvl, loBar, loLn)
+
+// keep pool lines stretching to the right edge
+if showPools and barstate.islast
+    for i = 0 to math.max(array.size(hiLn) - 1, 0)
+        if array.size(hiLn) > 0
+            line.set_x2(array.get(hiLn, i), bar_index + 8)
+    for i = 0 to math.max(array.size(loLn) - 1, 0)
+        if array.size(loLn) > 0
+            line.set_x2(array.get(loLn, i), bar_index + 8)
+
+// ------------------------------------------------- detect a RUN
+sweptDir = 0     // +1 a LOW was run, -1 a HIGH was run
+sweptLvl = 0.0
+sweptWick = 0.0
+brokeDir = 0     // close BEYOND -> a break, drawn but never traded
+
+if array.size(loLvl) > 0
+    for i = array.size(loLvl) - 1 to 0
+        lv = array.get(loLvl, i)
+        if low <= lv - pierce * atr
+            if close > lv and sweptDir == 0
+                sweptDir := 1
+                sweptLvl := lv
+                sweptWick := low
+                array.remove(loLvl, i)      // RULE 1: consume
+                array.remove(loBar, i)
+                if showPools and array.size(loLn) > i
+                    line.set_color(array.get(loLn, i), color.new(cRun, 20))
+                    line.set_style(array.get(loLn, i), line.style_dotted)
+                    array.remove(loLn, i)
+            else if close <= lv
+                brokeDir := -1
+
+if sweptDir == 0 and array.size(hiLvl) > 0
+    for i = array.size(hiLvl) - 1 to 0
+        lv = array.get(hiLvl, i)
+        if high >= lv + pierce * atr
+            if close < lv and sweptDir == 0
+                sweptDir := -1
+                sweptLvl := lv
+                sweptWick := high
+                array.remove(hiLvl, i)
+                array.remove(hiBar, i)
+                if showPools and array.size(hiLn) > i
+                    line.set_color(array.get(hiLn, i), color.new(cRun, 20))
+                    line.set_style(array.get(hiLn, i), line.style_dotted)
+                    array.remove(hiLn, i)
+            else if close >= lv
+                brokeDir := 1
+
+confirmed = barstate.isconfirmed or barstate.ishistory
+tradeDir  = sweptDir == 0 ? 0 : (mode == "Reversal" ? sweptDir : -sweptDir)
+stopDist  = sweptDir == 0 ? na :
+            (sweptDir == 1 ? math.abs(close - sweptWick) : math.abs(sweptWick - close)) + bufATR * atr
+tooWide   = not na(stopDist) and stopDist > maxStop * atr
+sigLong   = confirmed and tradeDir ==  1 and not tooWide
+sigShort  = confirmed and tradeDir == -1 and not tooWide
+
+// ------------------------------------------------- SMC context
+bullFVG = low > high[2]
+bearFVG = high < low[2]
+if showFVG and confirmed
+    if bullFVG
+        box.new(bar_index - 2, low, bar_index + 10, high[2],
+                border_color = color.new(cFvg, 70), bgcolor = color.new(cFvg, 90))
+    if bearFVG
+        box.new(bar_index - 2, low[2], bar_index + 10, high,
+                border_color = color.new(cFvg, 70), bgcolor = color.new(cFvg, 90))
+
+bigBar = (high - low) > 1.5 * ta.median(high - low, 50)
+if showOB and confirmed and bigBar
+    if close > open and close[1] < open[1]
+        box.new(bar_index - 1, high[1], bar_index + 10, low[1],
+                border_color = color.new(cOb, 60), bgcolor = color.new(cOb, 88))
+    if close < open and close[1] > open[1]
+        box.new(bar_index - 1, high[1], bar_index + 10, low[1],
+                border_color = color.new(cOb, 60), bgcolor = color.new(cOb, 88))
+
+// liquidity void = a run of bars price crossed without trading back into
+isVoid = (high - low) > 2.5 * ta.median(high - low, 50)
+if showVoid and confirmed and isVoid
+    box.new(bar_index, high, bar_index + 10, low,
+            border_color = color.new(color.yellow, 80),
+            bgcolor = color.new(color.yellow, 93))
+
+// ------------------------------------------------- simulated position
+var int   pDir = 0
+var float pEnt = na
+var float pStop = na
+var float pDist = na
+var float pPeak = 0.0
+var int   pBar = na
+var bool  pArmed = false
+
+if confirmed
+    if pDir != 0
+        fav = pDir == 1 ? high - pEnt : pEnt - low
+        pPeak := math.max(pPeak, fav)
+        if (pDir == 1 ? low <= pStop : high >= pStop) or bar_index - pBar >= maxHold
+            pDir := 0
+            pArmed := false
+            pPeak := 0.0
+        else if pPeak >= armAtR * pDist
+            pArmed := true
+            cand = pDir == 1 ? close - trailATR * atr : close + trailATR * atr
+            pStop := pDir == 1 ? math.max(pStop, cand) : math.min(pStop, cand)
+    if pDir == 0 and (sigLong[1] or sigShort[1])
+        pDir := sigLong[1] ? 1 : -1
+        pEnt := open
+        pDist := stopDist[1]
+        pStop := pDir == 1 ? pEnt - pDist : pEnt + pDist
+        pPeak := 0.0
+        pBar := bar_index
+        pArmed := false
+
+var box  posBox = na
+var line posEnt = na
+var line posSl  = na
+if barstate.islast
+    if not na(posBox)
+        box.delete(posBox)
+    if not na(posEnt)
+        line.delete(posEnt)
+    if not na(posSl)
+        line.delete(posSl)
+    if pDir != 0 and showBox
+        col = pDir == 1 ? cUp : cDn
+        posBox := box.new(pBar, math.max(pEnt, pStop), bar_index + 6, math.min(pEnt, pStop),
+                          border_color = color.new(col, 45), bgcolor = color.new(col, 88))
+        posEnt := line.new(pBar, pEnt,  bar_index + 6, pEnt,  color = col, width = 2)
+        posSl  := line.new(pBar, pStop, bar_index + 6, pStop, color = cDn, width = 1,
+                           style = line.style_dashed)
+
+// ------------------------------------------------- markers
+plotshape(sigLong,  "BUY",  shape.labelup,   location.belowbar, cUp,
+          text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sigShort, "SELL", shape.labeldown, location.abovebar, cDn,
+          text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(sweptDir ==  1 and confirmed, "low swept",  shape.triangleup,
+          location.belowbar, color.new(cRun, 30), size = size.tiny)
+plotshape(sweptDir == -1 and confirmed, "high swept", shape.triangledown,
+          location.abovebar, color.new(cRun, 30), size = size.tiny)
+plotshape(brokeDir != 0 and confirmed, "BREAK (not traded)", shape.circle,
+          location.absolute, color.new(color.gray, 55), size = size.tiny)
+
+// ------------------------------------------------- session panel
+sessName() =>
+    h = hour(time, "GMT")
+    h >= 23 or h < 7 ? "ASIA" : h < 12 ? "LONDON" :
+       h < 16 ? "LDN / NY overlap" : h < 21 ? "NEW YORK" : "OFF"
+volTag() =>
+    h = hour(time, "GMT")
+    (h >= 12 and h <= 15) or h <= 1 ? "HIGH VOL" :
+       (h >= 3 and h <= 4) or h == 20 or h == 22 ? "thin" : "normal"
+
+var table tb = na
+if showSess and barstate.islast
+    if na(tb)
+        tb := table.new(position.bottom_right, 1, 4,
+                        bgcolor = color.new(color.black, 82),
+                        border_color = color.new(color.gray, 70), border_width = 1)
+    table.cell(tb, 0, 0, sessName() + "   " + volTag(),
+               text_color = color.new(color.white, 15), text_size = size.tiny)
+    table.cell(tb, 0, 1, "pools  " + str.tostring(array.size(hiLvl)) + "H / " +
+               str.tostring(array.size(loLvl)) + "L   mode " + mode,
+               text_color = color.new(color.gray, 15), text_size = size.tiny)
+    table.cell(tb, 0, 2, pDir == 0 ? "flat" :
+               (pDir == 1 ? "LONG " : "SHORT ") + str.tostring(pEnt, format.mintick),
+               text_color = pDir == 0 ? color.gray : (pDir == 1 ? cUp : cDn),
+               text_size = size.tiny)
+    table.cell(tb, 0, 3, pDir == 0 ? "" :
+               "peak " + str.tostring(pDist > 0 ? pPeak / pDist : 0, "#.##") + "R" +
+               (pArmed ? "  [armed]" : "  [not armed]"),
+               text_color = color.new(color.gray, 10), text_size = size.tiny)
+
+alertcondition(sigLong,  "Liquidity BUY",  "Liquidity Engine BUY")
+alertcondition(sigShort, "Liquidity SELL", "Liquidity Engine SELL")
