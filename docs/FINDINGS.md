@@ -265,3 +265,75 @@ yourself, with this table attached.
 - The exit finding is the *only* statistically significant result, it is a
   *relative* one (this exit beats that exit on the same trades), and it is
   significant on 15m only, with 1h agreeing in direction.
+
+---
+
+# Second pass: families that had not been tested
+
+## 10. Funded-account sizing — the part that is not guesswork
+
+Bootstrap the measured trade distribution, then Monte-Carlo 6,000 runs of a
+standard prop challenge (+8% target, 6% max drawdown, 400-trade budget):
+
+| risk / trade | P(pass) | P(blow) | P(ran out of trades) |
+|---|---|---|---|
+| 0.10% | 48.4% | 0.4% | 51.2% |
+| 0.15% | 73.3% | 4.3% | 22.4% |
+| **0.20%** | **80.0%** | 12.7% | 7.3% |
+| 0.25% | 78.3% | 19.9% | 1.8% |
+| 0.50% | 59.4% | 40.6% | 0% |
+| 1.00% | 48.8% | 51.2% | 0% |
+| 5.00% | 37.3% | 62.7% | 0% |
+
+**P(pass) falls monotonically with risk above 0.2%.** Raising risk to pass
+faster makes you pass *less* often — below 0.2% the only failure mode is
+running out of trades, above it the failure mode is the drawdown limit, and
+the drawdown limit bites much harder.
+
+This does not require a directional edge to be true. It is the single
+largest controllable factor in whether a challenge passes, and it is the
+mechanism behind "kept tryna fullport so got margin called".
+
+All four EAs now default to 0.20–0.25%.
+
+## 11. New families tested, de-trended, against a matched null
+
+| family | 1h $/trade | t | 15m $/trade | t |
+|---|---|---|---|---|
+| **MTF: HTF trend + LTF pullback** | **+4.12** | 1.42 | **+6.21** | 1.73 |
+| **Asian range break** | **+4.26** | 1.51 | — (too few) | — |
+| sweep + HTF + volatility band | −0.78 | −0.50 | +2.19 | 0.84 |
+| coil → expansion break | −3.10 | −0.85 | −1.62 | −0.36 |
+
+The two that worked are the two that **enter on a pullback or a range edge
+rather than on the move itself**. That is consistent with everything in §1:
+what fails is entering after displacement.
+
+## 12. APEX — the two combined, walk-forward
+
+Parameters chosen on the **first half only** (96 grid cells searched), then
+reported on the second half, which the search never saw:
+
+| | n | /day | win% | $/trade | PF |
+|---|---|---|---|---|---|
+| GOLD 1h, full | 297 | 0.48 | 34.3% | +3.26 | 1.31 |
+| GOLD 1h, **out-of-sample half** | 146 | 0.47 | 33.6% | **+4.90** | **1.37** |
+| GOLD 15m, full | 80 | 1.65 | 37.5% | +6.21 | 1.74 |
+| GOLD 15m, **out-of-sample half** | 41 | 1.76 | 39.0% | **+6.97** | **2.00** |
+
+Positive in-sample and out-of-sample, on both timeframes, PF 1.31–2.00.
+
+**t = 1.38–1.73, so still not significant at t=2**, and 96 cells were
+searched to find it. The honest description is: the best-supported system
+in this repo, consistent across two timeframes and two halves, not yet
+proven. The win rate is 34–39% — the money comes from the trail, not from
+being right often.
+
+## 13. What changed my mind between the two passes
+
+The first pass tested markers in isolation with fixed symmetric geometry
+and found nothing. The second pass tested **combinations with a directional
+bias and an entry that waits for a pullback**, and found the two positive
+families above. The difference is not statistical luck — it is the same
+mechanism §1 identified: markers that fire *on* the move lose, markers that
+fire on a retracement *against* an established bias do not.

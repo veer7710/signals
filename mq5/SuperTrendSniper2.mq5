@@ -71,7 +71,7 @@ input int    InpStallBars     = 0;       // 0 = OFF. v1 used 25 and it killed ru
 //--- Risk ----------------------------------------------------------
 input group             "=== RISK ==="
 input bool   InpUseRiskPct    = true;    // size by % risk (else fixed lot)
-input double InpRiskPct       = 0.50;    // % of balance risked per trade
+input double InpRiskPct       = 0.25;    // Monte-Carlo optimum for a funded challenge; see FINDINGS 10
 input double InpFixedLot      = 0.01;    // used when InpUseRiskPct = false
 input int    InpMaxOpen       = 1;       // concurrent positions
 

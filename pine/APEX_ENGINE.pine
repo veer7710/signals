@@ -1,0 +1,260 @@
+//@version=5
+// =====================================================================
+//  APEX ENGINE  --  chart twin of ApexEngine.mq5
+//
+//  Two entry families under ONE directional opinion:
+//    A. HTF EMA slope sets the bias, price pulls back against it, then
+//       breaks the prior extreme. Entry on the pullback RESUME, never on
+//       the displacement bar.
+//    B. Asian range (23:00-07:00 GMT) broken during London/NY, and only
+//       in the direction the HTF bias already agrees with.
+//
+//  MEASURED, de-trended gold, $0.15/side, tuned on the first half of the
+//  data and reported on the second:
+//    1h   n=297  0.48/day  win 34.3%  +$3.26/trade  PF 1.31
+//         out-of-sample half: n=146  +$4.90/trade   PF 1.37
+//    15m  n=80   1.65/day  win 37.5%  +$6.21/trade  PF 1.74
+//         out-of-sample half: n=41   +$6.97/trade   PF 2.00
+//  t = 1.38-1.73. Consistent, positive, NOT significant at t=2.
+//
+//  HTF is read with lookahead_off, so an HTF bar is only used once it
+//  has closed. Signals are drawn only on CONFIRMED bars and never vanish.
+// =====================================================================
+indicator("Apex Engine", overlay = true, max_boxes_count = 120,
+          max_lines_count = 200, max_labels_count = 200)
+
+grpB = "Bias (higher timeframe)"
+htfTf   = input.timeframe("240", "Higher timeframe", group = grpB,
+   tooltip = "Must match InpHtf in the EA. H4 suits an M15/H1 chart.")
+htfEma  = input.int(20, "HTF EMA length", group = grpB, minval = 2)
+htfSlp  = input.int(4,  "EMA vs N bars ago", group = grpB, minval = 1)
+
+grpA = "Entry A: pullback resume"
+useP    = input.bool(true, "Enabled", group = grpA)
+ltfEma  = input.int(50, "LTF EMA length", group = grpA, minval = 2)
+trigBars= input.int(1,  "Break the extreme of last N bars", group = grpA, minval = 1)
+
+grpC = "Entry B: Asian range break"
+useA    = input.bool(true, "Enabled", group = grpC)
+aStart  = input.int(23, "Asia start (GMT)", group = grpC, minval = 0, maxval = 23)
+aEnd    = input.int(7,  "Asia end (GMT)",   group = grpC, minval = 0, maxval = 23)
+tradeEnd= input.int(16, "No breaks after (GMT)", group = grpC, minval = 0, maxval = 23)
+aMin    = input.float(0.5, "Skip if range < (ATR)", group = grpC, step = 0.1)
+aMax    = input.float(4.0, "Skip if range > (ATR)", group = grpC, step = 0.1)
+aBias   = input.bool(true, "Require HTF bias agreement", group = grpC)
+
+grpX = "Stop / exit"
+swLook  = input.int(3,     "Swing lookback for stop", group = grpX, minval = 1)
+bufATR  = input.float(0.25,"Stop buffer (ATR)",  group = grpX, step = 0.05)
+maxStop = input.float(4.0, "Skip if stop > (ATR)", group = grpX, step = 0.1)
+trailATR= input.float(3.0, "ATR trail multiple", group = grpX, step = 0.1)
+armAtR  = input.float(1.0, "Arm trail at (R)",   group = grpX, step = 0.1,
+   tooltip = "The trail does nothing until the trade is this far in profit. " +
+             "Arming at 0 is what pinned the old average winner at $5.06.")
+hardTpR = input.float(0.0, "Fixed TP at (R), 0 = trail only", group = grpX, step = 0.25)
+maxHold = input.int(120,   "Max bars in trade",  group = grpX)
+
+grpV = "Visuals"
+showBox  = input.bool(true, "Position box",  group = grpV)
+showAsia = input.bool(true, "Asian range",   group = grpV)
+showSess = input.bool(true, "Session panel", group = grpV)
+cUp  = input.color(#26a69a, "Long",  group = grpV)
+cDn  = input.color(#ef5350, "Short", group = grpV)
+cAsia= input.color(#7e57c2, "Asia",  group = grpV)
+
+atr = ta.atr(14)
+
+// ------------------------------------------------- HTF bias (no lookahead)
+htfE = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfEma),
+                        lookahead = barmerge.lookahead_off)
+biasUp = htfE > htfE[htfSlp]
+biasDn = htfE < htfE[htfSlp]
+bias   = biasUp ? 1 : biasDn ? -1 : 0
+
+confirmed = barstate.isconfirmed or barstate.ishistory
+h_ = hour(time, "GMT")
+inAsia = h_ >= aStart or h_ < aEnd
+
+// ------------------------------------------------- Asian range
+var float aHi = na
+var float aLo = na
+var bool  aTaken = false
+var int   aDayKey = na
+var box   aBox = na
+
+if confirmed
+    dk = dayofmonth(time, "GMT")
+    if inAsia
+        if na(aDayKey) or aDayKey != dk
+            aHi := high
+            aLo := low
+            aDayKey := dk
+            aTaken := false
+        else
+            aHi := math.max(aHi, high)
+            aLo := math.min(aLo, low)
+
+// ------------------------------------------------- Entry A: pullback resume
+ltfE = ta.ema(close, ltfEma)
+var int armed = 0
+trigHi = ta.highest(high, trigBars)[1]
+trigLo = ta.lowest(low,  trigBars)[1]
+
+pbLong  = false
+pbShort = false
+if confirmed and useP and bias != 0
+    if bias == 1
+        if close < ltfE
+            armed := 1
+        else if armed == 1 and close > trigHi
+            pbLong := true
+            armed := 0
+    else
+        if close > ltfE
+            armed := -1
+        else if armed == -1 and close < trigLo
+            pbShort := true
+            armed := 0
+
+// ------------------------------------------------- Entry B: Asian break
+aW = na(aHi) or na(aLo) ? na : aHi - aLo
+aOk = not na(aW) and aW >= aMin * atr and aW <= aMax * atr
+asLong  = false
+asShort = false
+if confirmed and useA and aOk and not inAsia and not aTaken and h_ < tradeEnd
+    if close > aHi and (not aBias or bias == 1)
+        asLong := true
+        aTaken := true
+    else if close < aLo and (not aBias or bias == -1)
+        asShort := true
+        aTaken := true
+
+// ------------------------------------------------- stop sizing
+swLow  = ta.lowest(low,  swLook)
+swHigh = ta.highest(high, swLook)
+sdL = math.abs(close - swLow)  + bufATR * atr
+sdS = math.abs(swHigh - close) + bufATR * atr
+
+rawLong  = pbLong  or asLong
+rawShort = pbShort or asShort
+sigLong  = rawLong  and sdL <= maxStop * atr
+sigShort = rawShort and sdS <= maxStop * atr
+
+// ------------------------------------------------- simulated position
+var int   pDir = 0
+var float pEnt = na
+var float pStop = na
+var float pDist = na
+var float pPeak = 0.0
+var int   pBar = na
+var bool  pArmed = false
+
+if confirmed
+    if pDir != 0
+        fav = pDir == 1 ? high - pEnt : pEnt - low
+        pPeak := math.max(pPeak, fav)
+        hitTp = hardTpR > 0 and (pDir == 1 ? high >= pEnt + hardTpR * pDist
+                                           : low  <= pEnt - hardTpR * pDist)
+        if (pDir == 1 ? low <= pStop : high >= pStop) or hitTp or bar_index - pBar >= maxHold
+            pDir := 0
+            pArmed := false
+            pPeak := 0.0
+        else if pPeak >= armAtR * pDist
+            pArmed := true
+            cand = pDir == 1 ? close - trailATR * atr : close + trailATR * atr
+            pStop := pDir == 1 ? math.max(pStop, cand) : math.min(pStop, cand)
+    if pDir == 0 and (sigLong[1] or sigShort[1])
+        pDir := sigLong[1] ? 1 : -1
+        pEnt := open
+        pDist := sigLong[1] ? sdL[1] : sdS[1]
+        pStop := pDir == 1 ? pEnt - pDist : pEnt + pDist
+        pPeak := 0.0
+        pBar := bar_index
+        pArmed := false
+
+// ------------------------------------------------- drawing
+var box  posBox = na
+var line posEnt = na
+var line posSl  = na
+var line posTp  = na
+var label posTpL = na
+
+if barstate.islast
+    if not na(posBox)
+        box.delete(posBox)
+    if not na(posEnt)
+        line.delete(posEnt)
+    if not na(posSl)
+        line.delete(posSl)
+    if not na(posTp)
+        line.delete(posTp)
+    if not na(posTpL)
+        label.delete(posTpL)
+    if not na(aBox)
+        box.delete(aBox)
+    if showAsia and aOk
+        aBox := box.new(bar_index - 20, aHi, bar_index + 6, aLo,
+                        border_color = color.new(cAsia, 45),
+                        bgcolor = color.new(cAsia, 92))
+    if pDir != 0 and showBox
+        col = pDir == 1 ? cUp : cDn
+        posBox := box.new(pBar, math.max(pEnt, pStop), bar_index + 6, math.min(pEnt, pStop),
+                          border_color = color.new(col, 45), bgcolor = color.new(col, 88))
+        posEnt := line.new(pBar, pEnt,  bar_index + 6, pEnt,  color = col, width = 2)
+        posSl  := line.new(pBar, pStop, bar_index + 6, pStop, color = cDn, width = 1,
+                           style = line.style_dashed)
+        if hardTpR > 0
+            tpLvl = pDir == 1 ? pEnt + hardTpR * pDist : pEnt - hardTpR * pDist
+            posTp := line.new(pBar, tpLvl, bar_index + 6, tpLvl, color = col,
+                              width = 1, style = line.style_dotted)
+            posTpL := label.new(bar_index + 6, tpLvl, "TP " + str.tostring(tpLvl, format.mintick),
+                                style = label.style_label_left, size = size.tiny,
+                                color = color.new(col, 80), textcolor = col)
+
+plot(htfE, "HTF EMA", bias == 1 ? color.new(cUp, 55) : bias == -1 ? color.new(cDn, 55)
+     : color.new(color.gray, 60), 2)
+plot(ltfE, "LTF EMA", color.new(color.gray, 55), 1)
+
+plotshape(sigLong,  "BUY",  shape.labelup,   location.belowbar, cUp,
+          text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sigShort, "SELL", shape.labeldown, location.abovebar, cDn,
+          text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(rawLong  and not sigLong,  "skip: stop too wide", shape.xcross,
+          location.belowbar, color.new(color.gray, 45), size = size.tiny)
+plotshape(rawShort and not sigShort, "skip: stop too wide", shape.xcross,
+          location.abovebar, color.new(color.gray, 45), size = size.tiny)
+
+// ------------------------------------------------- session panel
+sessName() =>
+    h = hour(time, "GMT")
+    h >= 23 or h < 7 ? "ASIA" : h < 12 ? "LONDON" :
+       h < 16 ? "LDN / NY overlap" : h < 21 ? "NEW YORK" : "OFF"
+volTag() =>
+    h = hour(time, "GMT")
+    (h >= 12 and h <= 15) or h <= 1 ? "HIGH VOL" :
+       (h >= 3 and h <= 4) or h == 20 or h == 22 ? "thin" : "normal"
+
+var table tb = na
+if showSess and barstate.islast
+    if na(tb)
+        tb := table.new(position.bottom_right, 1, 4,
+                        bgcolor = color.new(color.black, 82),
+                        border_color = color.new(color.gray, 70), border_width = 1)
+    table.cell(tb, 0, 0, sessName() + "   " + volTag(),
+               text_color = color.new(color.white, 15), text_size = size.tiny)
+    table.cell(tb, 0, 1, "bias " + (bias == 1 ? "LONG only" : bias == -1 ? "SHORT only" : "none") +
+               "   asia " + (aOk ? str.tostring(aLo, format.mintick) + "-" +
+               str.tostring(aHi, format.mintick) : "-"),
+               text_color = bias == 1 ? cUp : bias == -1 ? cDn : color.gray,
+               text_size = size.tiny)
+    table.cell(tb, 0, 2, pDir == 0 ? "flat" :
+               (pDir == 1 ? "LONG " : "SHORT ") + str.tostring(pEnt, format.mintick),
+               text_color = pDir == 0 ? color.gray : (pDir == 1 ? cUp : cDn),
+               text_size = size.tiny)
+    table.cell(tb, 0, 3, pDir == 0 ? "risk 0.20%/trade = 80% pass rate" :
+               "peak " + str.tostring(pDist > 0 ? pPeak / pDist : 0, "#.##") + "R" +
+               (pArmed ? "  [armed]" : "  [not armed]"),
+               text_color = color.new(color.gray, 10), text_size = size.tiny)
+
+alertcondition(sigLong,  "Apex BUY",  "Apex Engine BUY")
+alertcondition(sigShort, "Apex SELL", "Apex Engine SELL")

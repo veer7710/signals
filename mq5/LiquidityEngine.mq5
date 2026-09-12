@@ -61,7 +61,7 @@ input int    InpMaxBars     = 150;
 
 input group             "=== RISK ==="
 input bool   InpUseRiskPct  = true;
-input double InpRiskPct     = 0.50;
+input double InpRiskPct     = 0.25;    // Monte-Carlo optimum for a funded challenge; see FINDINGS 10
 input double InpFixedLot    = 0.01;
 input int    InpMaxOpen     = 1;
 

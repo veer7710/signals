@@ -7,6 +7,13 @@
 | `mq5/SuperTrendSniper2.mq5` | `pine/SUPERTREND_SNIPER_V2.pine` | mini-trend scalper, rebuilt exit |
 | `mq5/LiquidityEngine.mq5` | `pine/LIQUIDITY_ENGINE.pine` | liquidity pools / sweeps / SMC context |
 | `mq5/SessionRangeEngine.mq5` | `pine/SESSION_RANGE_ENGINE.pine` | 13:00 GMT session range break |
+| `mq5/ApexEngine.mq5` | `pine/APEX_ENGINE.pine` | **funded-account engine** — HTF bias + pullback + Asian break |
+
+**Start with ApexEngine.** It is the best-supported system here: positive
+in-sample and out-of-sample on both timeframes (PF 1.31–2.00), with sizing
+set to the Monte-Carlo optimum for a prop challenge (0.20% risk → 80% pass
+rate). Set `InpHtf` in the EA and `Higher timeframe` in the Pine to the
+same value — H4 for an M15 or H1 chart.
 
 Each Pine is its EA's chart, not a separate product. They share the same
 SuperTrend recursion, the same ATR contract, the same next-bar-open fill
