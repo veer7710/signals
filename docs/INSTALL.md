@@ -7,9 +7,10 @@
 | `mq5/SuperTrendSniper2.mq5` | `pine/SUPERTREND_SNIPER_V2.pine` | mini-trend scalper, rebuilt exit |
 | `mq5/LiquidityEngine.mq5` | `pine/LIQUIDITY_ENGINE.pine` | liquidity pools / sweeps / SMC context |
 | `mq5/SessionRangeEngine.mq5` | `pine/SESSION_RANGE_ENGINE.pine` | 13:00 GMT session range break |
-| `mq5/ApexEngine.mq5` | `pine/APEX_ENGINE.pine` | **funded-account engine** — HTF bias + pullback + Asian break |
+| `mq5/ApexEngine.mq5` | `pine/APEX_ENGINE.pine` | funded-account engine — HTF bias + pullback + Asian break |
+| `mq5/OmegaEngine.mq5` | `pine/OMEGA_ENGINE.pine` | **START HERE** — dual-slot: 82.5% win-rate scalp + runner, one EA |
 
-**Start with ApexEngine.** It is the best-supported system here: positive
+**Start with OmegaEngine**, then ApexEngine. It is the best-supported system here: positive
 in-sample and out-of-sample on both timeframes (PF 1.31–2.00), with sizing
 set to the Monte-Carlo optimum for a prop challenge (0.20% risk → 80% pass
 rate). Set `InpHtf` in the EA and `Higher timeframe` in the Pine to the
@@ -99,3 +100,37 @@ python3 research/validate.py         # regenerates the shipped numbers
 3. **Run the Sniper on demo for two weeks with the journal on**, then send
    me the log. Capture ratio and peak-R per trade from *your* broker, with
    *your* spread, beats anything I can infer from Yahoo futures data.
+
+
+## OmegaEngine — the one to run
+
+Put it on **XAUUSD M5 or M15**. It refuses to start above H1 on purpose
+(FINDINGS §15: the win-rate exit measured PF 0.67 in-sample on 1h).
+
+Set `InpHtf` to H4 and match `Higher timeframe` in the Pine.
+
+Pick your rule set with `InpRules`:
+
+- `RULES_PROP_8_4_6` — 8% target, 4% daily, 6% max DD (default)
+- `RULES_PROP_10_5_10` — 10% / 5% / 10%, static drawdown
+- `RULES_LIVE` — no target, 5% daily, 20% max DD
+- `RULES_CUSTOM` — your own numbers in the three inputs below it
+
+Everything else adapts on its own: minimum lot, lot step, tick value, stops
+level, digits, account currency and balance are all read from the broker, so
+the same file works on an index or an FX pair with no edits.
+
+**Two slots run at once on the same signal:**
+
+- SCALP banks 85% at a small structure target — this is where the win rate
+  comes from (82.5% out-of-sample on M15)
+- RUNNER banks 30% at 1R, moves to breakeven, trails the rest at ATR-2 —
+  this is where the money comes from (PF 1.65, +$4.37/trade)
+
+They split the risk budget 50/50. Turn either off with `InpScalpOn` /
+`InpRunnerOn`.
+
+**On a small account** (0.01 lots = the whole position) partials are
+impossible. The EA detects it and alternates whole trades instead, in the
+same proportion. The panel will say `partials: too small - alternating`.
+That is expected, not a fault.

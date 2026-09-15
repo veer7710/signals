@@ -1,0 +1,335 @@
+//@version=5
+// =====================================================================
+//  OMEGA ENGINE  --  chart twin of OmegaEngine.mq5
+//
+//  Two slots on the same signal:
+//    SCALP   banks 85% at a small structure target -> most trades close
+//            green. Measured M15 out-of-sample: 82.5% win, PF 1.39.
+//    RUNNER  banks 30% at 1R, stop to breakeven, rest trails ATR-2.
+//            Measured M15 out-of-sample: 61.4% win, PF 1.65, +$4.37.
+//
+//  The scalp gives you the win rate. The runner gives you the money.
+//  They are opposites, which is why both run instead of one.
+//
+//  On H1 and above the scalp exit measured NEGATIVE in-sample (PF 0.67).
+//  Keep this on M1-M30.
+//
+//  Signals are drawn only on CONFIRMED bars, so nothing that appears
+//  ever disappears. HTF is read with lookahead_off.
+// =====================================================================
+indicator("Omega Engine", overlay = true, max_boxes_count = 200,
+          max_lines_count = 300, max_labels_count = 300)
+
+grpB = "Bias (higher timeframe)"
+htfTf  = input.timeframe("240", "Higher timeframe", group = grpB,
+   tooltip = "Match InpHtf in the EA. H4 suits an M5/M15 chart.")
+htfLen = input.int(20, "HTF EMA", group = grpB, minval = 2)
+htfSlp = input.int(4,  "EMA vs N bars ago", group = grpB, minval = 1)
+
+grpE = "Entries"
+useP   = input.bool(true, "Pullback resume", group = grpE)
+ltfLen = input.int(50, "LTF EMA", group = grpE, minval = 2)
+trigN  = input.int(1,  "Break extreme of last N bars", group = grpE, minval = 1)
+useA   = input.bool(true, "Asian range break", group = grpE)
+aStart = input.int(23, "Asia start (GMT)", group = grpE, minval = 0, maxval = 23)
+aEnd   = input.int(7,  "Asia end (GMT)",   group = grpE, minval = 0, maxval = 23)
+tEnd   = input.int(16, "No breaks after (GMT)", group = grpE, minval = 0, maxval = 23)
+aMin   = input.float(0.5, "Skip range < (ATR)", group = grpE, step = 0.1)
+aMax   = input.float(4.0, "Skip range > (ATR)", group = grpE, step = 0.1)
+
+grpS = "Stop (from structure)"
+swN    = input.int(3,     "Swing lookback", group = grpS, minval = 1)
+bufATR = input.float(0.25,"Buffer (ATR)",   group = grpS, step = 0.05)
+maxStop= input.float(4.0, "Skip if stop > (ATR)", group = grpS, step = 0.1)
+
+grpX = "Slot exits"
+sTp1   = input.float(0.25,"SCALP  TP1 (R)",  group = grpX, step = 0.05)
+sPart  = input.float(0.85,"SCALP  fraction banked", group = grpX, step = 0.05)
+sTrail = input.float(3.0, "SCALP  trail (ATR)", group = grpX, step = 0.1)
+rTp1   = input.float(1.0, "RUNNER TP1 (R)",  group = grpX, step = 0.05)
+rPart  = input.float(0.30,"RUNNER fraction banked", group = grpX, step = 0.05)
+rBe    = input.float(1.0, "RUNNER breakeven at (R)", group = grpX, step = 0.1)
+rTrail = input.float(2.0, "RUNNER trail (ATR)", group = grpX, step = 0.1)
+armR   = input.float(1.0, "Arm trail at (R)", group = grpX, step = 0.1,
+   tooltip = "Nothing trails until the trade is this far ahead. Arming at 0 " +
+             "is what pins the average winner to a few dollars.")
+useStruct = input.bool(true, "TP1 from the nearest swing level", group = grpX)
+
+grpV = "Visuals"
+showBox = input.bool(true, "Position boxes", group = grpV)
+showAsia= input.bool(true, "Asian range",    group = grpV)
+showPanel=input.bool(true, "Panel",          group = grpV)
+cUp  = input.color(#26a69a, "Long",   group = grpV)
+cDn  = input.color(#ef5350, "Short",  group = grpV)
+cAsia= input.color(#7e57c2, "Asia",   group = grpV)
+cTp  = input.color(#ffb74d, "TP1",    group = grpV)
+
+atr = ta.atr(14)
+confirmed = barstate.isconfirmed or barstate.ishistory
+h_ = hour(time, "GMT")
+
+// ------------------------------------------------- bias
+htfE = request.security(syminfo.tickerid, htfTf, ta.ema(close, htfLen),
+                        lookahead = barmerge.lookahead_off)
+bias = htfE > htfE[htfSlp] ? 1 : htfE < htfE[htfSlp] ? -1 : 0
+
+// ------------------------------------------------- Asian range
+var float aHi = na
+var float aLo = na
+var bool  aTaken = false
+var int   aDay = na
+inAsia = h_ >= aStart or h_ < aEnd
+
+if confirmed
+    dk = dayofmonth(time, "GMT")
+    if inAsia
+        if na(aDay) or aDay != dk
+            aHi := high
+            aLo := low
+            aDay := dk
+            aTaken := false
+        else
+            aHi := math.max(aHi, high)
+            aLo := math.min(aLo, low)
+
+aW  = na(aHi) or na(aLo) ? na : aHi - aLo
+aOk = not na(aW) and aW >= aMin * atr and aW <= aMax * atr
+
+// ------------------------------------------------- entries
+ltfE = ta.ema(close, ltfLen)
+var int armed = 0
+tHi = ta.highest(high, trigN)[1]
+tLo = ta.lowest(low,  trigN)[1]
+
+sig = 0
+if confirmed and bias != 0
+    if useP
+        if bias == 1
+            if close < ltfE
+                armed := 1
+            else if armed == 1 and close > tHi
+                sig := 1
+                armed := 0
+        else
+            if close > ltfE
+                armed := -1
+            else if armed == -1 and close < tLo
+                sig := -1
+                armed := 0
+    if sig == 0 and useA and aOk and not inAsia and not aTaken and h_ < tEnd
+        if close > aHi and bias == 1
+            sig := 1
+            aTaken := true
+        else if close < aLo and bias == -1
+            sig := -1
+            aTaken := true
+
+swLo = ta.lowest(low,  swN)
+swHi = ta.highest(high, swN)
+sdL = math.abs(close - swLo) + bufATR * atr
+sdS = math.abs(swHi - close) + bufATR * atr
+sd  = sig == 1 ? sdL : sig == -1 ? sdS : na
+tooWide = not na(sd) and sd > maxStop * atr
+sigLong  = sig ==  1 and not tooWide
+sigShort = sig == -1 and not tooWide
+
+// ------------------------------------------------- structure TP1
+// Nearest untaken swing level in the trade's direction, using direct bar
+// indexing only -- no ta.* inside a conditional function, which Pine
+// requires to run on every bar. Same pivot test the EA uses.
+structTp(int dir, float ent, float dist) =>
+    lvl = 0.0
+    if useStruct
+        for i = swN + 1 to 120
+            v = dir == 1 ? high[i] : low[i]
+            piv = true
+            for k = 1 to swN
+                if dir == 1
+                    if high[i + k] >= v or high[i - k] >= v
+                        piv := false
+                else
+                    if low[i + k] <= v or low[i - k] <= v
+                        piv := false
+            if piv
+                want = dir == 1 ? v - ent : ent - v
+                if want >= 0.30 * dist and want <= 4.0 * dist
+                    if dir == 1
+                        if lvl == 0.0 or v < lvl
+                            lvl := v
+                    else
+                        if lvl == 0.0 or v > lvl
+                            lvl := v
+    lvl
+
+// ------------------------------------------------- two simulated slots
+var int   d0 = 0, d1 = 0
+var float e0 = na, e1 = na
+var float s0 = na, s1 = na
+var float k0 = na, k1 = na          // stop distance
+var float t0 = na, t1 = na          // tp1
+var float p0 = 0.0, p1 = 0.0        // peak
+var int   b0 = na, b1 = na
+var bool  h0 = false, h1 = false    // tp1 hit
+var bool  be1 = false
+var bool  a0 = false, a1 = false    // trail armed
+
+if confirmed
+    // ---- SCALP slot
+    if d0 != 0
+        p0 := math.max(p0, d0 == 1 ? high - e0 : e0 - low)
+        if not h0 and (d0 == 1 ? high >= t0 : low <= t0)
+            h0 := true
+        if (d0 == 1 ? low <= s0 : high >= s0) or bar_index - b0 >= 80
+            d0 := 0
+            p0 := 0.0
+            h0 := false
+            a0 := false
+        else if p0 >= armR * k0
+            a0 := true
+            c = d0 == 1 ? close - sTrail * atr : close + sTrail * atr
+            s0 := d0 == 1 ? math.max(s0, c) : math.min(s0, c)
+    // ---- RUNNER slot
+    if d1 != 0
+        p1 := math.max(p1, d1 == 1 ? high - e1 : e1 - low)
+        if not h1 and (d1 == 1 ? high >= t1 : low <= t1)
+            h1 := true
+        if (d1 == 1 ? low <= s1 : high >= s1) or bar_index - b1 >= 200
+            d1 := 0
+            p1 := 0.0
+            h1 := false
+            be1 := false
+            a1 := false
+        else
+            if not be1 and p1 >= rBe * k1
+                cb = e1 + (d1 == 1 ? 1 : -1) * 0.05 * k1
+                s1 := d1 == 1 ? math.max(s1, cb) : math.min(s1, cb)
+                be1 := true
+            if p1 >= armR * k1
+                a1 := true
+                c = d1 == 1 ? close - rTrail * atr : close + rTrail * atr
+                s1 := d1 == 1 ? math.max(s1, c) : math.min(s1, c)
+    // ---- open on the bar AFTER the signal (parity with the EA)
+    if (sigLong[1] or sigShort[1])
+        dd = sigLong[1] ? 1 : -1
+        en = open
+        dist = sigLong[1] ? sdL[1] : sdS[1]
+        st = structTp(dd, en, dist)
+        if d0 == 0
+            d0 := dd
+            e0 := en
+            k0 := dist
+            s0 := en - dd * dist
+            t0 := st > 0 ? st : en + dd * sTp1 * dist
+            p0 := 0.0
+            b0 := bar_index
+            h0 := false
+            a0 := false
+        if d1 == 0
+            d1 := dd
+            e1 := en
+            k1 := dist
+            s1 := en - dd * dist
+            t1 := st > 0 ? st : en + dd * rTp1 * dist
+            p1 := 0.0
+            b1 := bar_index
+            h1 := false
+            be1 := false
+            a1 := false
+
+// ------------------------------------------------- drawing
+var box  bx0 = na, bx1 = na
+var line ln0 = na, ln1 = na, lt0 = na, lt1 = na, aBx = na
+var box  aBox = na
+
+if barstate.islast
+    if not na(bx0)
+        box.delete(bx0)
+    if not na(bx1)
+        box.delete(bx1)
+    if not na(ln0)
+        line.delete(ln0)
+    if not na(ln1)
+        line.delete(ln1)
+    if not na(lt0)
+        line.delete(lt0)
+    if not na(lt1)
+        line.delete(lt1)
+    if not na(aBox)
+        box.delete(aBox)
+    if showAsia and aOk
+        aBox := box.new(bar_index - 20, aHi, bar_index + 6, aLo,
+                        border_color = color.new(cAsia, 50),
+                        bgcolor = color.new(cAsia, 92))
+    if showBox and d0 != 0
+        c = d0 == 1 ? cUp : cDn
+        bx0 := box.new(b0, math.max(e0, s0), bar_index + 6, math.min(e0, s0),
+                       border_color = color.new(c, 50), bgcolor = color.new(c, 90))
+        ln0 := line.new(b0, s0, bar_index + 6, s0, color = cDn, width = 1,
+                        style = line.style_dashed)
+        lt0 := line.new(b0, t0, bar_index + 6, t0, color = cTp, width = 1,
+                        style = line.style_dotted)
+    if showBox and d1 != 0
+        c = d1 == 1 ? cUp : cDn
+        bx1 := box.new(b1, math.max(e1, s1), bar_index + 6, math.min(e1, s1),
+                       border_color = color.new(c, 65), bgcolor = color.new(c, 94))
+        ln1 := line.new(b1, s1, bar_index + 6, s1, color = color.new(cDn, 40),
+                        width = 1, style = line.style_dotted)
+        lt1 := line.new(b1, t1, bar_index + 6, t1, color = color.new(cTp, 40),
+                        width = 1, style = line.style_dotted)
+
+plot(htfE, "HTF EMA", bias == 1 ? color.new(cUp, 55) : bias == -1
+     ? color.new(cDn, 55) : color.new(color.gray, 60), 2)
+plot(ltfE, "LTF EMA", color.new(color.gray, 60), 1)
+
+plotshape(sigLong,  "BUY",  shape.labelup,   location.belowbar, cUp,
+          text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sigShort, "SELL", shape.labeldown, location.abovebar, cDn,
+          text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(sig != 0 and tooWide, "skip: stop too wide", shape.xcross,
+          location.absolute, color.new(color.gray, 45), size = size.tiny)
+
+// ------------------------------------------------- panel
+sessName() =>
+    hh = hour(time, "GMT")
+    hh >= 23 or hh < 7 ? "ASIA" : hh < 12 ? "LONDON" :
+       hh < 16 ? "LDN / NY overlap" : hh < 21 ? "NEW YORK" : "OFF"
+volTag() =>
+    hh = hour(time, "GMT")
+    (hh >= 12 and hh <= 15) or hh <= 1 ? "HIGH VOL" :
+       (hh >= 3 and hh <= 4) or hh == 20 or hh == 22 ? "thin" : "normal"
+holdScore(int dir) =>
+    sc = 0
+    sc := sc + (bias == dir ? 1 : 0)
+    sc := sc + ((dir == 1 ? close > ltfE : close < ltfE) ? 1 : 0)
+    sc := sc + (atr > atr[5] ? 1 : 0)
+    sc
+
+var table tb = na
+if showPanel and barstate.islast
+    if na(tb)
+        tb := table.new(position.bottom_right, 1, 5,
+                        bgcolor = color.new(color.black, 80),
+                        border_color = color.new(color.gray, 70), border_width = 1)
+    table.cell(tb, 0, 0, sessName() + "   " + volTag() + "   bias " +
+               (bias == 1 ? "LONG" : bias == -1 ? "SHORT" : "none"),
+               text_color = color.new(color.white, 12), text_size = size.tiny)
+    table.cell(tb, 0, 1, d0 == 0 ? "SCALP  flat" :
+               "SCALP  " + (d0 == 1 ? "LONG " : "SHORT ") +
+               str.tostring(e0, format.mintick) + (h0 ? "  [banked]" : "  [open]"),
+               text_color = d0 == 0 ? color.gray : (d0 == 1 ? cUp : cDn),
+               text_size = size.tiny)
+    table.cell(tb, 0, 2, d1 == 0 ? "RUNNER flat" :
+               "RUNNER " + (d1 == 1 ? "LONG " : "SHORT ") +
+               str.tostring(e1, format.mintick) +
+               (be1 ? "  [BE]" : "") + (a1 ? " [trailing]" : ""),
+               text_color = d1 == 0 ? color.gray : (d1 == 1 ? cUp : cDn),
+               text_size = size.tiny)
+    table.cell(tb, 0, 3, d1 == 0 ? "" : "peak " +
+               str.tostring(k1 > 0 ? p1 / k1 : 0, "#.##") + "R   hold " +
+               str.tostring(holdScore(d1)) + "/3",
+               text_color = color.new(color.gray, 10), text_size = size.tiny)
+    table.cell(tb, 0, 4, "M15 OOS: scalp 82.5% PF1.39 | runner 61.4% PF1.65",
+               text_color = color.new(color.gray, 35), text_size = size.tiny)
+
+alertcondition(sigLong,  "Omega BUY",  "Omega Engine BUY")
+alertcondition(sigShort, "Omega SELL", "Omega Engine SELL")

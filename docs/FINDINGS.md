@@ -337,3 +337,79 @@ bias and an entry that waits for a pullback**, and found the two positive
 families above. The difference is not statistical luck — it is the same
 mechanism §1 identified: markers that fire *on* the move lose, markers that
 fire on a retracement *against* an established bias do not.
+
+---
+
+# Third pass: where the high win rate actually comes from
+
+## 14. The win-rate frontier, measured
+
+Same APEX entries. Only the exit structure changes. 160 structures tested,
+then the chosen ones re-run on the half of the data the search never saw.
+
+**GOLD M15, out-of-sample half:**
+
+| exit structure | win% | $/trade | PF |
+|---|---|---|---|
+| **SCALP** — bank 0.85 at 0.25R, rest trails ATR-3 | **82.5%** | +1.24 | 1.39 |
+| BALANCED — bank 0.60 at 0.5R, BE, trails ATR-3 | 69.8% | +1.54 | 1.29 |
+| **RUNNER** — bank 0.30 at 1R, BE, trails ATR-2 | 61.4% | **+4.37** | **1.65** |
+| pure trail, no partial | 40.0% | +5.96 | 1.72 |
+
+**So yes — 82.5% is real, out-of-sample, and I can build it.** This is the
+mechanism behind every 70–90% win rate you have been shown: bank most of the
+position at a small target so the trade closes green, let a sliver run.
+
+And read the same row twice: **the 82.5% structure is the least profitable
+of the four per trade.** Win rate and money move in opposite directions here.
+That is not an opinion about your goals, it is the same 40 trades priced four
+ways.
+
+`OmegaEngine` therefore runs **both at once in two slots** rather than making
+you pick — the scalp slot produces the win rate, the runner slot produces the
+money, on the same signal, with the risk budget split between them.
+
+## 15. Timeframe gate — this is why the EA refuses H1+
+
+The same scalp structure on GOLD 1h:
+
+| half | win% | $/trade | PF |
+|---|---|---|---|
+| in-sample | 70.9% | **−1.59** | **0.67** |
+| out-of-sample | 78.4% | +0.39 | 1.08 |
+
+**Negative in-sample with PF 0.67.** A 70.9% win rate that loses money is
+exactly the trap this structure can become when the stop is far larger than
+the partial target and the timeframe is too slow to reach it often enough.
+
+`OmegaEngine.mq5` refuses to initialise above H1 unless you set
+`InpAllowAboveH1 = true`. Keep it on M1–M30.
+
+## 16. The adaptive "hold" trail was built, measured, and left off
+
+A trail that stays wide (ATR-3) while the HTF bias agrees and tightens
+(ATR-1.5) when it flips:
+
+| | fixed trail | adaptive |
+|---|---|---|
+| M15 scalp, OOS | 82.5% / +1.24 | 82.5% / +1.24 (identical) |
+| M15 runner, in-sample | 50.0% / +4.11 | 48.6% / **+3.84** |
+| 1h runner, in-sample | 50.6% / +0.80 | 50.7% / **+0.14** |
+
+Identical on the scalp, **worse on the runner**. The confirmations are shown
+on the panel as information (`hold-score 0–3`) and are deliberately not wired
+into the trail.
+
+## 17. Small accounts cannot take partials, and the EA handles it
+
+At 0.01 lots — the broker minimum on gold — a position **cannot be split**.
+Everything in §14 depends on splitting.
+
+`OmegaEngine` detects this (`lots >= 2 x minLot`) and falls back to
+reproducing the same blend **across** trades instead of within one: a
+fractional accumulator banks exactly 85% of scalp trades whole and runs the
+other 15% whole. Same expectation, higher variance — which is the honest
+cost of a minimum-lot account, and it is stated on the panel as
+`partials: too small - alternating`.
+
+Verified: at f=0.85 the accumulator banks 850/1000; at 0.30, 299/1000.

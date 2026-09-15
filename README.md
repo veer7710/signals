@@ -5,7 +5,7 @@ Gold/index strategy research, three MT5 EAs, and their TradingView twins.
 - **`docs/FINDINGS.md`** — what was measured, with the nulls attached. Read
   this before running anything.
 - **`docs/INSTALL.md`** — how to install and what the settings mean.
-- `mq5/` — four Expert Advisors. Start with **ApexEngine**.
+- `mq5/` — five Expert Advisors. Start with **OmegaEngine** (XAUUSD M5/M15).
 - `pine/` — the matching Pine scripts, one per EA.
 - `research/` — the backtest engine and every script that produced the
   numbers in FINDINGS.md. All re-runnable.

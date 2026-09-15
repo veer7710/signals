@@ -112,25 +112,26 @@ def matched_null(d,sigs,cfg,cost,reps=120,seed=11):
         if s.get("n"): res.append(s["pts"])
     return np.array(res)
 
-EXIT=dict(mode="trail_atr",trail=3.0)          # the validated exit
-print("="*112)
-print("UNTESTED FAMILIES -- de-trended, cost $0.15/side, ATR-3 trail armed by the engine")
-print("="*112)
-for sym,tf in [("GOLD","1h"),("GOLD","15m")]:
-    d=detrend(core.load(sym,tf))
-    dys=(d["t"][-1]-d["t"][0])/86400*5/7
-    print(f"\n--- {sym} {tf} ({d['n']} bars, {dys:.0f} trading days) ---")
-    print(f"  {'family':<34}{'n':>5}{'/day':>7}{'win%':>7}{'$/trd':>8}{'t':>6}"
-          f"{'null$':>8}{'edge':>8}{'CI95':>19}")
-    for name,fn in FAMS.items():
-        sig=fn(d)
-        if len(sig)<25: 
-            print(f"  {name:<34}{len(sig):>5}   too few"); continue
-        r=bt.run(d,sig,stop_fn=bt.stop_struct(0.25),exit_cfg=EXIT,cost=0.15,max_bars=120)
-        s=r.stats()
-        if not s.get("n"): continue
-        pts=[x["pts"] for x in r.t]; lo,hi=boot_ci(pts)
-        nul=matched_null(d,sig,EXIT,0.15)
-        print(f"  {name:<34}{s['n']:>5}{s['per_day']:>7.2f}{100*s['win']:>7.1f}"
-              f"{s['pts']:>8.2f}{tstat(pts):>6.2f}{nul.mean():>8.2f}"
-              f"{s['pts']-nul.mean():>8.2f}  [{lo:>6.2f},{hi:>6.2f}]")
+if __name__ == "__main__":
+    EXIT=dict(mode="trail_atr",trail=3.0)          # the validated exit
+    print("="*112)
+    print("UNTESTED FAMILIES -- de-trended, cost $0.15/side, ATR-3 trail armed by the engine")
+    print("="*112)
+    for sym,tf in [("GOLD","1h"),("GOLD","15m")]:
+        d=detrend(core.load(sym,tf))
+        dys=(d["t"][-1]-d["t"][0])/86400*5/7
+        print(f"\n--- {sym} {tf} ({d['n']} bars, {dys:.0f} trading days) ---")
+        print(f"  {'family':<34}{'n':>5}{'/day':>7}{'win%':>7}{'$/trd':>8}{'t':>6}"
+              f"{'null$':>8}{'edge':>8}{'CI95':>19}")
+        for name,fn in FAMS.items():
+            sig=fn(d)
+            if len(sig)<25: 
+                print(f"  {name:<34}{len(sig):>5}   too few"); continue
+            r=bt.run(d,sig,stop_fn=bt.stop_struct(0.25),exit_cfg=EXIT,cost=0.15,max_bars=120)
+            s=r.stats()
+            if not s.get("n"): continue
+            pts=[x["pts"] for x in r.t]; lo,hi=boot_ci(pts)
+            nul=matched_null(d,sig,EXIT,0.15)
+            print(f"  {name:<34}{s['n']:>5}{s['per_day']:>7.2f}{100*s['win']:>7.1f}"
+                  f"{s['pts']:>8.2f}{tstat(pts):>6.2f}{nul.mean():>8.2f}"
+                  f"{s['pts']-nul.mean():>8.2f}  [{lo:>6.2f},{hi:>6.2f}]")

@@ -45,19 +45,20 @@ def challenge(Rs, risk, target=0.08, dd=0.06, daily=0.04, ntr=400,
         if not done: timeouts+=1
     return passes/reps, fails/reps, timeouts/reps
 
-for sym,tf in [("GOLD","1h"),("GOLD","15m")]:
-    Rs=trade_R(sym,tf)
-    if len(Rs)<40: print(f"{sym} {tf}: only {len(Rs)} trades, skipping"); continue
-    print(f"\n{'='*92}")
-    print(f"{sym} {tf}: {len(Rs)} measured trades  meanR {Rs.mean():+.3f}  "
-          f"win {100*(Rs>0).mean():.1f}%  bestR {Rs.max():.1f}  worstR {Rs.min():.1f}")
-    print(f"Prop rules: +8% target, 6% max DD, 400-trade budget")
-    print(f"{'='*92}")
-    print(f"  {'risk/trade':>11}{'P(pass)':>10}{'P(blow)':>10}{'P(neither)':>12}   verdict")
-    best=None
-    for risk in (0.0025,0.005,0.0075,0.01,0.015,0.02,0.03,0.05):
-        p,f_,t_=challenge(Rs,risk)
-        if best is None or p>best[0]: best=(p,risk)
-        flag = "  <<< best" if False else ""
-        print(f"  {100*risk:>10.2f}%{100*p:>9.1f}%{100*f_:>9.1f}%{100*t_:>11.1f}%{flag}")
-    print(f"  --> highest P(pass) at risk {100*best[1]:.2f}% per trade ({100*best[0]:.1f}%)")
+if __name__ == "__main__":
+    for sym,tf in [("GOLD","1h"),("GOLD","15m")]:
+        Rs=trade_R(sym,tf)
+        if len(Rs)<40: print(f"{sym} {tf}: only {len(Rs)} trades, skipping"); continue
+        print(f"\n{'='*92}")
+        print(f"{sym} {tf}: {len(Rs)} measured trades  meanR {Rs.mean():+.3f}  "
+              f"win {100*(Rs>0).mean():.1f}%  bestR {Rs.max():.1f}  worstR {Rs.min():.1f}")
+        print(f"Prop rules: +8% target, 6% max DD, 400-trade budget")
+        print(f"{'='*92}")
+        print(f"  {'risk/trade':>11}{'P(pass)':>10}{'P(blow)':>10}{'P(neither)':>12}   verdict")
+        best=None
+        for risk in (0.0025,0.005,0.0075,0.01,0.015,0.02,0.03,0.05):
+            p,f_,t_=challenge(Rs,risk)
+            if best is None or p>best[0]: best=(p,risk)
+            flag = "  <<< best" if False else ""
+            print(f"  {100*risk:>10.2f}%{100*p:>9.1f}%{100*f_:>9.1f}%{100*t_:>11.1f}%{flag}")
+        print(f"  --> highest P(pass) at risk {100*best[1]:.2f}% per trade ({100*best[0]:.1f}%)")
