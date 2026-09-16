@@ -73,6 +73,34 @@ CTrade Trade;
 #define SNIPER_BUILD "SNIPER v20.00"
 
 //====================================================================
+//====================================================================
+//  MANAGER MODE -- the most important switch in this file.
+//
+//  Two halves of this EA rest on very different evidence:
+//
+//  THE EXITS are grounded in YOUR OWN TICKETS. BASKET-LOCK kept 98% of its
+//  peak where SL-HIT kept -32% on a near-identical average peak. The 60s
+//  cohort split 6.2% vs 82.6%. Spread is 48% of the loss. None of that is
+//  my inference -- it is your account.
+//
+//  THE ENTRIES are NOT. I ran the decisive absorption-vs-expansion test on
+//  de-trended gold: on 15m absorption-reversal beat expansion-continuation by
+//  6.6 points (t=1.53); on 1h the same comparison went the OTHER WAY by 2.5
+//  points (t=-1.04). The sign flips and neither clears a best-of-6 null. On
+//  MY data the liquidity entry is unproven. My data is 15m/1h gold futures;
+//  you trade M1 spot, so it is not settled either -- it is untested where it
+//  matters.
+//
+//  So: set InpManageOnly = true and SNIPER stops generating signals entirely.
+//  It adopts whatever QUAD (or your hand) opens and applies only the exit and
+//  cost stack. You keep the entries you believe in and get the fixes that are
+//  actually evidenced. Set it false to let SNIPER trade its own signals too.
+//====================================================================
+input group "=== MODE ==="
+input bool   InpManageOnly    = true;   // true = manage other EAs' trades, generate none
+input bool   InpAdoptAnyMagic = true;   // adopt positions regardless of who opened them
+input long   InpAdoptMagic    = 0;      // 0 = any; else only this magic
+
 input group "=== MECHANISM 1: FAST-FAIL (the 60-second cut) ==="
 input bool   InpFastFail      = true;   // Finding 2. Worth ~GBP 151 on the reference day.
 input int    InpFastFailSecs  = 60;     // window measured from fill
@@ -260,6 +288,7 @@ int      csvHandle=INVALID_HANDLE;
 
 
 
+
 //--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
 bool ResolveBroker();
 int MaxStack();
@@ -295,6 +324,7 @@ bool AliveOK();
 bool PullbackOK(int dir);
 void Enter(int dir, double px, string why);
 double SizeFor(double stopDist, double mult);
+void AdoptForeign();
 void ManageAll();
 void ManageOne(int i);
 void SetStop(int i, double want, double cur, int dir);
@@ -354,6 +384,8 @@ void OnDeinit(const int reason)
 //--- cannot enforce it, which is part of why it was never enforced.
 void OnTimer()
 {
+   if(gAtr <= 0) gAtr = AtrNow();
+   GuardsBlock();                     // daily / DD / target apply in BOTH modes
    ManageAll();
    SaveGuards();
    if(InpShowPanel) DrawPanel();
@@ -894,6 +926,7 @@ void OnTick()
 
    gAtr = AtrNow();
    if(gAtr <= 0) return;
+   if(InpManageOnly) return;          // manage only: never generate a signal
    if(GuardsBlock()) return;
    if(ArraySize(L) >= MaxStack()) return;
 
@@ -1014,12 +1047,63 @@ double SizeFor(double stopDist, double mult)
 //====================================================================
 //  EXIT STACK
 //====================================================================
+//--- pull in any position on this symbol we are not already tracking.
+//    Entry price and open time come from the position itself, so a trade
+//    opened by QUAD is managed on its own terms, not on assumptions.
+void AdoptForeign()
+{
+   if(!InpManageOnly && !InpAdoptAnyMagic) return;
+   for(int k = PositionsTotal()-1; k >= 0; k--)
+   {
+      ulong t = PositionGetTicket(k);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      long mg = PositionGetInteger(POSITION_MAGIC);
+      if(!InpAdoptAnyMagic && mg != InpAdoptMagic && mg != InpMagic) continue;
+      bool known = false;
+      for(int i = 0; i < ArraySize(L); i++)
+         if(L[i].ticket == t) { known = true; break; }
+      if(known) continue;
+
+      int dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+      double ent = PositionGetDouble(POSITION_PRICE_OPEN);
+      double sl  = PositionGetDouble(POSITION_SL);
+      double sd  = (sl > 0) ? MathAbs(ent - sl) : InpMaxStopATR * gAtr * 0.5;
+      if(sd <= 0) sd = (gAtr > 0 ? gAtr : 1.0);
+
+      int n = ArraySize(L);
+      ArrayResize(L, n+1);
+      L[n].ticket = t;
+      L[n].dir = dir;
+      L[n].entry = ent;
+      L[n].stopDist = sd;
+      L[n].peak = 0.0;
+      L[n].lockPx = 0.0;
+      L[n].opened = (datetime)PositionGetInteger(POSITION_TIME);
+      L[n].locked = false;
+      L[n].fastFailed = false;
+      L[n].worstFirstWindow = 0.0;
+      L[n].travelATR = 0.0;
+      L[n].regime = Regime();
+      L[n].why = "adopted:" + (string)mg;
+      L[n].driftMult = 1.0;
+      L[n].regimeMult = 1.0;
+      nT++;
+      if(InpJournal)
+         PrintFormat("%s adopted ticket %I64u from magic %I64d: %s entry %.2f stop %.2f",
+                     SNIPER_BUILD, t, mg, (dir>0?"BUY":"SELL"), ent, sd);
+   }
+}
+
 void ManageAll()
 {
+   if(gAtr <= 0) gAtr = AtrNow();
+   AdoptForeign();
    for(int i = ArraySize(L)-1; i >= 0; i--)
    {
       if(!PositionSelectByTicket(L[i].ticket)) { Settle(i); continue; }
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) { Drop(i); continue; }
+      if(!InpAdoptAnyMagic && PositionGetInteger(POSITION_MAGIC) != InpMagic)
+      { Drop(i); continue; }
       ManageOne(i);
    }
 }
@@ -1179,9 +1263,9 @@ void CloseAll(string why)
    {
       ulong t = PositionGetTicket(i);
       if(t == 0) continue;
-      if(PositionGetInteger(POSITION_MAGIC) == InpMagic
-         && PositionGetString(POSITION_SYMBOL) == _Symbol)
-      { Trade.PositionClose(t); Print(SNIPER_BUILD, " closed by ", why); }
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(!InpAdoptAnyMagic && PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      Trade.PositionClose(t); Print(SNIPER_BUILD, " closed by ", why);
    }
 }
 
@@ -1255,7 +1339,7 @@ void DrawPanel()
    double gave = sumPeakPts - sumPts;
 
    string s = StringFormat(
-     "%s   %s %s   %s   regime %s\n"
+     "%s   %s %s   %s   regime %s   [%s]\n"
      "session %s (GMT %s)   ER(%d) %.3f   drift %s\n"
      "-----------------------------------------------\n"
      "open %d / %d max    balance %.2f %s   minLot %.2f\n"
@@ -1269,6 +1353,7 @@ void DrawPanel()
      "%s",
      SNIPER_BUILD, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
      EnumToString(InpRules), Regime(),
+     (InpManageOnly ? "MANAGER - exits only" : "full - entries + exits"),
      SessionNow(), TimeToString(TimeGMT(), TIME_MINUTES),
      InpRegimeBars, EfficiencyRatio(InpRegimeBars),
      (Drift()>0 ? "up" : (Drift()<0 ? "down" : "flat")),

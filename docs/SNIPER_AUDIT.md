@@ -365,3 +365,62 @@ and now keeps ~88% — **£3.51, not £2.**
 
 Plus: once peak reaches 1R the stop never goes below entry again. SL-HIT held
 173.4 points of peak and closed −54.7. Winners must stop becoming losers.
+
+---
+
+# 10. The liquidity entry failed its own stop rule. The exits did not.
+
+`docs/SMC_SPEC.md` (written by a separate research agent) sets an explicit stop
+rule: *if absorption vs expansion does not separate beyond a best-of-N line on
+≥400 events per arm, nothing downstream is worth coding, because every other
+object is a filter on a base rate that isn't there.*
+
+I ran it (`research/run_absorption.py`), de-trended, three states with
+UNRESOLVED kept as a real third class rather than quietly dropped:
+
+| | GOLD 15m (632 events) | GOLD 1h (2021 events) |
+|---|---|---|
+| ABSORPTION reversal | 52.2% — lift 1.05 | 48.2% — lift 0.98 |
+| ABSORPTION continuation | 47.3% — lift 0.96 | 50.9% — lift 1.04 |
+| EXPANSION continuation | 45.6% — lift 0.92 | 50.7% — lift 1.03 |
+| UNRESOLVED | 48.7% | 41.6% |
+| **separation** | **+6.6 pts, t=+1.53** | **−2.5 pts, t=−1.04** |
+
+**The sign flips between timeframes**, and no arm's confidence interval clears
+the best-of-6 null line of 57.5%. The stop rule fires.
+
+**What that does and does not establish.** It says: on 15m/1h gold futures,
+de-trended, with this implementation, absorption and expansion do not separate.
+It does **not** say the concept is dead on M1 spot — pierce-and-reclaim resolves
+in minutes at M1 and in hours at 1h, which is a different mechanism with the
+same name. I have no M1 data. The script runs unchanged the day you export it.
+
+### The consequence: the two halves of SNIPER rest on very different evidence
+
+| | evidence | strength |
+|---|---|---|
+| **exits** — band lock, BE floor, 60s cut, spread gate | your own 275 tickets | strong |
+| **entries** — absorption, range rotation | my 15m/1h backtest | **failed its stop rule** |
+
+So SNIPER now defaults to **`InpManageOnly = true`**.
+
+In that mode it generates **no signals at all**. It adopts whatever QUAD opens —
+reading entry price, stop and open time from the position itself — and applies
+only the part that is evidenced: the band-derived peak lock, the breakeven floor
+at 1R, the fast-fail (in shadow), the spread gate, and the funded guards.
+
+**You keep the entries you believe in and get the exit fixes that your own
+tickets paid for.** Set `InpManageOnly = false` to let it trade its own signals
+once M1 data says whether the entry is worth anything.
+
+Run it on the same chart as QUAD with `InpAdoptAnyMagic = true`.
+
+### What I would not build, per the spec, and why
+
+SMT divergence (needs a second synced M1 feed; broker timestamp skew manufactures
+the pattern), breaker and mitigation blocks (three conditional gates on a base
+object already at or below random; n collapses to 20–40), inducement as usually
+stated (selected retrospectively), OTE/premium-discount as an entry (the dealing
+range repaints for R_range bars), liquidity voids (~90% redundant with FVG), and
+standalone OB/FVG/BOS/CHoCH triggers — which would be re-running an experiment
+this repo has already failed twice.
