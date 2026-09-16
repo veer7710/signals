@@ -79,6 +79,14 @@ input int    InpFastFailSecs  = 60;     // window measured from fill
 input double InpFastFailATR   = 0.41;   // 0.60 pts / 1.47 ATR = 0.41. Symbol-agnostic.
 input int    InpGraceSecs     = 0;      // B1: hard-capped below InpFastFailSecs below
 
+input group "=== FAST-FAIL SAFETY: measure before it acts ==="
+input bool   InpFFShadow      = true;   // TRUE = log what it WOULD cut, do not cut.
+                                        // Your live example went -GBP5, then +5, then +3.
+                                        // Finding 2 says cutting is right ON AVERAGE, but
+                                        // that trade is a possible counterexample and it is
+                                        // YOUR account. Run a session in shadow, read the
+                                        // CSV column ff_shadow, then set this false.
+
 input group "=== MECHANISM 2: PEAK LOCK (the BASKET-LOCK model) ==="
 input bool   InpPeakLock      = true;
 input double InpLockArmATR    = 0.50;   // arm once peak reaches this many ATR
@@ -111,6 +119,28 @@ input int    InpSwingN        = 3;
 input double InpEqualTolATR   = 0.15;   // equal highs cluster tolerance
 input double InpPierceATR     = 0.05;
 input double InpExpandCloseATR= 0.35;   // close beyond by this = EXPANSION, never fade
+
+input group "=== ROOM TO LIQUIDITY (the equal-high fault, on camera) ==="
+input bool   InpRoomGate      = true;   // do not buy INTO a shelf of resting sell orders
+input double InpMinRoomATR    = 1.20;   // need at least this much clear air to the next
+                                        // untested equal level, or the trade has nowhere to go
+input double InpEqualShelfATR = 0.20;   // levels within this of each other ARE a shelf
+
+input group "=== DISPLACEMENT (the 18:53 bar: 4.42 pts = 3.0 ATR in one minute) ==="
+input bool   InpTravelGate    = true;
+input double InpMaxTravelATR  = 1.50;   // refuse to enter this far into a bar's own range --
+                                        // buying 3 ATR up a vertical bar buys the last of it
+
+input group "=== ANTI-WHIPSAW (20 signals in 72 min = 51% of the move in spread) ==="
+input bool   InpFlipGate      = true;
+input int    InpFlipCooldown  = 180;    // seconds before the OPPOSITE direction is allowed
+input double InpFlipMinMoveATR= 0.80;   // unless price has moved this far since the last exit
+
+input group "=== NEWS ('volume was being put into market') ==="
+input bool   InpNewsGate      = true;
+input int    InpNewsBeforeMin = 5;      // stand down this long BEFORE a high-impact event
+input int    InpNewsAfterMin  = 3;      // and this long after
+input double InpVolSurgeMult  = 3.0;    // or when tick volume hits this x the 50-bar median
 
 input group "=== RISK -- derived from the broker, nothing hardcoded ==="
 input double InpRiskPct       = 0.35;   // % of balance per trade
@@ -149,6 +179,7 @@ struct Live
    datetime opened;
    bool     locked, fastFailed;
    double   worstFirstWindow;
+   double   travelATR;
    string   regime, why;
    double   driftMult, regimeMult;
 };
@@ -170,6 +201,12 @@ string   gHaltWhy="";
 datetime gLastSendBar=0;
 int      gLastSendDir=0;
 double   gLastSendPx=0;
+// anti-whipsaw
+datetime gLastExitTime=0;
+int      gLastExitDir=0;
+double   gLastExitPx=0;
+// instrumentation
+int      nShadowCut=0, nRoomBlock=0, nTravelBlock=0, nFlipBlock=0, nNewsBlock=0;
 // levels
 double   lvlHi[], lvlLo[];
 bool     lvlHiDead[], lvlLoDead[];
@@ -178,6 +215,7 @@ int      nT=0, nWin=0, nFastFail=0, nLocked=0, nSkipWide=0, nSkipSize=0;
 double   sumPts=0, sumPeakPts=0, sumKept=0;
 int      nKept=0;
 int      csvHandle=INVALID_HANDLE;
+
 
 //--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
 bool ResolveBroker();
@@ -201,6 +239,12 @@ int Touches(double level, double tol);
 double RunOrigin(int dir, int fromBar);
 int LiquiditySignal(double &levelOut, string &whyOut);
 int RangeSignal(string &whyOut);
+double RoomToLevel(int dir);
+bool IsShelf(int dir, double level);
+bool RoomOK(int dir);
+bool TravelOK(int dir);
+bool FlipOK(int dir);
+bool NewsClear();
 void Enter(int dir, double px, string why);
 double SizeFor(double stopDist, double mult);
 void ManageAll();
@@ -572,6 +616,136 @@ int RangeSignal(string &whyOut)
 }
 
 //====================================================================
+//  GATES LEARNED FROM THE LIVE CHARTS (15 Sep, M1)
+//====================================================================
+
+//--- ROOM TO LIQUIDITY.
+//    His words: "bullish trend hit an equality high, we had entered a buy
+//    before, it just started dumping, we hit stop loss."
+//    An equal high is not resistance -- it is a shelf of resting sell orders
+//    plus the stops of everyone long underneath. Price is ATTRACTED to it,
+//    trades through it to fill them, then reverses. Buying into an untested
+//    shelf is buying the liquidity the move exists to collect.
+//    So: require clear air between here and the nearest untested shelf.
+double RoomToLevel(int dir)
+{
+   double px = iClose(_Symbol,_Period,1);
+   double best = -1.0;
+   if(dir > 0)
+   {
+      for(int i=0; i<ArraySize(lvlHi); i++)
+      {
+         if(lvlHiDead[i]) continue;
+         double d = lvlHi[i] - px;
+         if(d <= 0) continue;
+         if(best < 0 || d < best) best = d;
+      }
+   }
+   else
+   {
+      for(int i=0; i<ArraySize(lvlLo); i++)
+      {
+         if(lvlLoDead[i]) continue;
+         double d = px - lvlLo[i];
+         if(d <= 0) continue;
+         if(best < 0 || d < best) best = d;
+      }
+   }
+   return best;                       // negative = no level in the way
+}
+
+//--- is that nearest level actually a SHELF (two or more equal levels)?
+//    A single swing is weak. Equal highs are where the orders pile up.
+bool IsShelf(int dir, double level)
+{
+   double tol = InpEqualShelfATR * gAtr;
+   int n = 0;
+   if(dir > 0)
+   { for(int i=0;i<ArraySize(lvlHi);i++) if(MathAbs(lvlHi[i]-level)<=tol) n++; }
+   else
+   { for(int i=0;i<ArraySize(lvlLo);i++) if(MathAbs(lvlLo[i]-level)<=tol) n++; }
+   return (n >= 2) || (Touches(level, tol) >= 3);
+}
+
+bool RoomOK(int dir)
+{
+   if(!InpRoomGate) return true;
+   double room = RoomToLevel(dir);
+   if(room < 0) return true;                       // clear air
+   if(room >= InpMinRoomATR * gAtr) return true;   // enough room
+   // close to a level: only block if it is a real shelf
+   double px = iClose(_Symbol,_Period,1);
+   double lv = (dir > 0) ? px + room : px - room;
+   if(!IsShelf(dir, lv)) return true;
+   nRoomBlock++;
+   return false;
+}
+
+//--- DISPLACEMENT. The 18:53 bar ran 4.42 pts = 3.0 ATR in one minute and a
+//    BUY arrow sat inside it. Entering that far up a bar leaves no room and
+//    a wide stop. Gate on how far price already travelled within the bar,
+//    not on bar size alone -- a big bar you enter at the START of is fine.
+bool TravelOK(int dir)
+{
+   if(!InpTravelGate) return true;
+   double o = iOpen(_Symbol,_Period,1);
+   double c = iClose(_Symbol,_Period,1);
+   double travelled = (c - o) * dir;               // in the trade's own direction
+   if(travelled < InpMaxTravelATR * gAtr) return true;
+   nTravelBlock++;
+   return false;
+}
+
+//--- ANTI-WHIPSAW. Image 4: 20 arrows in 72 minutes, alternating, each pair a
+//    round trip. At 0.02 lots that is GBP 8.80 of spread across an 11.7-point
+//    window -- 51% of the whole move, paid before anything is right or wrong.
+bool FlipOK(int dir)
+{
+   if(!InpFlipGate) return true;
+   if(gLastExitDir == 0 || gLastExitDir == dir) return true;
+   int since = (int)(TimeCurrent() - gLastExitTime);
+   if(since >= InpFlipCooldown) return true;
+   double moved = MathAbs(iClose(_Symbol,_Period,1) - gLastExitPx);
+   if(moved >= InpFlipMinMoveATR * gAtr) return true;
+   nFlipBlock++;
+   return false;
+}
+
+//--- NEWS. His note: "may have been cuz news was in few minutes, volume was
+//    being put into market." Two independent detectors: the terminal calendar,
+//    and a raw tick-volume surge for anything the calendar does not list.
+bool NewsClear()
+{
+   if(!InpNewsGate) return true;
+   // 1. tick-volume surge -- works on every terminal, no calendar needed
+   long v[]; ArraySetAsSeries(v, true);
+   if(CopyTickVolume(_Symbol, _Period, 1, 51, v) == 51)
+   {
+      long tmp[]; ArrayResize(tmp, 50);
+      for(int i=0;i<50;i++) tmp[i] = v[i+1];
+      ArraySort(tmp);
+      double med = (double)tmp[25];
+      if(med > 0 && (double)v[0] >= InpVolSurgeMult * med)
+      { nNewsBlock++; return false; }
+   }
+   // 2. terminal economic calendar, where the build provides it
+   MqlCalendarValue cv[];
+   datetime from = TimeTradeServer() - InpNewsAfterMin*60;
+   datetime to   = TimeTradeServer() + InpNewsBeforeMin*60;
+   string ccy = SymbolInfoString(_Symbol, SYMBOL_CURRENCY_PROFIT);
+   if(ccy == "") ccy = "USD";
+   int n = CalendarValueHistory(cv, from, to, NULL, ccy);
+   for(int i=0; i<n; i++)
+   {
+      MqlCalendarEvent ev;
+      if(!CalendarEventById(cv[i].event_id, ev)) continue;
+      if(ev.importance == CALENDAR_IMPORTANCE_HIGH)
+      { nNewsBlock++; return false; }
+   }
+   return true;
+}
+
+//====================================================================
 //  ENTRY
 //====================================================================
 void OnTick()
@@ -592,6 +766,13 @@ void OnTick()
    int sig = LiquiditySignal(lvl, why);
    if(sig == 0) sig = RangeSignal(why);
    if(sig == 0) return;
+
+   // gates learned from the live charts -- each one counts what it refuses,
+   // so you can check on your own account whether it earned its place
+   if(!NewsClear())  return;
+   if(!FlipOK(sig))  return;
+   if(!TravelOK(sig))return;
+   if(!RoomOK(sig))  return;
 
    // B3: in-memory duplicate guard AT SEND TIME. Deal history is empty when
    // two clocks fire in the same OnTick, which is how one signal became three
@@ -651,6 +832,8 @@ void Enter(int dir, double px, string why)
    L[n].locked   = false;
    L[n].fastFailed = false;
    L[n].worstFirstWindow = 0.0;
+   L[n].travelATR = (gAtr > 0)
+      ? (iClose(_Symbol,_Period,1)-iOpen(_Symbol,_Period,1))*dir/gAtr : 0.0;
    L[n].regime   = reg;
    L[n].why      = why;
    L[n].driftMult= dMult;
@@ -723,12 +906,25 @@ void ManageOne(int i)
       if(adv >= InpFastFailATR * a)
       {
          L[i].fastFailed = true;
-         nFastFail++;
-         Trade.PositionClose(L[i].ticket);
-         if(InpJournal)
-            PrintFormat("%s FAST-FAIL at %ds, %.2f ATR against -- Finding 2 cohort",
-                        SNIPER_BUILD, age, adv/a);
-         return;
+         if(InpFFShadow)
+         {
+            // SHADOW: record that it WOULD have cut, and let the trade run so
+            // the CSV can answer whether cutting was right on THIS account.
+            nShadowCut++;
+            if(InpJournal)
+               PrintFormat("%s FAST-FAIL (shadow) at %ds, %.2f ATR against"
+                           " -- would have cut here, holding to measure",
+                           SNIPER_BUILD, age, adv/a);
+         }
+         else
+         {
+            nFastFail++;
+            Trade.PositionClose(L[i].ticket);
+            if(InpJournal)
+               PrintFormat("%s FAST-FAIL at %ds, %.2f ATR against -- Finding 2 cohort",
+                           SNIPER_BUILD, age, adv/a);
+            return;
+         }
       }
    }
 
@@ -792,6 +988,9 @@ void Settle(int i)
       }
    }
    if(vol > 0) pts /= vol;
+   gLastExitTime = TimeCurrent();
+   gLastExitDir  = L[i].dir;
+   gLastExitPx   = iClose(_Symbol,_Period,1);
    sumPts += pts;
    sumPeakPts += L[i].peak;
    if(pts > 0) nWin++;
@@ -838,7 +1037,8 @@ void OpenCSV()
       FileWrite(csvHandle, "open_time","close_time","symbol","tf","dir","why",
                 "entry","exit_pts","peak_pts","kept_frac","stop_atr","atr",
                 "hold_secs","regime","drift_mult","regime_mult",
-                "fast_failed","locked","worst_first_window_atr");
+                "fast_failed","ff_shadow","locked","worst_first_window_atr",
+                "room_atr","travel_atr");
 }
 
 void WriteCSV(int i, double pts)
@@ -861,8 +1061,11 @@ void WriteCSV(int i, double pts)
       DoubleToString(L[i].driftMult, 2),
       DoubleToString(L[i].regimeMult, 2),
       (L[i].fastFailed ? "1" : "0"),
+      (InpFFShadow ? "1" : "0"),
       (L[i].locked ? "1" : "0"),
-      DoubleToString(L[i].worstFirstWindow/a, 2));
+      DoubleToString(L[i].worstFirstWindow/a, 2),
+      DoubleToString(RoomToLevel(L[i].dir)/a, 2),
+      DoubleToString(L[i].travelATR, 2));
    FileFlush(csvHandle);
 }
 
@@ -898,7 +1101,8 @@ void DrawPanel()
      "-----------------------------------------------\n"
      "trades %d   win %.0f%%   net %.1f pts\n"
      "PEAK POOL %.1f pts   KEPT %.0f%%   GAVE BACK %.1f pts\n"
-     "fast-fails %d   locked %d   skipped wide %d / size %d\n"
+     "fast-fails %d (shadow %d)   locked %d   wide %d / size %d\n"
+     "refused: room %d  travel %d  flip %d  news %d\n"
      "%s",
      SNIPER_BUILD, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
      EnumToString(InpRules), Regime(),
@@ -910,7 +1114,8 @@ void DrawPanel()
      InpRiskPct, gAtr, GraceSecs(), InpFastFailATR, InpFastFailSecs,
      nT, (nT>0 ? 100.0*nWin/nT : 0.0), sumPts,
      sumPeakPts, kept, gave,
-     nFastFail, nLocked, nSkipWide, nSkipSize,
+     nFastFail, nShadowCut, nLocked, nSkipWide, nSkipSize,
+     nRoomBlock, nTravelBlock, nFlipBlock, nNewsBlock,
      (gHalted ? "HALTED: "+gHaltWhy : "trading"));
 
    string n = "SNIPER_panel";

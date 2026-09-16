@@ -162,3 +162,101 @@ entry/exit, MFE as `peak_pts`, `kept_frac`, hold seconds, regime, both size
 multipliers, and whether the cut or the lock fired. **"How many trades went
 above £1" is now a spreadsheet filter.** One live session with this on is worth
 more than a week of screenshots.
+
+---
+
+# 6. Four faults read off the live M1 screenshots (15 Sep, 18:23–20:04)
+
+Reproduce with `python3 research/chart_read.py`. Every number is read off the
+price axis in the images.
+
+**The screenshots cross-check clean.** 0.02 lots showing +£0.98 = +0.67 pts,
+i.e. £1.466/pt, exactly 2× the brief's £0.733 at 0.01. The stops read
+1.63 and 1.70 pts = **1.11 and 1.16 ATR**. The stop geometry is fine. The stop
+is not the problem.
+
+### Fault 1 — the spike-top entry, on camera
+
+The 18:53 bar ran **4290.10 → 4294.52 = 4.42 pts = 3.0 ATR in one minute**, and
+a blue BUY arrow sits *inside* it around 4291.9–4292.5. The next arrow is a red
+SELL about two bars later near 4289.75. That is **−2.45 pts = −£3.59 at 0.02
+before spread**.
+
+Fix: `TravelOK()` gates on how far price has already travelled **within the
+bar, in the trade's own direction** — not on bar size. A big bar you enter at
+the *start* of is fine; 1.5 ATR up its own body is not.
+
+### Fault 2 — the whipsaw is eating the move
+
+Image 4: roughly **20 arrows between 18:52 and 20:04** — one every 3.6 minutes,
+16.7/hour, alternating buy/sell.
+
+| lots | spread per hour | per 8h session |
+|---|---|---|
+| 0.01 | £3.67 | £29.32 |
+| 0.02 | £7.33 | £58.64 |
+| 0.03 | £11.00 | £87.96 |
+
+Across that 72-minute window price moved **11.70 pts** and the spread bill at
+0.02 was **6.00 pts**. You are paying **51% of the entire move** before a
+single trade is right or wrong.
+
+Fix: `FlipOK()` — the opposite direction is refused for 180s unless price has
+moved 0.80 ATR since the last exit.
+
+### Fault 3 — the equal high. This is the one you described.
+
+> *"bullish trend hit an equality high and we had entered a buy before and it
+> just started dumping and we hit stop loss"*
+
+An equal high is **not resistance**. It is a shelf of resting sell orders plus
+the stops of everyone long underneath it. Price is *attracted* to it, trades
+through to fill them, then reverses. Buying into an untested shelf is buying
+the liquidity that the move exists to collect — so the dump was the point of
+the move, not bad luck.
+
+Fix: `RoomOK()` requires **≥1.20 ATR of clear air** to the nearest untested
+level, and only blocks when that level is a genuine **shelf** (two or more
+levels within 0.20 ATR, or 3+ measured touches). A lone swing high does not
+block. After the sweep the same level becomes tradeable the *other* way, which
+is the absorption test already in SNIPER.
+
+The Pine draws that shelf in orange **only while it is actually blocking**, so
+you can see the reason rather than just the refusal.
+
+### Fault 4 — news and the volume that front-runs it
+
+> *"may have been cuz news was in few minutes volume was being put into market"*
+
+Fix: `NewsClear()` uses two independent detectors — the terminal economic
+calendar (high-impact events, 5 min before / 3 min after, on the symbol's
+profit currency) **and** a raw tick-volume surge at 3× the 50-bar median, which
+works on any terminal whether or not the calendar is populated.
+
+---
+
+# 7. The fast-fail ships in SHADOW MODE, and here is why
+
+You described a live 0.03: **−£5 first, then +£5, back to +£3, then closed.**
+
+−£5 on 0.03 lots is 2.27 pts = **1.55 ATR against**. If that happened inside
+the first 60 seconds, mechanism 1 would have cut it at −£1.32 and missed the
+whole recovery.
+
+Finding 2 says cutting is right *on average* — 48 trades at a 6.2% hit rate.
+Your trade may be a genuine counterexample, or the −£5 may have taken ten
+minutes, in which case the rule would never have touched it. **I cannot tell
+from a screenshot, and it is your money.**
+
+So `InpFFShadow = true` by default. The EA logs every trade it *would* have
+cut, lets it run, and records the outcome in the CSV column `ff_shadow`. After
+one session you can filter that column and see, on your own account, whether
+cutting would have helped or cost you. Then set it false — or don't.
+
+That is the one decision in this build I am not willing to make for you from
+inference.
+
+**Every gate counts what it refuses** (`refused: room / travel / flip / news`
+on the panel, and per-trade in the CSV). A filter earns its place only if what
+it refuses is worse than what it takes — these counters are how you check that
+rather than trusting me.
