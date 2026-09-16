@@ -151,6 +151,40 @@ double   sumPts[2], sumR[2], sumCap[2];
 int      nCap[2];
 double   bankAcc=0.0;
 
+
+
+
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+string GuardFile();
+void ClearSlot(int i);
+void ResolveBroker();
+void ApplyRules(double &target,double &daily,double &maxdd,bool &trailing);
+double AtrNow();
+double LtfEma();
+int HtfBias();
+int HoldScore(int dir);
+datetime Today();
+void LoadGuards();
+void SaveGuards();
+void NewDay();
+bool GuardsBlock();
+double EffectiveRiskPct();
+int GmtHour(int sh);
+void UpdateAsia();
+double StructTarget(int dir,double entry,double stopDist);
+double StopDistance(int dir,double a);
+double SizeFor(double stopDist,double riskShare);
+void OpenSlot(int slot,int dir,double a,string why);
+bool SelectSlot(int slot);
+void ManageSlot(int slot);
+void SetStop(int slot,double cand,double cur,int dir);
+void FinishSlot(int slot);
+void CloseAll();
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
+
 string GuardFile(){ return "OMEGA_"+_Symbol+"_"+(string)InpMagic+".guard"; }
 
 //====================================================================

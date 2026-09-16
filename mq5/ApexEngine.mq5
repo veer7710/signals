@@ -93,6 +93,7 @@ input bool   InpJournal     = true;
 
 int      hAtr=INVALID_HANDLE, hLtfEma=INVALID_HANDLE, hHtfEma=INVALID_HANDLE;
 datetime lastBar=0;
+int      gOpenBar=0;
 int      gDir=0, armedDir=0;
 double   gEntry=0,gStopDist=0,gPeakFav=0,gArmed=0;
 double   asiaHi=0, asiaLo=0;
@@ -103,6 +104,34 @@ datetime gDayStamp=0;
 bool     gHalted=false; string gHaltWhy="";
 int      nTrades=0,nWins=0,nSkipWide=0,nSkipSize=0,nCapture=0;
 double   sumR=0,sumPts=0,sumCapture=0;
+
+
+
+
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+string GuardFile();
+datetime Today();
+void LoadGuards();
+void SaveGuards();
+void NewDay();
+bool GuardsBlock();
+double AtrNow();
+double LtfEma(int sh);
+int HtfBias();
+int GmtHour(int sh);
+void UpdateAsia();
+double MoneyPerPricePerLot();
+double EffectiveRiskPct();
+double SizeFor(double stopDist);
+bool TryEnter(int dir,double a,string why);
+void ManageOpen();
+void FinishTrade();
+int CountOpen();
+void CloseAll();
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
 
 string GuardFile(){ return "APEX_"+_Symbol+"_"+(string)InpMagic+".guard"; }
 
@@ -338,7 +367,7 @@ bool TryEnter(int dir,double a,string why)
                   :Trade.Sell(lots,_Symbol,0.0,sl,tp,"APEX-"+why);
    if(!ok){ Print("order failed ",Trade.ResultRetcode()," ",Trade.ResultRetcodeDescription()); return false; }
    gDir=dir; gEntry=(Trade.ResultPrice()>0?Trade.ResultPrice():px);
-   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++;
+   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++; gOpenBar=Bars(_Symbol,_Period);
    if(InpJournal)
       PrintFormat("APEX %s (%s) lots=%.2f risk=%.3f%% entry=%.2f stop=%.2f (%.2fATR)",
                   dir>0?"BUY":"SELL", why, lots, EffectiveRiskPct(), gEntry, sl, sd/a);
@@ -358,6 +387,8 @@ void ManageOpen()
    gDir=dir; gEntry=ent;
    double fav=(cur-ent)*dir;
    if(fav>gPeakFav) gPeakFav=fav;
+   if(InpMaxBars>0 && Bars(_Symbol,_Period)-gOpenBar>=InpMaxBars)
+   { CloseAll(); Print("time stop after ",InpMaxBars," bars"); return; }
    if(gPeakFav<InpArmAtR*gStopDist) return;         // arm only at InpArmAtR
    gArmed=1.0;
    double a=AtrNow();

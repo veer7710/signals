@@ -83,6 +83,7 @@ Pool poolHi[]; Pool poolLo[];
 
 int      hAtr = INVALID_HANDLE, hHtf = INVALID_HANDLE;
 datetime lastBar = 0;
+int      gOpenBar = 0;
 double   gEntry=0, gStopDist=0, gPeakFav=0, gArmed=0;
 int      gDir=0;
 double   gDayStart=0, gPeakEquity=0;
@@ -90,6 +91,37 @@ datetime gDayStamp=0;
 bool     gHalted=false; string gHaltWhy="";
 int      nTrades=0, nWins=0, nSkipWide=0, nSkipSize=0, nSweeps=0, nCapture=0;
 double   sumR=0, sumPts=0, sumCapture=0;
+
+
+
+
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+string GuardFile();
+datetime Today();
+void LoadGuards();
+void SaveGuards();
+void NewDay();
+bool GuardsBlock();
+double AtrNow();
+void AddPool(bool isHigh, double level, datetime when, double tol);
+bool IsPivotHigh(int sh);
+bool IsPivotLow(int sh);
+void CapBuffer();
+double LowCut(double px);
+double HighCut(double px);
+int LiveCount(bool high);
+int HtfBias();
+double MoneyPerPricePerLot();
+double SizeFor(double stopDist);
+void TryEnter(int dir, double wick, double a);
+void ManageOpen();
+void FinishTrade();
+int CountOpen();
+void CloseAll(string why);
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
 
 string GuardFile() { return "LQE_" + _Symbol + "_" + (string)InpMagic + ".guard"; }
 
@@ -377,7 +409,7 @@ void TryEnter(int dir, double wick, double a)
                      : Trade.Sell(lots,_Symbol,0.0,sl,tp,"LQE");
    if(!ok){ Print("order failed ",Trade.ResultRetcode()," ",Trade.ResultRetcodeDescription()); return; }
    gDir=dir; gEntry=(Trade.ResultPrice()>0?Trade.ResultPrice():px);
-   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++;
+   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++; gOpenBar=Bars(_Symbol,_Period);
    if(InpJournal) PrintFormat("SWEEP %s entry=%.2f stopDist=%.2f (%.2fATR) mode=%s",
       dir>0?"BUY":"SELL", gEntry, sd, sd/a,
       InpMode==SWEEP_REVERSAL?"reversal":"continuation");
@@ -396,6 +428,8 @@ void ManageOpen()
    gDir=dir; gEntry=ent;
    double fav = (cur-ent)*dir;
    if(fav > gPeakFav) gPeakFav = fav;
+   if(InpMaxBars>0 && Bars(_Symbol,_Period)-gOpenBar>=InpMaxBars)
+   { CloseAll("time stop"); return; }
    if(gPeakFav < InpArmAtR*gStopDist) return;          // the arming rule
    gArmed = 1.0;
    double a = AtrNow();

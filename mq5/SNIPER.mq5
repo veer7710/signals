@@ -1,0 +1,931 @@
+//+------------------------------------------------------------------+
+//|                                                      SNIPER.mq5  |
+//|            was XAUUSD_QUAD through v19.18 -- that name is retired |
+//|                                                                  |
+//|  M1 XAUUSD. Balance-adaptive, symbol-agnostic, funded or live.   |
+//|                                                                  |
+//|  ================= THE ONE FACT THIS IS BUILT ON =================|
+//|  The system FINDS moves. It does not KEEP them.                  |
+//|                                                                  |
+//|  Reference day, 279 closed trades, -147.04 GBP:                  |
+//|    best moment of every trade added up   +293.26 GBP             |
+//|    handed back                           +440.30 GBP             |
+//|    SL-HIT   109 trades  peak 173.4 pts -> net  -54.7 pts         |
+//|    BASKET-LOCK 15 trades peak  26.0 pts -> net  +25.4 pts  (98%) |
+//|  Near-identical average peak per trade (1.62 vs 1.64 GBP). One   |
+//|  kept 98%, the other kept nothing. The ONLY difference was which |
+//|  mechanism owned the exit. So every exit here locks like         |
+//|  BASKET-LOCK.                                                    |
+//|                                                                  |
+//|  ================= MECHANISM #1: THE 60-SECOND CUT ===============|
+//|  Finding 2, own-exit prices excluded so outcome cannot leak in:  |
+//|    went 0.60+ adverse in first 60s : 48 trades, -86.49, hit  6.2%|
+//|    did NOT                         : 23 trades, +49.92, hit 82.6%|
+//|  Cutting the adverse cohort at -0.60 costs 0.60 + 0.30 spread    |
+//|  = GBP 0.66 each, turning -86.49 into -31.67. The 71-trade block |
+//|  goes -36.57 -> +18.25.                                          |
+//|                                                                  |
+//|  Checked against a bigger independent slice (Finding 4): 153     |
+//|  losers never got even 0.30 up and lost 252.27 between them,     |
+//|  average 1.65 each. Cutting at 0.66 saves 0.99 each = GBP 151    |
+//|  on a day that lost 147.04.                                      |
+//|                                                                  |
+//|  Two independent slices of the same day agree. This is the       |
+//|  highest-value rule available and it is mechanism #1.            |
+//|                                                                  |
+//|  The 82.6% hit rate on the surviving cohort is not a projection. |
+//|  It is what the tickets say.                                     |
+//|                                                                  |
+//|  ================= BUGS FROM THE AUDIT, FIXED ====================|
+//|  B1  The grace window was INVERTED: T_MinHoldSecs=180 against a  |
+//|      240s average hold stood down every discretionary exit for   |
+//|      75% of a trade's life. 21 of 32 exit mechanisms fired ZERO  |
+//|      times in 279 trades. Here the grace window is 0 by default  |
+//|      and is HARD-CAPPED below the fast-fail window, so the cut   |
+//|      can always act. A grace window that outlives the exit it    |
+//|      gates is the bug, not the setting.                          |
+//|  B2  Session weighting ran nowhere -- stranded behind an early   |
+//|      return in the sizing function. Here SizeFor() applies every |
+//|      multiplier and RETURNS ONCE, at the bottom.                 |
+//|  B3  DuplicateFill() read deal history, which is empty when two  |
+//|      clocks fire in one OnTick, so one signal became 2-3         |
+//|      positions at one price sharing a stop and paying three      |
+//|      spreads. Here the guard is IN MEMORY at send time, and the  |
+//|      first leg carries the full size.                            |
+//|  B4  Orphaned inputs. Every input in this file is read; run      |
+//|      tools/mql5_check.py to prove it.                            |
+//|  B6  One definition of a thin session, not two.                  |
+//|                                                                  |
+//|  ================= WRONG ATR COST A WHOLE SESSION ===============|
+//|  M1 ATR is 1.47 (1487 pts travel / 1012 M1 bars), NOT 0.35.      |
+//|  A prior session calibrated on 0.35 and broke three mechanisms.  |
+//|  Nothing here is denominated in gold dollars -- every threshold  |
+//|  is ATR, spread or tick value, so it also runs on EURUSD.        |
+//+------------------------------------------------------------------+
+#property copyright "SNIPER"
+#property link      "https://github.com/veer7710/signals"
+#property version   "20.00"
+#property strict
+
+#include <Trade\Trade.mqh>
+CTrade Trade;
+
+#define SNIPER_BUILD "SNIPER v20.00"
+
+//====================================================================
+input group "=== MECHANISM 1: FAST-FAIL (the 60-second cut) ==="
+input bool   InpFastFail      = true;   // Finding 2. Worth ~GBP 151 on the reference day.
+input int    InpFastFailSecs  = 60;     // window measured from fill
+input double InpFastFailATR   = 0.41;   // 0.60 pts / 1.47 ATR = 0.41. Symbol-agnostic.
+input int    InpGraceSecs     = 0;      // B1: hard-capped below InpFastFailSecs below
+
+input group "=== MECHANISM 2: PEAK LOCK (the BASKET-LOCK model) ==="
+input bool   InpPeakLock      = true;
+input double InpLockArmATR    = 0.50;   // arm once peak reaches this many ATR
+input double InpLockKeepMin   = 0.50;   // keep at least this fraction of a small peak
+input double InpLockKeepMax   = 0.85;   // keep this fraction once the peak is large
+input double InpLockScaleATR  = 3.00;   // peak in ATR at which keep reaches the max
+input double InpTrailATR      = 2.00;   // runner trail once locked
+
+input group "=== HOLD TIME (Finding 6: moves last 42 min, holds were 4) ==="
+input int    InpMaxHoldMins   = 60;     // was effectively 4 minutes
+input int    InpRunnerMins    = 90;     // a trade past the lock may live this long
+
+input group "=== SIZING: drift alignment (Finding 3) ==="
+input bool   InpDriftSize     = true;   // never REFUSE a signal -- only size it
+input int    InpDriftMins     = 30;     // prior-drift window
+input double InpWithDriftMult = 1.00;   // 137 trades, -0.15/trade
+input double InpAgainstMult   = 0.35;   // 97 trades, -1.13/trade. Size down, do not block.
+
+input group "=== REGIME (reference day: efficiency 0.038, traded as trend) ==="
+input bool   InpRegimeGate    = true;
+input int    InpRegimeBars    = 30;
+input double InpRangeER       = 0.15;   // below this = range: rotate, do not chase
+input double InpTrendER       = 0.30;   // above this = trend
+input double InpRangeMult     = 0.60;   // size in a range
+
+input group "=== LIQUIDITY: absorption vs expansion (Part 5D) ==="
+input bool   InpLiquidity     = true;
+input int    InpLevelLookback = 240;
+input int    InpSwingN        = 3;
+input double InpEqualTolATR   = 0.15;   // equal highs cluster tolerance
+input double InpPierceATR     = 0.05;
+input double InpExpandCloseATR= 0.35;   // close beyond by this = EXPANSION, never fade
+
+input group "=== RISK -- derived from the broker, nothing hardcoded ==="
+input double InpRiskPct       = 0.35;   // % of balance per trade
+input double InpMaxStopATR    = 3.00;
+input double InpStopBufATR    = 0.30;
+input int    InpMaxPositions  = 0;      // 0 = derive from margin headroom
+input double InpMarginHeadroom= 0.50;   // never commit more than this share of free margin
+
+input group "=== ACCOUNT RULES ==="
+enum SniperRules { SR_LIVE, SR_PROP_8_4_6, SR_PROP_10_5_10, SR_CUSTOM };
+input SniperRules InpRules    = SR_LIVE;
+input double InpTargetPct     = 8.0;
+input double InpDailyLossPct  = 4.0;
+input double InpMaxDDPct      = 6.0;
+input bool   InpTrailingDD    = true;
+input bool   InpStopAtTarget  = true;
+
+input group "=== INSTRUMENTATION (Part 5H) ==="
+input bool   InpWriteCSV      = true;   // one row per trade, every gate recorded
+input string InpCSVName       = "SNIPER_trades.csv";
+input bool   InpJournal       = true;
+input bool   InpShowPanel     = true;
+
+input group "=== GENERAL ==="
+input long   InpMagic         = 2000001;
+input int    InpSlippage      = 30;
+
+//====================================================================
+//  state
+//====================================================================
+struct Live
+{
+   ulong    ticket;
+   int      dir;
+   double   entry, stopDist, peak, lockPx;
+   datetime opened;
+   bool     locked, fastFailed;
+   double   worstFirstWindow;
+   string   regime, why;
+   double   driftMult, regimeMult;
+};
+Live L[];                       // open positions this EA owns
+
+int      hAtr = INVALID_HANDLE;
+datetime lastBar = 0;
+double   gAtr = 0.0;
+// broker facts
+double   bMinLot=0.01, bMaxLot=100.0, bLotStep=0.01, bTickVal=0, bTickSize=0;
+double   bMoneyPerPt=0, bStopLvl=0, bMarginPerMinLot=0;
+int      bDigits=2;
+// guards
+double   gStart=0, gDayStart=0, gPeak=0;
+datetime gDayStamp=0;
+bool     gHalted=false;
+string   gHaltWhy="";
+// duplicate guard (B3) -- in memory, at send time
+datetime gLastSendBar=0;
+int      gLastSendDir=0;
+double   gLastSendPx=0;
+// levels
+double   lvlHi[], lvlLo[];
+bool     lvlHiDead[], lvlLoDead[];
+// stats
+int      nT=0, nWin=0, nFastFail=0, nLocked=0, nSkipWide=0, nSkipSize=0;
+double   sumPts=0, sumPeakPts=0, sumKept=0;
+int      nKept=0;
+int      csvHandle=INVALID_HANDLE;
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+bool ResolveBroker();
+int MaxStack();
+bool Viable();
+int GraceSecs();
+double AtrNow();
+datetime Today();
+string GuardFile();
+void LoadGuards();
+void SaveGuards();
+void NewDay();
+void RuleSet(double &target, double &daily, double &maxdd, bool &trailing);
+bool GuardsBlock();
+double EfficiencyRatio(int bars);
+string Regime();
+int Drift();
+void RebuildLevels();
+void PushLevel(double &arr[], bool &dead[], double v, double tol);
+int Touches(double level, double tol);
+double RunOrigin(int dir, int fromBar);
+int LiquiditySignal(double &levelOut, string &whyOut);
+int RangeSignal(string &whyOut);
+void Enter(int dir, double px, string why);
+double SizeFor(double stopDist, double mult);
+void ManageAll();
+void ManageOne(int i);
+void SetStop(int i, double want, double cur, int dir);
+void Settle(int i);
+void Drop(int i);
+void CloseAll(string why);
+void OpenCSV();
+void WriteCSV(int i, double pts);
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
+
+//====================================================================
+int OnInit()
+{
+   hAtr = iATR(_Symbol, _Period, 14);
+   if(hAtr == INVALID_HANDLE) { Print(SNIPER_BUILD, ": ATR handle failed"); return INIT_FAILED; }
+   if(!ResolveBroker()) { Print(SNIPER_BUILD, ": symbol specs unavailable"); return INIT_FAILED; }
+
+   Trade.SetExpertMagicNumber(InpMagic);
+   Trade.SetDeviationInPoints(InpSlippage);
+   Trade.SetTypeFillingBySymbol(_Symbol);
+   ArrayResize(L, 0);
+   ArrayResize(lvlHi, 0); ArrayResize(lvlLo, 0);
+   ArrayResize(lvlHiDead, 0); ArrayResize(lvlLoDead, 0);
+   LoadGuards();
+   OpenCSV();
+   EventSetTimer(1);            // 1s: the fast-fail needs sub-bar resolution
+
+   if(!Viable())
+   {
+      PrintFormat("%s: balance %.2f %s cannot carry one %.2f lot at %.0f%% risk"
+                  " -- refusing to trade rather than oversizing",
+                  SNIPER_BUILD, AccountInfoDouble(ACCOUNT_BALANCE),
+                  AccountInfoString(ACCOUNT_CURRENCY), bMinLot, InpRiskPct);
+      return INIT_FAILED;
+   }
+   PrintFormat("%s init %s %s | minLot %.2f step %.2f | %.2f %s per point"
+               " | margin/minlot %.2f | max stack %d | grace %ds (capped)",
+               SNIPER_BUILD, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+               bMinLot, bLotStep, bMoneyPerPt*bMinLot,
+               AccountInfoString(ACCOUNT_CURRENCY), bMarginPerMinLot,
+               MaxStack(), GraceSecs());
+   return INIT_SUCCEEDED;
+}
+
+void OnDeinit(const int reason)
+{
+   EventKillTimer();
+   SaveGuards();
+   if(csvHandle != INVALID_HANDLE) { FileClose(csvHandle); csvHandle = INVALID_HANDLE; }
+   ObjectsDeleteAll(0, "SNIPER_");
+   if(hAtr != INVALID_HANDLE) IndicatorRelease(hAtr);
+}
+
+//--- 1-second timer. The fast-fail is a SECONDS rule; a bar-close EA
+//--- cannot enforce it, which is part of why it was never enforced.
+void OnTimer()
+{
+   ManageAll();
+   SaveGuards();
+   if(InpShowPanel) DrawPanel();
+}
+
+//====================================================================
+//  BROKER ADAPTATION -- Part 5B/5C. Nothing below is a gold constant.
+//====================================================================
+bool ResolveBroker()
+{
+   bMinLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   bMaxLot  = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   bLotStep = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   bTickVal = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   bTickSize= SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   bDigits  = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   bStopLvl = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+              * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(bLotStep <= 0) bLotStep = 0.01;
+   if(bMinLot  <= 0) bMinLot  = 0.01;
+   if(bTickSize <= 0) return false;
+   bMoneyPerPt = bTickVal / bTickSize;      // account currency per 1.0 of price, per lot
+   // margin is live and moves with price -- never hardcode it (brief: 0.01 = GBP 16)
+   double m = 0.0;
+   if(OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, bMinLot,
+                      SymbolInfoDouble(_Symbol, SYMBOL_ASK), m))
+      bMarginPerMinLot = m;
+   else
+      bMarginPerMinLot = 0.0;
+   return (bMoneyPerPt > 0);
+}
+
+//--- Concurrency is a MARGIN question, decided before the fill, never by
+//--- free margin at send time (Part 5B).
+int MaxStack()
+{
+   if(InpMaxPositions > 0) return InpMaxPositions;
+   if(bMarginPerMinLot <= 0) return 1;
+   double usable = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * InpMarginHeadroom;
+   int n = (int)MathFloor(usable / bMarginPerMinLot);
+   return MathMax(1, MathMin(n, 20));
+}
+
+bool Viable()
+{
+   if(bMarginPerMinLot > 0 &&
+      AccountInfoDouble(ACCOUNT_MARGIN_FREE) < bMarginPerMinLot) return false;
+   return true;
+}
+
+//--- B1: a grace window that outlives the exit it gates IS the bug.
+int GraceSecs()
+{
+   int g = InpGraceSecs;
+   if(InpFastFail && g >= InpFastFailSecs) g = InpFastFailSecs - 1;
+   return MathMax(0, g);
+}
+
+double AtrNow()
+{
+   double a[]; ArraySetAsSeries(a, true);
+   if(CopyBuffer(hAtr, 0, 1, 2, a) < 2) return 0.0;
+   return a[0];
+}
+
+//====================================================================
+//  GUARDS
+//====================================================================
+datetime Today()
+{
+   MqlDateTime t; TimeToStruct(TimeCurrent(), t);
+   t.hour = 0; t.min = 0; t.sec = 0;
+   return StructToTime(t);
+}
+
+string GuardFile() { return "SNIPER_" + _Symbol + "_" + (string)InpMagic + ".guard"; }
+
+void LoadGuards()
+{
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   gStart = eq; gPeak = eq; gDayStart = eq; gDayStamp = Today();
+   int h = FileOpen(GuardFile(), FILE_READ|FILE_TXT|FILE_COMMON);
+   if(h != INVALID_HANDLE)
+   {
+      gDayStamp = (datetime)StringToInteger(FileReadString(h));
+      gStart    = StringToDouble(FileReadString(h));
+      gDayStart = StringToDouble(FileReadString(h));
+      gPeak     = StringToDouble(FileReadString(h));
+      gHalted   = (StringToInteger(FileReadString(h)) == 1);
+      gHaltWhy  = FileReadString(h);
+      FileClose(h);
+   }
+   if(gDayStamp != Today()) NewDay();
+   if(gStart <= 0) gStart = eq;
+   if(gPeak  <= 0) gPeak  = eq;
+}
+
+void SaveGuards()
+{
+   int h = FileOpen(GuardFile(), FILE_WRITE|FILE_TXT|FILE_COMMON);
+   if(h == INVALID_HANDLE) return;
+   FileWrite(h, (string)(long)gDayStamp);
+   FileWrite(h, DoubleToString(gStart, 2));
+   FileWrite(h, DoubleToString(gDayStart, 2));
+   FileWrite(h, DoubleToString(gPeak, 2));
+   FileWrite(h, gHalted ? "1" : "0");
+   FileWrite(h, gHaltWhy);
+   FileClose(h);
+}
+
+void NewDay()
+{
+   gDayStamp = Today();
+   gDayStart = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(gHaltWhy == "daily") { gHalted = false; gHaltWhy = ""; }
+   SaveGuards();
+}
+
+void RuleSet(double &target, double &daily, double &maxdd, bool &trailing)
+{
+   switch(InpRules)
+   {
+      case SR_PROP_8_4_6:   target=8.0;  daily=4.0; maxdd=6.0;  trailing=true;  break;
+      case SR_PROP_10_5_10: target=10.0; daily=5.0; maxdd=10.0; trailing=false; break;
+      case SR_LIVE:         target=1e9;  daily=InpDailyLossPct; maxdd=25.0; trailing=true; break;
+      default:              target=InpTargetPct; daily=InpDailyLossPct;
+                            maxdd=InpMaxDDPct;   trailing=InpTrailingDD;        break;
+   }
+}
+
+bool GuardsBlock()
+{
+   if(gDayStamp != Today()) NewDay();
+   double target, daily, maxdd; bool trailing;
+   RuleSet(target, daily, maxdd, trailing);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(eq > gPeak) gPeak = eq;
+   double base = trailing ? gPeak : gStart;
+   if(gDayStart > 0 && (gDayStart-eq)/gDayStart*100.0 >= daily)
+   { gHalted = true; gHaltWhy = "daily"; }
+   if(base > 0 && (base-eq)/base*100.0 >= maxdd)
+   { gHalted = true; gHaltWhy = "maxdd"; }
+   if(InpStopAtTarget && gStart > 0 && (eq-gStart)/gStart*100.0 >= target)
+   { gHalted = true; gHaltWhy = "TARGET"; }
+   if(gHalted) CloseAll("guard:" + gHaltWhy);
+   return gHalted;
+}
+
+//====================================================================
+//  REGIME  --  on the reference day efficiency was 0.038 and the EA
+//  traded it as if it were trending. That is a classification failure,
+//  not an entry failure.
+//====================================================================
+double EfficiencyRatio(int bars)
+{
+   int n = MathMin(bars, Bars(_Symbol,_Period)-2);
+   if(n < 5) return 0.0;
+   double net = MathAbs(iClose(_Symbol,_Period,1) - iClose(_Symbol,_Period,n));
+   double path = 0.0;
+   for(int i=1; i<n; i++)
+      path += MathAbs(iClose(_Symbol,_Period,i) - iClose(_Symbol,_Period,i+1));
+   return (path > 0) ? net/path : 0.0;
+}
+
+string Regime()
+{
+   double er = EfficiencyRatio(InpRegimeBars);
+   if(er < InpRangeER) return "RANGE";
+   if(er > InpTrendER) return "TREND";
+   return "MIXED";
+}
+
+//--- Finding 3: prior 30m drift. WITH -0.15/trade, AGAINST -1.13/trade.
+//--- 68% of the day's loss came from 35% of the trades, identifiable
+//--- before entry from price alone.
+int Drift()
+{
+   int bars = (int)MathMax(2, InpDriftMins * 60 / PeriodSeconds());
+   if(Bars(_Symbol,_Period) < bars+2) return 0;
+   double a = iClose(_Symbol,_Period,1), b = iClose(_Symbol,_Period,bars);
+   if(a > b) return 1;
+   if(a < b) return -1;
+   return 0;
+}
+
+//====================================================================
+//  LIQUIDITY  --  Part 5D.
+//  Piercing a level is NOT a signal. What matters is what happens next:
+//    EXPANSION  decisive close beyond  -> stops won, level dead, never fade
+//    ABSORPTION pierce, no expansion, close back inside -> tradeable
+//  Entry only after a reclaim PLUS confirmation: a body close through the
+//  open of the last unbroken run of same-direction closes into the extreme.
+//  That is parameter-free and earlier than waiting for a swing break.
+//====================================================================
+void RebuildLevels()
+{
+   ArrayResize(lvlHi,0); ArrayResize(lvlLo,0);
+   ArrayResize(lvlHiDead,0); ArrayResize(lvlLoDead,0);
+   int look = MathMin(InpLevelLookback, Bars(_Symbol,_Period)-InpSwingN-2);
+   double tol = InpEqualTolATR * gAtr;
+   for(int i = InpSwingN+1; i < look; i++)
+   {
+      bool ph = true, pl = true;
+      double hv = iHigh(_Symbol,_Period,i), lv = iLow(_Symbol,_Period,i);
+      for(int k=1; k<=InpSwingN; k++)
+      {
+         if(iHigh(_Symbol,_Period,i+k) >= hv || iHigh(_Symbol,_Period,i-k) >= hv) ph=false;
+         if(iLow (_Symbol,_Period,i+k) <= lv || iLow (_Symbol,_Period,i-k) <= lv) pl=false;
+      }
+      if(ph) PushLevel(lvlHi, lvlHiDead, hv, tol);
+      if(pl) PushLevel(lvlLo, lvlLoDead, lv, tol);
+   }
+}
+
+//--- equal highs/lows within tol are ONE pool, not several
+void PushLevel(double &arr[], bool &dead[], double v, double tol)
+{
+   for(int i=0; i<ArraySize(arr); i++)
+      if(MathAbs(arr[i]-v) <= tol) return;
+   int n = ArraySize(arr);
+   ArrayResize(arr, n+1); ArrayResize(dead, n+1);
+   arr[n] = v; dead[n] = false;
+}
+
+//--- how many bars traded back into this level: significance is MEASURED,
+//--- not guessed from age (Part 5D).
+int Touches(double level, double tol)
+{
+   int n=0, look = MathMin(InpLevelLookback, Bars(_Symbol,_Period)-2);
+   for(int i=1; i<look; i++)
+      if(iHigh(_Symbol,_Period,i) >= level-tol && iLow(_Symbol,_Period,i) <= level+tol) n++;
+   return n;
+}
+
+//--- the confirmation: open of the last unbroken run of same-direction
+//--- closes into the extreme. A body close through it is the trigger.
+double RunOrigin(int dir, int fromBar)
+{
+   int i = fromBar;
+   int guard = 0;
+   while(i < Bars(_Symbol,_Period)-2 && guard < 50)
+   {
+      bool sameDir = (dir > 0)
+         ? (iClose(_Symbol,_Period,i) < iOpen(_Symbol,_Period,i))   // down-closes into a low
+         : (iClose(_Symbol,_Period,i) > iOpen(_Symbol,_Period,i));
+      if(!sameDir) break;
+      i++; guard++;
+   }
+   return iOpen(_Symbol,_Period,MathMax(1, i-1));
+}
+
+//--- returns +1 long / -1 short / 0 none, and writes the level used
+int LiquiditySignal(double &levelOut, string &whyOut)
+{
+   if(!InpLiquidity) return 0;
+   if(gAtr <= 0) return 0;
+   double tol    = InpEqualTolATR * gAtr;
+   double pierce = InpPierceATR * gAtr;
+   double expand = InpExpandCloseATR * gAtr;
+   double h1 = iHigh(_Symbol,_Period,1), l1 = iLow(_Symbol,_Period,1);
+   double c1 = iClose(_Symbol,_Period,1);
+
+   for(int i=0; i<ArraySize(lvlLo); i++)
+   {
+      if(lvlLoDead[i]) continue;
+      double lv = lvlLo[i];
+      if(l1 > lv - pierce) continue;                  // not pierced
+      if(c1 < lv - expand) { lvlLoDead[i] = true; continue; }  // EXPANSION: dead
+      if(c1 <= lv) continue;                          // pierced, not reclaimed yet
+      if(c1 <= RunOrigin(1, 1)) continue;             // reclaim without confirmation
+      if(Touches(lv, tol) < 2) continue;              // insignificant level
+      lvlLoDead[i] = true;                            // one event per level
+      levelOut = lv; whyOut = "absorb-low";
+      return 1;
+   }
+   for(int i=0; i<ArraySize(lvlHi); i++)
+   {
+      if(lvlHiDead[i]) continue;
+      double lv = lvlHi[i];
+      if(h1 < lv + pierce) continue;
+      if(c1 > lv + expand) { lvlHiDead[i] = true; continue; }
+      if(c1 >= lv) continue;
+      if(c1 >= RunOrigin(-1, 1)) continue;
+      if(Touches(lv, tol) < 2) continue;
+      lvlHiDead[i] = true;
+      levelOut = lv; whyOut = "absorb-high";
+      return -1;
+   }
+   return 0;
+}
+
+//--- RANGE regime: rotate inside the boundaries. This is the OPPOSITE of
+//--- the trend logic and is exactly what the reference day needed.
+int RangeSignal(string &whyOut)
+{
+   if(Regime() != "RANGE") return 0;
+   int look = MathMin(InpRegimeBars*2, Bars(_Symbol,_Period)-2);
+   double hi=-DBL_MAX, lo=DBL_MAX;
+   for(int i=1;i<look;i++)
+   { hi=MathMax(hi,iHigh(_Symbol,_Period,i)); lo=MathMin(lo,iLow(_Symbol,_Period,i)); }
+   double w = hi-lo;
+   if(w < gAtr*2.0) return 0;
+   double c1 = iClose(_Symbol,_Period,1);
+   double pos = (c1-lo)/w;
+   if(pos <= 0.20) { whyOut="range-low";  return  1; }
+   if(pos >= 0.80) { whyOut="range-high"; return -1; }
+   return 0;
+}
+
+//====================================================================
+//  ENTRY
+//====================================================================
+void OnTick()
+{
+   ManageAll();
+   datetime bt = iTime(_Symbol,_Period,0);
+   if(bt == lastBar) return;
+   lastBar = bt;
+
+   gAtr = AtrNow();
+   if(gAtr <= 0) return;
+   if(GuardsBlock()) return;
+   if(ArraySize(L) >= MaxStack()) return;
+
+   RebuildLevels();
+
+   double lvl = 0.0; string why = "";
+   int sig = LiquiditySignal(lvl, why);
+   if(sig == 0) sig = RangeSignal(why);
+   if(sig == 0) return;
+
+   // B3: in-memory duplicate guard AT SEND TIME. Deal history is empty when
+   // two clocks fire in the same OnTick, which is how one signal became three
+   // positions sharing a stop and paying three spreads.
+   double px = (sig>0) ? SymbolInfoDouble(_Symbol,SYMBOL_ASK)
+                       : SymbolInfoDouble(_Symbol,SYMBOL_BID);
+   if(bt == gLastSendBar && sig == gLastSendDir && MathAbs(px-gLastSendPx) < gAtr*0.05)
+      return;
+
+   Enter(sig, px, why);
+}
+
+void Enter(int dir, double px, string why)
+{
+   double ext = (dir>0) ? iLow(_Symbol,_Period,1) : iHigh(_Symbol,_Period,1);
+   for(int k=2; k<=InpSwingN; k++)
+      ext = (dir>0) ? MathMin(ext, iLow(_Symbol,_Period,k))
+                    : MathMax(ext, iHigh(_Symbol,_Period,k));
+   double sd = MathAbs(px-ext) + InpStopBufATR*gAtr;
+   if(sd <= 0) return;
+   if(sd > InpMaxStopATR*gAtr) { nSkipWide++; return; }
+
+   string reg = Regime();
+   double dMult = 1.0, rMult = 1.0;
+   if(InpDriftSize)
+   {
+      int d = Drift();
+      dMult = (d == 0) ? 1.0 : ((d == dir) ? InpWithDriftMult : InpAgainstMult);
+   }
+   if(InpRegimeGate && reg == "RANGE") rMult = InpRangeMult;
+
+   double lots = SizeFor(sd, dMult*rMult);
+   if(lots <= 0) { nSkipSize++; return; }
+
+   double sl = NormalizeDouble((dir>0) ? px-sd : px+sd, bDigits);
+   bool ok = (dir>0) ? Trade.Buy(lots,_Symbol,0.0,sl,0.0,"SNIPER-"+why)
+                     : Trade.Sell(lots,_Symbol,0.0,sl,0.0,"SNIPER-"+why);
+   if(!ok)
+   {
+      PrintFormat("%s order rejected %d %s", SNIPER_BUILD,
+                  Trade.ResultRetcode(), Trade.ResultRetcodeDescription());
+      return;
+   }
+   gLastSendBar = iTime(_Symbol,_Period,0);
+   gLastSendDir = dir;
+   gLastSendPx  = px;
+
+   int n = ArraySize(L);
+   ArrayResize(L, n+1);
+   L[n].ticket   = Trade.ResultOrder();
+   L[n].dir      = dir;
+   L[n].entry    = (Trade.ResultPrice() > 0 ? Trade.ResultPrice() : px);
+   L[n].stopDist = sd;
+   L[n].peak     = 0.0;
+   L[n].lockPx   = 0.0;
+   L[n].opened   = TimeCurrent();
+   L[n].locked   = false;
+   L[n].fastFailed = false;
+   L[n].worstFirstWindow = 0.0;
+   L[n].regime   = reg;
+   L[n].why      = why;
+   L[n].driftMult= dMult;
+   L[n].regimeMult = rMult;
+   nT++;
+
+   if(InpJournal)
+      PrintFormat("%s %s %s lots=%.2f entry=%.2f sl=%.2f (%.2f ATR) regime=%s driftx%.2f",
+                  SNIPER_BUILD, (dir>0?"BUY":"SELL"), why, lots,
+                  L[n].entry, sl, sd/gAtr, reg, dMult);
+}
+
+//--- B2: every multiplier applies, and there is exactly ONE return, at the
+//--- bottom. The old file returned early on fixed lots and stranded the
+//--- session, confidence and coordination multipliers behind it.
+double SizeFor(double stopDist, double mult)
+{
+   double lots = 0.0;
+   if(bMoneyPerPt > 0 && stopDist > 0)
+   {
+      double riskMoney = AccountInfoDouble(ACCOUNT_BALANCE) * InpRiskPct/100.0 * mult;
+      lots = riskMoney / (stopDist * bMoneyPerPt);
+   }
+   lots = MathFloor(lots/bLotStep) * bLotStep;
+   if(lots < bMinLot) lots = 0.0;              // refuse, never round up
+   if(lots > bMaxLot) lots = bMaxLot;
+   // affordability, checked before the order rather than by free margin at fill
+   if(lots > 0 && bMarginPerMinLot > 0)
+   {
+      double need = bMarginPerMinLot * (lots/bMinLot);
+      double have = AccountInfoDouble(ACCOUNT_MARGIN_FREE) * InpMarginHeadroom;
+      if(need > have) lots = 0.0;
+   }
+   return lots;
+}
+
+//====================================================================
+//  EXIT STACK
+//====================================================================
+void ManageAll()
+{
+   for(int i = ArraySize(L)-1; i >= 0; i--)
+   {
+      if(!PositionSelectByTicket(L[i].ticket)) { Settle(i); continue; }
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) { Drop(i); continue; }
+      ManageOne(i);
+   }
+}
+
+void ManageOne(int i)
+{
+   double a = AtrNow();
+   if(a <= 0) a = gAtr;
+   if(a <= 0) return;
+   int dir = L[i].dir;
+   double cur = (dir>0) ? SymbolInfoDouble(_Symbol,SYMBOL_BID)
+                        : SymbolInfoDouble(_Symbol,SYMBOL_ASK);
+   double fav = (cur - L[i].entry) * dir;
+   double adv = -fav;
+   int age = (int)(TimeCurrent() - L[i].opened);
+   if(fav > L[i].peak) L[i].peak = fav;
+   if(age <= InpFastFailSecs && adv > L[i].worstFirstWindow)
+      L[i].worstFirstWindow = adv;
+
+   if(age < GraceSecs()) return;               // B1: capped below the cut window
+
+   // ---- MECHANISM 1: the 60-second cut ----
+   if(InpFastFail && !L[i].fastFailed && age <= InpFastFailSecs)
+   {
+      if(adv >= InpFastFailATR * a)
+      {
+         L[i].fastFailed = true;
+         nFastFail++;
+         Trade.PositionClose(L[i].ticket);
+         if(InpJournal)
+            PrintFormat("%s FAST-FAIL at %ds, %.2f ATR against -- Finding 2 cohort",
+                        SNIPER_BUILD, age, adv/a);
+         return;
+      }
+   }
+
+   // ---- MECHANISM 2: the peak lock (BASKET-LOCK kept 98%) ----
+   if(InpPeakLock && L[i].peak >= InpLockArmATR * a)
+   {
+      // keep-fraction rises with the peak: protects a small winner without
+      // capping a runner. A flat GBP1 is unreachable on a dead night and a
+      // joke on a spike -- so it is in ATR and it scales.
+      double span = MathMax(0.0001, InpLockScaleATR - InpLockArmATR);
+      double t = (L[i].peak/a - InpLockArmATR) / span;
+      t = MathMax(0.0, MathMin(1.0, t));
+      double keep = InpLockKeepMin + t*(InpLockKeepMax - InpLockKeepMin);
+      double lockLevel = L[i].entry + dir * L[i].peak * keep;
+      double trailLevel = cur - dir * InpTrailATR * a;
+      double want = (dir>0) ? MathMax(lockLevel, trailLevel)
+                            : MathMin(lockLevel, trailLevel);
+      if(!L[i].locked) { L[i].locked = true; nLocked++; }
+      SetStop(i, want, cur, dir);
+   }
+
+   // ---- time stop. Finding 6: the move lasts 42 min, the hold was 4. ----
+   int limit = L[i].locked ? InpRunnerMins : InpMaxHoldMins;
+   if(age >= limit*60)
+   {
+      Trade.PositionClose(L[i].ticket);
+      if(InpJournal) PrintFormat("%s time stop at %d min", SNIPER_BUILD, age/60);
+   }
+}
+
+void SetStop(int i, double want, double cur, int dir)
+{
+   double sl = PositionGetDouble(POSITION_SL);
+   want = NormalizeDouble(want, bDigits);
+   bool better = (dir>0) ? (want > sl) : (want < sl);
+   bool legal  = (dir>0) ? (cur - want > bStopLvl) : (want - cur > bStopLvl);
+   if(better && legal)
+   {
+      Trade.PositionModify(L[i].ticket, want, PositionGetDouble(POSITION_TP));
+      L[i].lockPx = want;
+   }
+}
+
+//--- the position is gone: record what happened, including how much of the
+//--- peak was kept. "How many trades went above GBP 1" was unanswerable from
+//--- the old logs (Part 5H); it is answerable from this CSV.
+void Settle(int i)
+{
+   double pts = 0.0, vol = 0.0;
+   if(HistorySelect(L[i].opened-60, TimeCurrent()+60))
+   {
+      for(int k = HistoryDealsTotal()-1; k >= 0; k--)
+      {
+         ulong t = HistoryDealGetTicket(k);
+         if(HistoryDealGetInteger(t, DEAL_MAGIC) != InpMagic) continue;
+         if(HistoryDealGetInteger(t, DEAL_POSITION_ID) != (long)L[i].ticket) continue;
+         if(HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+         double v = HistoryDealGetDouble(t, DEAL_VOLUME);
+         pts += v * (HistoryDealGetDouble(t, DEAL_PRICE) - L[i].entry) * L[i].dir;
+         vol += v;
+      }
+   }
+   if(vol > 0) pts /= vol;
+   sumPts += pts;
+   sumPeakPts += L[i].peak;
+   if(pts > 0) nWin++;
+   if(L[i].peak > 0.0001) { sumKept += pts/L[i].peak; nKept++; }
+   WriteCSV(i, pts);
+   if(InpJournal)
+      PrintFormat("%s closed %s peak=%.2f exit=%.2f kept=%.0f%% age=%dm %s",
+                  SNIPER_BUILD, L[i].why, L[i].peak, pts,
+                  (L[i].peak>0 ? 100.0*pts/L[i].peak : 0.0),
+                  (int)((TimeCurrent()-L[i].opened)/60), L[i].regime);
+   Drop(i);
+}
+
+void Drop(int i)
+{
+   int n = ArraySize(L);
+   for(int k=i; k<n-1; k++) L[k] = L[k+1];
+   ArrayResize(L, n-1);
+}
+
+void CloseAll(string why)
+{
+   for(int i = PositionsTotal()-1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetInteger(POSITION_MAGIC) == InpMagic
+         && PositionGetString(POSITION_SYMBOL) == _Symbol)
+      { Trade.PositionClose(t); Print(SNIPER_BUILD, " closed by ", why); }
+   }
+}
+
+//====================================================================
+//  CSV -- Part 5H. Every gate that was evaluated, with its result.
+//====================================================================
+void OpenCSV()
+{
+   if(!InpWriteCSV) return;
+   bool fresh = !FileIsExist(InpCSVName, FILE_COMMON);
+   csvHandle = FileOpen(InpCSVName, FILE_READ|FILE_WRITE|FILE_CSV|FILE_COMMON, ',');
+   if(csvHandle == INVALID_HANDLE) { Print(SNIPER_BUILD, ": CSV open failed"); return; }
+   FileSeek(csvHandle, 0, SEEK_END);
+   if(fresh)
+      FileWrite(csvHandle, "open_time","close_time","symbol","tf","dir","why",
+                "entry","exit_pts","peak_pts","kept_frac","stop_atr","atr",
+                "hold_secs","regime","drift_mult","regime_mult",
+                "fast_failed","locked","worst_first_window_atr");
+}
+
+void WriteCSV(int i, double pts)
+{
+   if(!InpWriteCSV || csvHandle == INVALID_HANDLE) return;
+   double a = (gAtr > 0 ? gAtr : 1.0);
+   FileWrite(csvHandle,
+      TimeToString(L[i].opened, TIME_DATE|TIME_SECONDS),
+      TimeToString(TimeCurrent(), TIME_DATE|TIME_SECONDS),
+      _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+      (L[i].dir>0 ? "BUY" : "SELL"), L[i].why,
+      DoubleToString(L[i].entry, bDigits),
+      DoubleToString(pts, 2),
+      DoubleToString(L[i].peak, 2),
+      DoubleToString((L[i].peak>0 ? pts/L[i].peak : 0.0), 3),
+      DoubleToString(L[i].stopDist/a, 2),
+      DoubleToString(a, 3),
+      (string)(int)(TimeCurrent()-L[i].opened),
+      L[i].regime,
+      DoubleToString(L[i].driftMult, 2),
+      DoubleToString(L[i].regimeMult, 2),
+      (L[i].fastFailed ? "1" : "0"),
+      (L[i].locked ? "1" : "0"),
+      DoubleToString(L[i].worstFirstWindow/a, 2));
+   FileFlush(csvHandle);
+}
+
+//====================================================================
+//  PANEL
+//====================================================================
+string SessionNow()
+{
+   MqlDateTime t; TimeToStruct(TimeGMT(), t);
+   int h = t.hour;
+   if(h >= 23 || h < 7)  return "Asia";
+   if(h < 12)            return "London";
+   if(h < 16)            return "London/NY";
+   if(h < 21)            return "New York";
+   return "Off";
+}
+
+void DrawPanel()
+{
+   double target, daily, maxdd; bool trailing;
+   RuleSet(target, daily, maxdd, trailing);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double base = trailing ? gPeak : gStart;
+   double kept = (nKept > 0) ? 100.0*sumKept/nKept : 0.0;
+   double gave = sumPeakPts - sumPts;
+
+   string s = StringFormat(
+     "%s   %s %s   %s   regime %s\n"
+     "session %s (GMT %s)   ER(%d) %.3f   drift %s\n"
+     "-----------------------------------------------\n"
+     "open %d / %d max    balance %.2f %s   minLot %.2f\n"
+     "risk %.2f%%   ATR %.2f   grace %ds   cut %.2f ATR @ %ds\n"
+     "-----------------------------------------------\n"
+     "trades %d   win %.0f%%   net %.1f pts\n"
+     "PEAK POOL %.1f pts   KEPT %.0f%%   GAVE BACK %.1f pts\n"
+     "fast-fails %d   locked %d   skipped wide %d / size %d\n"
+     "%s",
+     SNIPER_BUILD, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
+     EnumToString(InpRules), Regime(),
+     SessionNow(), TimeToString(TimeGMT(), TIME_MINUTES),
+     InpRegimeBars, EfficiencyRatio(InpRegimeBars),
+     (Drift()>0 ? "up" : (Drift()<0 ? "down" : "flat")),
+     ArraySize(L), MaxStack(), AccountInfoDouble(ACCOUNT_BALANCE),
+     AccountInfoString(ACCOUNT_CURRENCY), bMinLot,
+     InpRiskPct, gAtr, GraceSecs(), InpFastFailATR, InpFastFailSecs,
+     nT, (nT>0 ? 100.0*nWin/nT : 0.0), sumPts,
+     sumPeakPts, kept, gave,
+     nFastFail, nLocked, nSkipWide, nSkipSize,
+     (gHalted ? "HALTED: "+gHaltWhy : "trading"));
+
+   string n = "SNIPER_panel";
+   if(ObjectFind(0, n) < 0)
+   {
+      ObjectCreate(0, n, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, n, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, n, OBJPROP_XDISTANCE, 12);
+      ObjectSetInteger(0, n, OBJPROP_YDISTANCE, 20);
+      ObjectSetInteger(0, n, OBJPROP_FONTSIZE, 9);
+      ObjectSetString(0, n, OBJPROP_FONT, "Consolas");
+      ObjectSetInteger(0, n, OBJPROP_SELECTABLE, false);
+   }
+   ObjectSetInteger(0, n, OBJPROP_COLOR, gHalted ? clrTomato : clrGainsboro);
+   ObjectSetString(0, n, OBJPROP_TEXT, s);
+   ChartRedraw(0);
+}
+//+------------------------------------------------------------------+

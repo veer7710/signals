@@ -66,7 +66,6 @@ input double InpGiveBack      = 0.55;    // giveback fraction (giveback mode)
 input double InpArmAtR        = 1.0;     // >>> ARM THE TRAIL ONLY AT THIS R <<<
 input double InpHardTpR       = 0.0;     // 0 = no fixed TP (let the trail work)
 input int    InpMaxBars       = 120;     // hard time stop
-input int    InpStallBars     = 0;       // 0 = OFF. v1 used 25 and it killed runners.
 
 //--- Risk ----------------------------------------------------------
 input group             "=== RISK ==="
@@ -92,6 +91,7 @@ input bool   InpJournal       = true;
 //--- state ---------------------------------------------------------
 int      hAtr = INVALID_HANDLE;
 datetime lastBar = 0;
+int      gOpenBar = 0;
 double   stLine[], stDirArr[];
 int      pendingDir = 0, pendingAge = 0;
 double   gPeakFav = 0.0, gEntry = 0.0, gStopDist = 0.0, gArmed = 0.0;
@@ -106,6 +106,31 @@ string   gHaltWhy = "";
 int      nTrades = 0, nSkipWide = 0, nSkipSize = 0, nWins = 0;
 double   sumR = 0.0, sumCapture = 0.0, sumPts = 0.0;
 int      nCapture = 0;
+
+
+
+
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+string GuardFile();
+void LoadGuards();
+void SaveGuards();
+datetime Today();
+void NewDay();
+bool GuardsBlock();
+bool CalcSuperTrend(int need, double &dirOut, double &lineOut);
+double AtrNow();
+double StopDistance(int dir);
+double MoneyPerPricePerLot();
+double SizeFor(double stopDist);
+void TryEnter(int dir, double stLineVal);
+void ManageOpen();
+void FinishTrade();
+int CountOpen();
+void CloseAll(string why);
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
 
 string GuardFile() { return "STS2_" + _Symbol + "_" + (string)InpMagic + ".guard"; }
 
@@ -347,6 +372,7 @@ void TryEnter(int dir, double stLineVal)
    gPeakFav  = 0.0;
    gArmed    = 0.0;
    nTrades++;
+   gOpenBar  = Bars(_Symbol,_Period);
    if(InpJournal)
       PrintFormat("ENTRY %s lots=%.2f entry=%.2f stop=%.2f stopDist=%.2f (%.2f ATR)",
                   dir > 0 ? "BUY" : "SELL", lots, gEntry, sl, sd, sd / a);
@@ -357,7 +383,8 @@ void TryEnter(int dir, double stLineVal)
 //+------------------------------------------------------------------+
 void ManageOpen()
 {
-   if(!PositionSelect(_Symbol)) { if(gDir != 0) FinishTrade(); return; }
+   if(gTicket == 0 || !PositionSelectByTicket(gTicket))
+   { if(gDir != 0) FinishTrade(); return; }
    if(PositionGetInteger(POSITION_MAGIC) != InpMagic) return;
 
    int    dir  = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
@@ -372,6 +399,8 @@ void ManageOpen()
    double fav = (cur - ent) * dir;
    if(fav > gPeakFav) gPeakFav = fav;
 
+   if(InpMaxBars > 0 && Bars(_Symbol,_Period) - gOpenBar >= InpMaxBars)
+   { CloseAll("time stop"); return; }
    // ---- THE FIX: nothing trails until the trade is InpArmAtR in profit ----
    if(gPeakFav < InpArmAtR * gStopDist) return;
    gArmed = 1.0;
@@ -419,7 +448,7 @@ void FinishTrade()
                      peakR, exitR, peakR > 0 ? exitR / peakR : 0.0, pts,
                      gArmed > 0 ? "yes" : "no");
    }
-   gDir = 0; gPeakFav = 0; gStopDist = 0; gArmed = 0;
+   gDir = 0; gPeakFav = 0; gStopDist = 0; gArmed = 0; gTicket = 0;
 }
 
 int CountOpen()

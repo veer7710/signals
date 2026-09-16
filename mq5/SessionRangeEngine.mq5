@@ -76,6 +76,7 @@ input bool   InpJournal     = true;
 
 int      hAtr = INVALID_HANDLE;
 datetime lastBar = 0;
+int      gOpenBar = 0;
 double   rHi = 0, rLo = 0;
 bool     rReady = false;
 int      rBarsLeft = 0;
@@ -88,6 +89,30 @@ datetime gDayStamp=0;
 bool     gHalted=false; string gHaltWhy="";
 int      nTrades=0, nWins=0, nSkipWide=0, nSkipSize=0, nSkipRange=0, nCapture=0;
 double   sumR=0, sumPts=0, sumCapture=0;
+
+
+
+
+
+//--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
+string GuardFile();
+datetime Today();
+void LoadGuards();
+void SaveGuards();
+void NewDay();
+bool GuardsBlock();
+double AtrNow();
+bool IsSessionBar(int hourGmt);
+double MoneyPerPricePerLot();
+double SizeFor(double stopDist);
+void ManageOpen();
+void FinishTrade();
+int CountOpen();
+void CloseAll();
+void DrawRange();
+string SessionNow();
+void DrawPanel();
+//--- end forward declarations
 
 string GuardFile(){ return "SRE_"+_Symbol+"_"+(string)InpMagic+".guard"; }
 
@@ -223,7 +248,7 @@ void OnTick()
                   :Trade.Sell(lots,_Symbol,0.0,sl,tp,"SRE");
    if(!ok){ Print("order failed ",Trade.ResultRetcode()); return; }
    gDir=dir; gEntry=(Trade.ResultPrice()>0?Trade.ResultPrice():px);
-   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++; nTakenToday++; rReady=false;
+   gStopDist=sd; gPeakFav=0; gArmed=0; nTrades++; gOpenBar=Bars(_Symbol,_Period); nTakenToday++; rReady=false;
    if(InpJournal) PrintFormat("ORB %s range=%.2f-%.2f (%.2fATR) entry=%.2f stop=%.2f",
       dir>0?"BUY":"SELL", rLo, rHi, (rHi-rLo)/a, gEntry, sd);
 }
@@ -261,6 +286,8 @@ void ManageOpen()
    gDir=dir; gEntry=ent;
    double fav=(cur-ent)*dir;
    if(fav>gPeakFav) gPeakFav=fav;
+   if(InpMaxBars>0 && Bars(_Symbol,_Period)-gOpenBar>=InpMaxBars)
+   { CloseAll(); Print("time stop"); return; }
    if(gPeakFav < InpArmAtR*gStopDist) return;
    gArmed=1.0;
    double a=AtrNow();
