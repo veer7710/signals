@@ -260,3 +260,108 @@ inference.
 on the panel, and per-trade in the CSV). A filter earns its place only if what
 it refuses is worse than what it takes — these counters are how you check that
 rather than trusting me.
+
+---
+
+# 8. The £5 close — found it, and it is the best thing in the file
+
+`XAUUSD_QUAD_v19_18_1.mq5` line 2015:
+
+```
+input double T_BasketArmCash = 5.0;   // arm once the TOTAL reaches this
+```
+
+Once total floating profit reaches £5 a floor is set and the basket is closed
+there. The file's own comment confirms the size you trade: *"at 0.02 lots
+bandGBP = GBP2.20, arm GBP5 (the cash floor still binds)"*. **That is your £5
+close. You were right, and you added it.**
+
+**And it is the best exit in the EA.** Reference day:
+
+| exit | n | peak pts | net pts | kept |
+|---|---|---|---|---|
+| SL-HIT | 109 | 173.4 | −54.7 | **−32%** |
+| BASKET-LOCK | 15 | 26.0 | +25.4 | **98%** |
+
+Near-identical average peak per trade (£1.62 vs £1.64). One kept 98%, the other
+gave back its whole peak and more.
+
+### Your two complaints are two different mechanisms
+
+- *"near £5 I see trades close"* → `T_BasketArmCash`. **Working as designed.**
+- *"up £4 and it closes at £2"* → **not the basket.** That is the per-trade
+  give-back / SL-HIT path, which kept −32%.
+
+So the fix is not to remove the £5 close. It is to put BASKET-LOCK's logic in
+charge of **every** trade, and to stop a fixed pound figure deciding when.
+
+### Why it only fired 15 times out of 279
+
+Not because the setup is rare. Because it arms at £5. The band arithmetic
+sitting three blocks below it is sound and scales:
+
+```
+band = spread + 0.60 x ATR = 0.30 + 0.60 x 1.47 = 1.18 pts
+  0.01 lots -> band £0.87, arm would be £1.73
+  0.02 lots -> band £1.73, arm would be £3.47
+  0.03 lots -> band £2.60, arm would be £5.20
+```
+
+At every size you trade, `MathMax(T_BasketArmCash, ...)` throws that away and
+forces £5.
+
+Against your measured peak distribution:
+
+| arm at | % of trades reaching it | per 275 | vs £5 |
+|---|---|---|---|
+| £2 | 17.9% | 49 | **3.2×** |
+| £3 | 12.0% | 33 | 2.1× |
+| £5 | 5.7% | 16 | 1.0× |
+
+**Changed in `quad/XAUUSD_QUAD_v19_18_1.mq5`, build bumped to v19.19:**
+`T_BasketArmCash = 0.0`. That does **not** disable the lock — it hands the arm
+back to `T_BasketArmBands × bandGBP`, which scales with size *and* volatility.
+Revert by setting it to 5.0.
+
+SNIPER now uses the same band-derived arm, plus a rule QUAD's note states but
+does not enforce everywhere: **never lock closer than one band**, because no
+trail can hold inside the noise.
+
+# 9. "I'd rather have £5 than hope for £20" — checked against your own peaks
+
+| peak reaches | % of trades | per 275 |
+|---|---|---|
+| £2 | 17.9% | 49 |
+| £4 | 8.2% | 22 |
+| £5 | 5.7% | 16 |
+| £20 | 0.08% | **0.2** |
+
+**You are right that £20 is not a plan** — it happens 0.2 times per 275 trades.
+
+**You are right that the give-back is real money.** A £4 peak happens ~22 times
+per 275 — close to your "ten times" — and halving those is ~£45.
+
+**You are wrong that £5 is likely.** It is 5.7%. The 75th percentile of your
+peaks is **£1.22**. A hard bank at £5 only pays on 16 trades; the other 259
+still lose.
+
+Policy test on that same distribution, net per 275 trades:
+
+| policy | net |
+|---|---|
+| trail, keep 85% of peak | **−90.8** |
+| trail, keep 70% | −132.5 |
+| bank 70% at £5 + trail rest | −109.9 |
+| bank ALL at £5 | **−371.7** |
+| bank ALL at £2 | −291.8 |
+
+Every policy is negative because the **entry** is negative — that is the honest
+frame, and it is why §6 exists. But relatively: **a harder lock beats a fixed
+bank by a wide margin, and banking everything at £5 is the worst option tested.**
+
+So the lock floor went from 50% → **65%**, the ceiling 85% → **90%**, and it
+now reaches maximum at 2 ATR instead of 3. A £4 peak at 0.02 lots is 1.86 ATR
+and now keeps ~88% — **£3.51, not £2.**
+
+Plus: once peak reaches 1R the stop never goes below entry again. SL-HIT held
+173.4 points of peak and closed −54.7. Winners must stop becoming losers.

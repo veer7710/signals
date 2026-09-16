@@ -90,9 +90,23 @@ input bool   InpFFShadow      = true;   // TRUE = log what it WOULD cut, do not 
 input group "=== MECHANISM 2: PEAK LOCK (the BASKET-LOCK model) ==="
 input bool   InpPeakLock      = true;
 input double InpLockArmATR    = 0.50;   // arm once peak reaches this many ATR
-input double InpLockKeepMin   = 0.50;   // keep at least this fraction of a small peak
-input double InpLockKeepMax   = 0.85;   // keep this fraction once the peak is large
-input double InpLockScaleATR  = 3.00;   // peak in ATR at which keep reaches the max
+input bool   InpBandArm       = true;   // ...or derive it from the noise band, like QUAD's
+input double InpNoiseFloorATR = 0.60;   // BASKET-LOCK does. band = spread + this x ATR;
+input double InpArmBands      = 2.0;    // arm at ArmBands x band, give back 1 band. Two bands
+                                        // is arithmetic, not taste: to guarantee one band of
+                                        // profit after handing one back, the peak must first
+                                        // reach two. QUAD's own note has this right -- what
+                                        // broke it there was a GBP5 cash floor overriding it.
+input double InpLockKeepMin   = 0.65;   // was 0.50. "up GBP4, closes at GBP2" is a 50% giveback.
+input double InpLockKeepMax   = 0.90;   // Policy test on his own peak distribution: keep-85%
+input double InpLockScaleATR  = 2.00;   // netted -90.8 per 275 vs -188.1 for keep-50%, and a
+                                        // hard bank at GBP5 netted -371.7. Harder lock wins on
+                                        // BOTH his complaint and the arithmetic. Reaching the
+                                        // max at 2 ATR (not 3) means a GBP4 peak at 0.02 lots
+                                        // = 1.86 ATR now keeps ~88%: GBP3.51, not GBP2.
+input double InpBEAtR         = 1.00;   // once peak reaches this R, the stop NEVER goes below
+input double InpBELockR       = 0.05;   // entry + this. SL-HIT held 173.4 pts of peak and
+                                        // closed -54.7: winners turning into losers.
 input double InpTrailATR      = 2.00;   // runner trail once locked
 
 input group "=== HOLD TIME (Finding 6: moves last 42 min, holds were 4) ==="
@@ -135,6 +149,27 @@ input group "=== ANTI-WHIPSAW (20 signals in 72 min = 51% of the move in spread)
 input bool   InpFlipGate      = true;
 input int    InpFlipCooldown  = 180;    // seconds before the OPPOSITE direction is allowed
 input double InpFlipMinMoveATR= 0.80;   // unless price has moved this far since the last exit
+
+input group "=== SPREAD (48% of the loss, and it is not constant) ==="
+input bool   InpSpreadGate    = true;
+input double InpMaxSpreadMult = 1.60;   // refuse while live spread is this x its own median
+input int    InpSpreadWindow  = 200;    // ticks of median
+
+input group "=== RE-ENTRY (paying twice for one wrong read) ==="
+input bool   InpReentryGate   = true;
+input int    InpReentryBars   = 10;     // after a LOSS, refuse the same direction for this long
+input double InpReentryDistATR= 1.00;   // unless price has moved this far from the failed entry
+
+input group "=== DEAD MARKET (reference day ER was 0.038) ==="
+input double InpMinRangeATR   = 3.00;   // a range is only worth rotating if it is this wide
+input double InpMinAtrPts     = 0.0;    // 0 = off; absolute floor if you want one
+
+input group "=== PULLBACK BAND (the one cohort that tested POSITIVE) ==="
+input bool   InpPullbackGate  = false;  // OFF by default -- it REFUSES signals, and your
+                                        // standing rule is that the lever is size, not refusal.
+input double InpPullMin       = 0.60;   // Part 5E: entries at 60-80% of the prior 30-min range
+input double InpPullMax       = 0.80;   // in the trend direction were the only clearly
+input int    InpPullMins      = 30;     // positive cohort in the book.
 
 input group "=== NEWS ('volume was being put into market') ==="
 input bool   InpNewsGate      = true;
@@ -201,6 +236,12 @@ string   gHaltWhy="";
 datetime gLastSendBar=0;
 int      gLastSendDir=0;
 double   gLastSendPx=0;
+// re-entry guard
+datetime gLastLossTime=0;
+int      gLastLossDir=0;
+double   gLastLossPx=0;
+int      gLastLossBar=0;
+int      nSpreadBlock=0, nReentryBlock=0, nDeadBlock=0, nPullBlock=0;
 // anti-whipsaw
 datetime gLastExitTime=0;
 int      gLastExitDir=0;
@@ -215,6 +256,8 @@ int      nT=0, nWin=0, nFastFail=0, nLocked=0, nSkipWide=0, nSkipSize=0;
 double   sumPts=0, sumPeakPts=0, sumKept=0;
 int      nKept=0;
 int      csvHandle=INVALID_HANDLE;
+
+
 
 
 //--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
@@ -245,6 +288,11 @@ bool RoomOK(int dir);
 bool TravelOK(int dir);
 bool FlipOK(int dir);
 bool NewsClear();
+double SpreadPts();
+bool SpreadOK();
+bool ReentryOK(int dir);
+bool AliveOK();
+bool PullbackOK(int dir);
 void Enter(int dir, double px, string why);
 double SizeFor(double stopDist, double mult);
 void ManageAll();
@@ -745,6 +793,95 @@ bool NewsClear()
    return true;
 }
 
+//--- SPREAD. Finding 5: GBP76.53 of a GBP159.79 loss. Unlike every other
+//    line in the book this one is CERTAIN -- it is not a bet, it is a fee, and
+//    it is the only cost you can cut without giving up a trade you wanted.
+//    It is also not constant: it widens at rollover, in thin Asia hours and
+//    around news. Entering then pays the worst price of the day for the same
+//    signal. Measured against its OWN median, so it works on any symbol.
+double SpreadPts()
+{
+   return SymbolInfoDouble(_Symbol,SYMBOL_ASK) - SymbolInfoDouble(_Symbol,SYMBOL_BID);
+}
+
+bool SpreadOK()
+{
+   if(!InpSpreadGate) return true;
+   static double hist[]; static int hn = 0;
+   double sp = SpreadPts();
+   if(sp <= 0) return true;
+   int cap = MathMax(20, InpSpreadWindow);
+   if(ArraySize(hist) != cap) { ArrayResize(hist, cap); ArrayInitialize(hist, 0.0); hn = 0; }
+   hist[hn % cap] = sp; hn++;
+   int have = MathMin(hn, cap);
+   if(have < 20) return true;                       // not enough history yet
+   double tmp[]; ArrayResize(tmp, have);
+   for(int i=0;i<have;i++) tmp[i] = hist[i];
+   ArraySort(tmp);
+   double med = tmp[have/2];
+   if(med <= 0) return true;
+   if(sp <= InpMaxSpreadMult * med) return true;
+   nSpreadBlock++;
+   return false;
+}
+
+//--- RE-ENTRY. "we hit stop loss then we did reenter but it was a lucky move."
+//    Re-entering the same direction near the same price after being stopped is
+//    paying twice for one wrong read. Allowed again once price has genuinely
+//    moved away, or enough bars have passed.
+bool ReentryOK(int dir)
+{
+   if(!InpReentryGate) return true;
+   if(gLastLossDir == 0 || gLastLossDir != dir) return true;
+   int barsSince = Bars(_Symbol,_Period) - gLastLossBar;
+   int secsSince = (int)(TimeCurrent() - gLastLossTime);
+   // bars stall when the market is dead; seconds do not. Need BOTH to expire.
+   if(barsSince >= InpReentryBars && secsSince >= InpReentryBars*PeriodSeconds())
+      return true;
+   double moved = MathAbs(iClose(_Symbol,_Period,1) - gLastLossPx);
+   if(moved >= InpReentryDistATR * gAtr) return true;
+   nReentryBlock++;
+   return false;
+}
+
+//--- DEAD MARKET. SNIPER rotates ranges, which is right -- but only when the
+//    range is wide enough to pay the spread twice and leave something over.
+//    On the reference day efficiency was 0.038: that is not a range, it is noise.
+bool AliveOK()
+{
+   if(InpMinAtrPts > 0 && gAtr < InpMinAtrPts) { nDeadBlock++; return false; }
+   if(Regime() != "RANGE") return true;
+   int look = MathMin(InpRegimeBars*2, Bars(_Symbol,_Period)-2);
+   double hi=-DBL_MAX, lo=DBL_MAX;
+   for(int i=1;i<look;i++)
+   { hi=MathMax(hi,iHigh(_Symbol,_Period,i)); lo=MathMin(lo,iLow(_Symbol,_Period,i)); }
+   if((hi-lo) >= InpMinRangeATR*gAtr) return true;
+   nDeadBlock++;
+   return false;
+}
+
+//--- PULLBACK BAND. Part 5E records this as the only clearly positive cohort:
+//    entries at 60-80% of the prior 30-min range, in the trend direction.
+//    Default OFF because it REFUSES signals and the standing rule is that the
+//    lever is size, never refusal. Turn it on only after the CSV shows it earns
+//    its place on your own account.
+bool PullbackOK(int dir)
+{
+   if(!InpPullbackGate) return true;
+   int bars = (int)MathMax(4, InpPullMins*60/PeriodSeconds());
+   bars = MathMin(bars, Bars(_Symbol,_Period)-2);
+   double hi=-DBL_MAX, lo=DBL_MAX;
+   for(int i=1;i<bars;i++)
+   { hi=MathMax(hi,iHigh(_Symbol,_Period,i)); lo=MathMin(lo,iLow(_Symbol,_Period,i)); }
+   double w = hi-lo;
+   if(w <= 0) return true;
+   double pos = (iClose(_Symbol,_Period,1)-lo)/w;
+   if(dir < 0) pos = 1.0 - pos;
+   if(pos >= InpPullMin && pos <= InpPullMax) return true;
+   nPullBlock++;
+   return false;
+}
+
 //====================================================================
 //  ENTRY
 //====================================================================
@@ -769,10 +906,14 @@ void OnTick()
 
    // gates learned from the live charts -- each one counts what it refuses,
    // so you can check on your own account whether it earned its place
-   if(!NewsClear())  return;
-   if(!FlipOK(sig))  return;
-   if(!TravelOK(sig))return;
-   if(!RoomOK(sig))  return;
+   if(!SpreadOK())      return;
+   if(!AliveOK())       return;
+   if(!NewsClear())     return;
+   if(!ReentryOK(sig))  return;
+   if(!FlipOK(sig))     return;
+   if(!TravelOK(sig))   return;
+   if(!RoomOK(sig))     return;
+   if(!PullbackOK(sig)) return;
 
    // B3: in-memory duplicate guard AT SEND TIME. Deal history is empty when
    // two clocks fire in the same OnTick, which is how one signal became three
@@ -928,17 +1069,31 @@ void ManageOne(int i)
       }
    }
 
+   // ---- a winner must never become a loser. SL-HIT held 173.4 pts of peak
+   //      and closed -54.7. Once peak reaches InpBEAtR the stop never goes
+   //      back below entry.
+   if(InpBEAtR > 0 && L[i].peak >= InpBEAtR * L[i].stopDist)
+      SetStop(i, L[i].entry + dir * InpBELockR * L[i].stopDist, cur, dir);
+
    // ---- MECHANISM 2: the peak lock (BASKET-LOCK kept 98%) ----
-   if(InpPeakLock && L[i].peak >= InpLockArmATR * a)
+   // Arm level in PRICE, derived from the noise band so it scales with both
+   // volatility and position size. No cash floor: a fixed pound figure is what
+   // stopped QUAD's best exit from ever firing.
+   double band = SpreadPts() + InpNoiseFloorATR * a;
+   double armPx = InpBandArm ? (InpArmBands * band) : (InpLockArmATR * a);
+   if(InpPeakLock && L[i].peak >= armPx)
    {
       // keep-fraction rises with the peak: protects a small winner without
       // capping a runner. A flat GBP1 is unreachable on a dead night and a
       // joke on a spike -- so it is in ATR and it scales.
-      double span = MathMax(0.0001, InpLockScaleATR - InpLockArmATR);
-      double t = (L[i].peak/a - InpLockArmATR) / span;
+      double armATR = armPx / a;
+      double span = MathMax(0.0001, InpLockScaleATR - armATR);
+      double t = (L[i].peak/a - armATR) / span;
       t = MathMax(0.0, MathMin(1.0, t));
       double keep = InpLockKeepMin + t*(InpLockKeepMax - InpLockKeepMin);
-      double lockLevel = L[i].entry + dir * L[i].peak * keep;
+      // never lock closer than ONE band: no trail can hold inside the noise
+      double lockLevel = L[i].entry + dir * MathMin(L[i].peak*keep, L[i].peak - band);
+      if((L[i].peak - band) <= 0) lockLevel = L[i].entry + dir * L[i].peak * keep;
       double trailLevel = cur - dir * InpTrailATR * a;
       double want = (dir>0) ? MathMax(lockLevel, trailLevel)
                             : MathMin(lockLevel, trailLevel);
@@ -991,6 +1146,13 @@ void Settle(int i)
    gLastExitTime = TimeCurrent();
    gLastExitDir  = L[i].dir;
    gLastExitPx   = iClose(_Symbol,_Period,1);
+   if(pts <= 0)
+   {
+      gLastLossTime = TimeCurrent();
+      gLastLossDir  = L[i].dir;
+      gLastLossPx   = L[i].entry;
+      gLastLossBar  = Bars(_Symbol,_Period);
+   }
    sumPts += pts;
    sumPeakPts += L[i].peak;
    if(pts > 0) nWin++;
@@ -1102,7 +1264,8 @@ void DrawPanel()
      "trades %d   win %.0f%%   net %.1f pts\n"
      "PEAK POOL %.1f pts   KEPT %.0f%%   GAVE BACK %.1f pts\n"
      "fast-fails %d (shadow %d)   locked %d   wide %d / size %d\n"
-     "refused: room %d  travel %d  flip %d  news %d\n"
+     "refused: room %d travel %d flip %d news %d\n"
+     "         spread %d reentry %d dead %d pullback %d\n"
      "%s",
      SNIPER_BUILD, _Symbol, EnumToString((ENUM_TIMEFRAMES)_Period),
      EnumToString(InpRules), Regime(),
@@ -1116,6 +1279,7 @@ void DrawPanel()
      sumPeakPts, kept, gave,
      nFastFail, nShadowCut, nLocked, nSkipWide, nSkipSize,
      nRoomBlock, nTravelBlock, nFlipBlock, nNewsBlock,
+     nSpreadBlock, nReentryBlock, nDeadBlock, nPullBlock,
      (gHalted ? "HALTED: "+gHaltWhy : "trading"));
 
    string n = "SNIPER_panel";

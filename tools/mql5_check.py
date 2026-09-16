@@ -93,10 +93,13 @@ def check(path):
         if nm in ("if","for","while","switch","return"): continue
         ln = src[:m.start()].count("\n")+1
         params = m.group(3).strip()
-        n = 0 if not params else len([p for p in params.split(",") if p.strip()])
+        plist = [p for p in params.split(",") if p.strip()] if params else []
+        n = len(plist)
+        # a parameter with "= value" may be omitted at the call site
+        nmin = len([p for p in plist if "=" not in p])
         if nm in defs:
             errors.append(f"duplicate definition of {nm}() at line {ln} (first at {deflines[nm]})")
-        defs[nm]=ln; deflines[nm]=ln; arity[nm]=n
+        defs[nm]=ln; deflines[nm]=ln; arity[nm]=(nmin, n)
     fwd = {m.group(1): src[:m.start()].count("\n")+1 for m in FUNC_FWD.finditer(src)}
 
     # ---- 2 declare-before-use --------------------------------------
@@ -111,11 +114,15 @@ def check(path):
         called.setdefault(nm, []).append(ln)
     for nm, sites in called.items():
         first = min(sites)
+        # MQL5 resolves functions across the whole file -- unlike C it does NOT
+        # require a prototype. Verified against XAUUSD_QUAD v19.18, which runs
+        # live with 23 call-before-define cases. A prototype is harmless
+        # insurance, not a requirement, so this is a WARNING.
         if first < defs[nm] and nm not in fwd:
-            errors.append(f"{nm}() called at line {first} but defined at {defs[nm]} "
-                          f"with no forward declaration -- MQL5 is declare-before-use")
+            warns.append(f"{nm}() called at line {first}, defined at {defs[nm]} "
+                         f"(legal in MQL5; a prototype would make the order explicit)")
         elif nm in fwd and fwd[nm] > first:
-            errors.append(f"{nm}() forward-declared at {fwd[nm]}, after first use at {first}")
+            warns.append(f"{nm}() prototype at {fwd[nm]} sits after first use at {first}")
 
     # ---- 4 arity ----------------------------------------------------
     for nm, sites in called.items():
@@ -132,9 +139,16 @@ def check(path):
                     depth -= 1
                 seg += ch
             if seg.count("(") != seg.count(")"): continue     # multi-line call
+            # a line whose argument list ends in a comma is CONTINUED on the
+            # next line -- counting it here produced five false positives on
+            # XAUUSD_QUAD (Open, AtLegExtreme, QSP_Row)
+            if seg.rstrip().endswith(","): continue
+            if not line.rstrip().endswith((")", ");", ",")) and "(" in line: continue
             got = 0 if not seg.strip() else len([a for a in re.split(r",(?![^(]*\))", seg) if a.strip()])
-            if got != arity[nm]:
-                errors.append(f"line {ln}: {nm}() called with {got} args, defined with {arity[nm]}")
+            lo, hi = arity[nm]
+            if got < lo or got > hi:
+                rng = str(lo) if lo == hi else f"{lo}-{hi}"
+                errors.append(f"line {ln}: {nm}() called with {got} args, defined with {rng}")
 
     # ---- 5/6 inputs --------------------------------------------------
     inputs = {m.group(1): src[:m.start()].count("\n")+1 for m in INPUT_DEF.finditer(src)}
