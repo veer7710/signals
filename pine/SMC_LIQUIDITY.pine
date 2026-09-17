@@ -1,0 +1,329 @@
+//@version=6
+// =====================================================================
+//  SMC LIQUIDITY  --  chart twin of SMC_LIQUIDITY.mq5
+//
+//  This exists so you can see WHERE A SIGNAL WENT WRONG: too late, too
+//  early, or in chop. Every refusal is drawn, not hidden, so a missing
+//  arrow always has a visible reason next to it.
+//
+//  THE ONE IDEA: price does not move to a level and stop. It moves TO
+//  THE ORDERS. A swing high is buy-stops plus resting sells; a swing low
+//  is sell-stops plus resting buys. Price is attracted to them, trades
+//  through to fill them, and only then turns. So nothing here fades a
+//  level on approach -- it waits for the level to be RUN, checks whether
+//  the run was ABSORBED or EXPANDED, and only trades absorption.
+//
+//  TP and SL are read off the chart, never from an R-multiple:
+//    SL = beyond the wick that did the running + ONE NOISE BAND
+//    TP = the next opposing pool, refused if 2+ live levels sit in between
+// =====================================================================
+indicator("SMC Liquidity", overlay = true, max_lines_count = 120,
+          max_labels_count = 80, max_boxes_count = 40)
+
+g1 = "Structure"
+swN    = input.int(3,    "Swing strength",        group = g1, minval = 1)
+lookN  = input.int(300,  "Lookback",              group = g1, minval = 50)
+eqTol  = input.float(0.15,"Equal levels merge (ATR)", group = g1, step = 0.05)
+reactN = input.int(3,    "Touches = reaction level", group = g1, minval = 2)
+
+g2 = "The run"
+pierceA = input.float(0.05,"Pierce (ATR)",        group = g2, step = 0.01)
+expandA = input.float(0.35,"Close beyond = spent (ATR)", group = g2, step = 0.05)
+resolveN= input.int(3,     "Bars to resolve",     group = g2, minval = 1)
+
+g3 = "Confluence"
+useOTE  = input.bool(true, "OTE 0.62-0.79",       group = g3)
+oteLo   = input.float(0.62,"OTE low",             group = g3, step = 0.01)
+oteHi   = input.float(0.79,"OTE high",            group = g3, step = 0.01)
+useDisc = input.bool(true, "Premium / discount",  group = g3)
+minConf = input.int(1,     "Confluences required", group = g3, minval = 0, maxval = 2)
+
+g4 = "Target quality"
+minRoom = input.float(1.20,"Min room to target (ATR)", group = g4, step = 0.1)
+maxBtwn = input.int(1,     "Live levels allowed in between", group = g4, minval = 0,
+   tooltip = "More than this and the target is HIGH RESISTANCE. A target you have to grind through is a bad target.")
+minRR   = input.float(1.00,"Min structural RR",   group = g4, step = 0.1)
+
+g5 = "Stop"
+noiseA  = input.float(0.60,"Noise band = spread + this x ATR", group = g5, step = 0.05)
+stopBnd = input.float(1.00,"Stop this many bands past the wick", group = g5, step = 0.25,
+   tooltip = "A stop inside the noise is not a stop, it is a donation.")
+maxStop = input.float(4.00,"Skip if stop > (ATR)", group = g5, step = 0.1)
+
+g6 = "Regime"
+regN    = input.int(30,   "Efficiency window",    group = g6)
+rangeER = input.float(0.15,"Below = RANGE",       group = g6, step = 0.01)
+trendER = input.float(0.30,"Above = TREND",       group = g6, step = 0.01)
+
+g7 = "Chart"
+showLv  = input.bool(true, "Pools",               group = g7)
+showBox = input.bool(true, "Position box",        group = g7)
+showWhy = input.bool(true, "Mark refusals",       group = g7)
+cBuy = input.color(#26a69a, "Buy",  group = g7)
+cSel = input.color(#ef5350, "Sell", group = g7)
+
+atr  = ta.atr(14)
+band = ta.tr * 0.5 + 0.0
+ok   = barstate.isconfirmed or barstate.ishistory
+
+// ---------------------------------------------------------- regime
+eff() =>
+    net = math.abs(close - close[regN])
+    path = 0.0
+    for i = 0 to regN - 1
+        path += math.abs(close[i] - close[i + 1])
+    path > 0 ? net / path : 0.0
+er = eff()
+regime = er < rangeER ? "RANGE" : er > trendER ? "TREND" : "MIXED"
+
+// ---------------------------------------------------------- pools
+var float[] H = array.new_float()
+var int[]   HT = array.new_int()
+var bool[]  HD = array.new_bool()
+var float[] L = array.new_float()
+var int[]   LT = array.new_int()
+var bool[]  LD = array.new_bool()
+
+ph = ta.pivothigh(high, swN, swN)
+pl = ta.pivotlow(low,  swN, swN)
+
+add(float[] A, int[] T, bool[] D, float v, float tol) =>
+    at = -1
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            if math.abs(array.get(A, i) - v) <= tol
+                at := i
+    if at >= 0
+        array.set(T, at, array.get(T, at) + 1)
+    else
+        array.push(A, v)
+        array.push(T, 1)
+        array.push(D, false)
+        if array.size(A) > 40
+            array.shift(A)
+            array.shift(T)
+            array.shift(D)
+
+if not na(ph)
+    add(H, HT, HD, ph, eqTol * atr)
+if not na(pl)
+    add(L, LT, LD, pl, eqTol * atr)
+
+nearest(int dir) =>
+    b = 0.0
+    bi = -1
+    A = dir == 1 ? H : L
+    D = dir == 1 ? HD : LD
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            v = array.get(A, i)
+            if not array.get(D, i) and (dir == 1 ? v > close : v < close)
+                if bi < 0 or (dir == 1 ? v < b : v > b)
+                    b := v
+                    bi := i
+    [b, bi]
+
+between(float t, int dir) =>
+    n = 0
+    A = dir == 1 ? H : L
+    D = dir == 1 ? HD : LD
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            v = array.get(A, i)
+            if not array.get(D, i) and (dir == 1 ? (v > close and v < t) : (v < close and v > t))
+                n += 1
+    n
+
+// dealing range for OTE / premium-discount
+legHi = ta.highest(high, lookN > 200 ? 200 : lookN)
+legLo = ta.lowest(low,  lookN > 200 ? 200 : lookN)
+mid   = (legHi + legLo) / 2.0
+rng   = legHi - legLo
+inOTE(int dir) =>
+    f = rng > 0 ? (dir == 1 ? (legHi - close) / rng : (close - legLo) / rng) : 0.0
+    f >= oteLo and f <= oteHi
+inDisc(int dir) => dir == 1 ? close <= mid : close >= mid
+conf(int dir) => (useOTE and inOTE(dir) ? 1 : 0) + (useDisc and inDisc(dir) ? 1 : 0)
+
+// ---------------------------------------------------------- the run
+sig = 0
+wick = 0.0
+why = ""
+if ok
+    [bsl, bi] = nearest(1)
+    [ssl, li] = nearest(-1)
+    if li >= 0 and low <= ssl - pierceA * atr
+        expanded = false
+        for q = 0 to resolveN - 1
+            if close[q] < ssl - expandA * atr
+                expanded := true
+        if expanded
+            array.set(LD, li, true)
+        else if close > ssl
+            sig := 1
+            wick := low
+            why := array.get(LT, li) >= reactN ? "SSL react" : "SSL sweep"
+            array.set(LD, li, true)
+    if sig == 0 and bi >= 0 and high >= bsl + pierceA * atr
+        expandedH = false
+        for q = 0 to resolveN - 1
+            if close[q] > bsl + expandA * atr
+                expandedH := true
+        if expandedH
+            array.set(HD, bi, true)
+        else if close < bsl
+            sig := -1
+            wick := high
+            why := array.get(HT, bi) >= reactN ? "BSL react" : "BSL sweep"
+            array.set(HD, bi, true)
+
+// ---------------------------------------------------------- qualify
+[tUp, iu] = nearest(1)
+[tDn, id] = nearest(-1)
+tgt   = sig == 1 ? tUp : sig == -1 ? tDn : na
+haveT = sig == 1 ? iu >= 0 : sig == -1 ? id >= 0 : false
+room  = haveT ? math.abs(tgt - close) : 0.0
+btwn  = haveT and sig != 0 ? between(tgt, sig) : 0
+stopD = sig != 0 ? math.abs(close - wick) + stopBnd * band : na
+rr    = (not na(stopD) and stopD > 0) ? room / stopD : 0.0
+
+failConf  = sig != 0 and conf(sig) < minConf
+failRoom  = sig != 0 and (not haveT or room < minRoom * atr or btwn > maxBtwn)
+failStop  = sig != 0 and (na(stopD) or stopD > maxStop * atr)
+failRR    = sig != 0 and rr < minRR
+failReg   = sig != 0 and regime == "MIXED"
+refused   = sig != 0 and (failConf or failRoom or failStop or failRR or failReg)
+
+buy  = sig ==  1 and not refused
+sell = sig == -1 and not refused
+
+// ---------------------------------------------------------- position
+var int   pd = 0
+var float pe = na
+var float pstop = na
+var float ptgt = na
+var float pk = 0.0
+var int   pb = na
+
+if ok
+    if pd != 0
+        pk := math.max(pk, pd == 1 ? high - pe : pe - low)
+        if (pd == 1 ? low <= pstop : high >= pstop) or (pd == 1 ? high >= ptgt : low <= ptgt)
+            pd := 0
+            pk := 0.0
+        else if pk >= 2.0 * band
+            k = math.min(0.90, 0.65 + 0.25 * math.min(1.0, (pk / atr - 0.5) / 1.5))
+            w = pe + (pd == 1 ? 1 : -1) * math.min(pk * k, pk - band)
+            pstop := pd == 1 ? math.max(pstop, w) : math.min(pstop, w)
+    if pd == 0 and (buy[1] or sell[1])
+        pd := buy[1] ? 1 : -1
+        pe := open
+        pstop := pe - pd * stopD[1]
+        ptgt := pd == 1 ? tUp : tDn
+        pk := 0.0
+        pb := bar_index
+
+// ---------------------------------------------------------- draw
+var line[] ln = array.new_line()
+var label[] lb = array.new_label()
+var box bxR = na
+var box bxW = na
+
+if barstate.islast
+    if array.size(ln) > 0
+        for i = 0 to array.size(ln) - 1
+            line.delete(array.get(ln, i))
+        array.clear(ln)
+    if array.size(lb) > 0
+        for i = 0 to array.size(lb) - 1
+            label.delete(array.get(lb, i))
+        array.clear(lb)
+
+    if showLv
+        for side = -1 to 1 by 2
+            A = side == 1 ? H : L
+            T = side == 1 ? HT : LT
+            D = side == 1 ? HD : LD
+            col = side == 1 ? cSel : cBuy
+            prev = close
+            for pass = 0 to 1
+                b = 0.0
+                bi = -1
+                if array.size(A) > 0
+                    for i = 0 to array.size(A) - 1
+                        v = array.get(A, i)
+                        if not array.get(D, i) and (side == 1 ? (v > prev) : (v < prev))
+                            if bi < 0 or (side == 1 ? v < b : v > b)
+                                b := v
+                                bi := i
+                if bi >= 0
+                    react = array.get(T, bi) >= reactN
+                    res = between(b, side) > maxBtwn ? "HRL" : "LRL"
+                    array.push(ln, line.new(bar_index - 50, b, bar_index + 10, b,
+                        color = color.new(col, react ? 15 : 60),
+                        width = react ? 2 : 1,
+                        style = react ? line.style_solid : line.style_dotted))
+                    if pass == 0
+                        array.push(lb, label.new(bar_index + 10, b,
+                            (side == 1 ? "BSL " : "SSL ") + str.tostring(b, format.mintick) +
+                            "  " + res + (react ? " ***" : ""),
+                            style = label.style_label_left, size = size.tiny,
+                            color = color.new(col, 90), textcolor = color.new(col, 10)))
+                    prev := b
+
+    if not na(bxR)
+        box.delete(bxR)
+    if not na(bxW)
+        box.delete(bxW)
+    if showBox and pd != 0
+        // risk in red, reward in green -- the same two boxes the EA draws
+        bxR := box.new(pb, pe, bar_index + 8, pstop,
+               border_color = color.new(cSel, 60), bgcolor = color.new(cSel, 88))
+        bxW := box.new(pb, pe, bar_index + 8, ptgt,
+               border_color = color.new(cBuy, 60), bgcolor = color.new(cBuy, 90))
+        array.push(lb, label.new(bar_index + 8, pe,
+            (pd == 1 ? "LONG " : "SHORT ") + str.tostring(pe, format.mintick) +
+            "   SL " + str.tostring(pstop, format.mintick) +
+            "   TP " + str.tostring(ptgt, format.mintick) +
+            "   peak " + str.tostring(atr > 0 ? pk / atr : 0, "#.#") + " ATR",
+            style = label.style_label_left, size = size.tiny,
+            color = color.new(color.black, 70),
+            textcolor = pd == 1 ? cBuy : cSel))
+
+plotshape(buy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
+          text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sell, "SELL", shape.labeldown, location.abovebar, cSel,
+          text = "SELL", textcolor = color.white, size = size.tiny)
+
+// a refusal is drawn, never hidden -- a missing arrow always has a reason
+rTxt = failReg  ? "chop"  : failRoom ? "no room" : failConf ? "no confluence"
+     : failRR   ? "RR"    : failStop ? "stop too wide" : ""
+if showWhy and refused and ok
+    label.new(bar_index, sig == 1 ? low : high, rTxt,
+        style = sig == 1 ? label.style_label_up : label.style_label_down,
+        size = size.tiny, color = color.new(color.orange, 82),
+        textcolor = color.new(color.orange, 5))
+
+// ---------------------------------------------------------- panel
+var table tb = na
+if barstate.islast
+    if na(tb)
+        tb := table.new(position.bottom_right, 1, 4,
+              bgcolor = color.new(color.black, 84),
+              border_color = color.new(color.gray, 75), border_width = 1)
+    table.cell(tb, 0, 0, regime + "   ER " + str.tostring(er, "#.###"),
+        text_color = regime == "MIXED" ? color.orange : color.new(color.white, 12),
+        text_size = size.tiny)
+    table.cell(tb, 0, 1, "BSL " + (iu >= 0 ? str.tostring(tUp, format.mintick) +
+        " (" + str.tostring(between(tUp, 1)) + " btwn)" : "-"),
+        text_color = color.new(cSel, 20), text_size = size.tiny)
+    table.cell(tb, 0, 2, "SSL " + (id >= 0 ? str.tostring(tDn, format.mintick) +
+        " (" + str.tostring(between(tDn, -1)) + " btwn)" : "-"),
+        text_color = color.new(cBuy, 20), text_size = size.tiny)
+    table.cell(tb, 0, 3, pd != 0 ? "in trade  RR " + str.tostring(rr, "#.#") :
+        (refused ? "refused: " + rTxt : "watching"),
+        text_color = pd != 0 ? color.white : (refused ? color.orange : color.gray),
+        text_size = size.tiny)
+
+alertcondition(buy,  "SMC BUY",  "SMC Liquidity BUY")
+alertcondition(sell, "SMC SELL", "SMC Liquidity SELL")

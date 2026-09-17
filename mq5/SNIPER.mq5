@@ -2085,6 +2085,35 @@ input bool   SN_ReentryGate   = false;
 input int    SN_ReentryBars   = 10;
 input double SN_ReentryDistATR= 1.00;
 
+// ══════════ (v20.00 SNIPER) THE GIVE-BACK LEDGER + SELF-DIAGNOSIS ══════════
+// His question, verbatim: "how much we lost by not closing in profit, and can
+// it spot errors in execution itself."
+//
+// On the reference day the answer was GBP440.30 handed back on 249 trades, and
+// nothing in the EA said so -- the panel showed the P/L, never the peak that
+// preceded it. A number nobody computes is a problem nobody fixes.
+//
+// Six error classes, each judged on the trade's own tape, not on opinion.
+// Three are decided the moment the trade closes. Three CANNOT be -- "was that
+// exit early" is unanswerable until you see what price did next -- so those are
+// parked and judged SN_LateCheckSecs later, on the timer.
+input bool   SN_Ledger        = true;
+input int    SN_LateCheckSecs = 600;    // how long to watch a closed trade before judging it
+input double SN_GaveBackFrac  = 0.50;   // kept less than this fraction of peak = GAVE BACK
+input double SN_EarlyBands    = 1.0;    // price ran this many noise bands further after exit
+input double SN_StopRevBands  = 1.0;    // price came back through entry by this much after a stop
+
+double g_gbPeak = 0.0, g_gbNet = 0.0, g_gbLost = 0.0, g_gbBest = 0.0;
+int    g_gbN = 0;
+int    g_eGave = 0, g_eNever = 0, g_eEarly = 0, g_eStopRev = 0, g_eChop = 0, g_eNoRoom = 0;
+
+#define SN_WATCH 64
+ulong    g_wTk[SN_WATCH];
+int      g_wDir[SN_WATCH];
+double   g_wEntry[SN_WATCH], g_wExit[SN_WATCH], g_wPeak[SN_WATCH], g_wNet[SN_WATCH];
+datetime g_wWhen[SN_WATCH];
+bool     g_wUsed[SN_WATCH];
+
 int g_snSpreadN = 0;
 double g_snSpread[];
 datetime g_snLastExitT = 0, g_snLastLossT = 0;
@@ -9759,6 +9788,31 @@ void OnTradeTransaction(const MqlTradeTransaction &tr, const MqlTradeRequest &rq
       double snProf  = HistoryDealGetDouble(tr.deal, DEAL_PROFIT)
                      + HistoryDealGetDouble(tr.deal, DEAL_SWAP)
                      + HistoryDealGetDouble(tr.deal, DEAL_COMMISSION);
+      // ---- give-back ledger ----
+      if(SN_Ledger)
+      {
+         ulong  snPid  = (ulong)HistoryDealGetInteger(tr.deal, DEAL_POSITION_ID);
+         double snPk   = SN_PeakOf(snPid);
+         double snPx   = HistoryDealGetDouble(tr.deal, DEAL_PRICE);
+         g_gbN++;
+         g_gbNet  += snProf;
+         g_gbPeak += MathMax(snPk, 0.0);
+         if(snPk > snProf) g_gbLost += (snPk - snProf);
+         if(snPk > g_gbBest) g_gbBest = snPk;
+         double snBand = SN_BandCash(HistoryDealGetDouble(tr.deal, DEAL_VOLUME));
+         if(snPk <= snBand)            g_eNever++;              // never meaningfully green
+         else if(snProf < SN_GaveBackFrac * snPk) g_eGave++;    // had it, handed it back
+         double snEnt = 0.0;
+         if(HistorySelectByPosition(snPid))
+            for(int q = 0; q < HistoryDealsTotal(); q++)
+            {
+               ulong dq = HistoryDealGetTicket(q);
+               if(HistoryDealGetInteger(dq, DEAL_ENTRY) == DEAL_ENTRY_IN)
+               { snEnt = HistoryDealGetDouble(dq, DEAL_PRICE); break; }
+            }
+         if(snEnt > 0.0) SN_Watch(snPid, snPosD, snEnt, snPx, snPk, snProf);
+      }
+
       g_snLastExitT   = TimeCurrent();
       g_snLastExitDir = snPosD;
       g_snLastExitPx  = HistoryDealGetDouble(tr.deal, DEAL_PRICE);
@@ -11200,6 +11254,87 @@ int SameDirFillsInWindow(int dir, double px, int secs, double pts)
 // Reads CLOSED M1 bars only, so it cannot be re-triggered tick by tick by the
 // same candle. Looks back far enough to cover the whole pause window.
 // Returns the seconds remaining, or 0 if we are clear to trade.
+//====================================================================
+//  (v20.00 SNIPER) GIVE-BACK LEDGER AND EXECUTION SELF-DIAGNOSIS
+//====================================================================
+
+//--- read the peak WITHOUT touching the registry TRADE-LOCK owns
+double SN_PeakOf(ulong tk)
+{
+   for(int i = 0; i < g_tlN; i++)
+      if(g_tlTk[i] == tk) return g_tlPk[i];
+   return 0.0;
+}
+
+double SN_BandCash(double vol)
+{
+   double bandPts = NoiseFloorPts(Buf(g_scAtr[0], 0, 1));
+   if(bandPts <= 0.0 || vol <= 0.0) return 0.0;
+   return MathAbs(LossPerLot(bandPts)) * vol;
+}
+
+//--- park a closed trade so the two questions that need hindsight can be
+//    answered later: did price keep going after we left, and did it come back
+//    through our entry after stopping us out.
+void SN_Watch(ulong tk, int dir, double entry, double exitPx, double peak, double net)
+{
+   for(int i = 0; i < SN_WATCH; i++)
+   {
+      if(g_wUsed[i]) continue;
+      g_wTk[i]=tk; g_wDir[i]=dir; g_wEntry[i]=entry; g_wExit[i]=exitPx;
+      g_wPeak[i]=peak; g_wNet[i]=net; g_wWhen[i]=TimeCurrent(); g_wUsed[i]=true;
+      return;
+   }
+   // table full: drop the oldest rather than lose the newest
+   int old = 0;
+   for(int i = 1; i < SN_WATCH; i++) if(g_wWhen[i] < g_wWhen[old]) old = i;
+   g_wTk[old]=tk; g_wDir[old]=dir; g_wEntry[old]=entry; g_wExit[old]=exitPx;
+   g_wPeak[old]=peak; g_wNet[old]=net; g_wWhen[old]=TimeCurrent(); g_wUsed[old]=true;
+}
+
+//--- run on the timer. Judges only trades old enough to be judged.
+void SN_LateCheck()
+{
+   if(!SN_Ledger) return;
+   double band = SN_BandCash(0.01);           // per 0.01 lot, in cash
+   double bandPts = NoiseFloorPts(Buf(g_scAtr[0], 0, 1));
+   if(bandPts <= 0.0) return;
+   double px = iClose(_Symbol, PERIOD_M1, 0);
+   for(int i = 0; i < SN_WATCH; i++)
+   {
+      if(!g_wUsed[i]) continue;
+      if((int)(TimeCurrent() - g_wWhen[i]) < SN_LateCheckSecs) continue;
+      g_wUsed[i] = false;
+
+      // EARLY EXIT: we left in profit and price kept going our way. The exit
+      // was not wrong because it lost -- it was wrong because it stopped short.
+      if(g_wNet[i] > 0.0)
+      {
+         double further = (px - g_wExit[i]) * g_wDir[i];
+         if(further >= SN_EarlyBands * bandPts)
+         {
+            g_eEarly++;
+            PrintFormat("[SNIPER DIAG] EARLY EXIT #%I64u: banked at %.2f, price went a "
+                        "further %.2f pts our way. Not a losing trade -- a short one.",
+                        g_wTk[i], g_wExit[i], further);
+         }
+      }
+      // STOPPED THEN REVERSED: the stop was in the noise, not beyond it.
+      else
+      {
+         double back = (px - g_wEntry[i]) * g_wDir[i];
+         if(back >= SN_StopRevBands * bandPts)
+         {
+            g_eStopRev++;
+            PrintFormat("[SNIPER DIAG] STOPPED THEN REVERSED #%I64u: stopped at %.2f, "
+                        "price is now %.2f pts BEYOND the entry in our direction. The "
+                        "read was right and the stop was inside the noise.",
+                        g_wTk[i], g_wExit[i], back);
+         }
+      }
+   }
+}
+
 //====================================================================
 //  (v20.00 SNIPER) ENTRY GATES -- see the input block for the evidence.
 //  All of these read live state only; none of them touch an open position.
@@ -20547,6 +20682,20 @@ void QSP_Recompute()
    QSP_Row(r++, lad, (hitTop > 0) ? okC : InpPanelInk);
 
    // ALL-TIME, since the account opened
+   // (v20.00 SNIPER) the give-back ledger. This is the number that was missing:
+   // the panel always showed the P/L and never the peak that came before it.
+   if(SN_Ledger && g_gbN > 0)
+   {
+      double kept = (g_gbPeak > 0.0) ? 100.0 * g_gbNet / g_gbPeak : 0.0;
+      QSP_Row(r++, "-- GIVE-BACK LEDGER --------------", dimC);
+      QSP_Row(r++, StringFormat("peak pool %.2f   kept %.2f   LOST BY NOT CLOSING %.2f",
+              g_gbPeak, g_gbNet, g_gbLost), g_gbLost > MathAbs(g_gbNet) ? badC : dimC);
+      QSP_Row(r++, StringFormat("kept %.0f%% of peak   best single peak %.2f",
+              kept, g_gbBest), kept >= 60.0 ? okC : badC);
+      QSP_Row(r++, StringFormat("gave back %d | never green %d | early exit %d | stop+rev %d",
+              g_eGave, g_eNever, g_eEarly, g_eStopRev), dimC);
+   }
+
    // (v20.00 SNIPER) what the gates refused. A filter earns its place only if
    // what it refuses is worse than what it takes -- this row is how that gets
    // checked instead of trusted.
@@ -20820,6 +20969,8 @@ void LiveMarginWatch()
 
 void OnTick()
 {
+   static datetime snLast = 0;
+   if(TimeCurrent() != snLast) { snLast = TimeCurrent(); SN_LateCheck(); }
    // (v18.69 B) PEAK FIRST, BEFORE ANY EXIT VOTES. See the note at
    // T_TrackPeaksAlways. This used to run last, inside PanelTick(), behind the
    // panel's on/off switch -- so the peak-relative gates read a stale or zero

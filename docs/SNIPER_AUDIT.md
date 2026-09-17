@@ -493,3 +493,92 @@ between price and the pool.
 which is the whole point of marking it. The `room` row on the panel shows clear
 air up and down in ATR, and a signal with less than 1.2 ATR of room is drawn as
 a grey circle rather than an arrow, so you can see it was seen and refused.
+
+---
+
+# 13. The give-back ledger and execution self-diagnosis
+
+Your question: *"how much we lost by not closing in profit, and can it spot
+errors in execution itself."*
+
+On the reference day the answer was **£440.30 handed back on 249 trades** and
+nothing in the EA said so — the panel showed the P/L and never the peak that
+came before it. **A number nobody computes is a problem nobody fixes.**
+
+New panel block in `SNIPER.mq5`:
+
+```
+-- GIVE-BACK LEDGER --------------
+peak pool 293.26   kept 146.22   LOST BY NOT CLOSING 440.30
+kept 50% of peak   best single peak 19.10
+gave back 41 | never green 153 | early exit 12 | stop+rev 9
+```
+
+Six error classes, each judged on the trade's own tape:
+
+| class | test | what it means |
+|---|---|---|
+| **GAVE BACK** | kept < 50% of peak | you had it and handed it back |
+| **NEVER GREEN** | peak ≤ one noise band | wrong immediately — no exit fix exists |
+| **EARLY EXIT** | banked, then price ran ≥1 band further your way | not a losing trade, a short one |
+| **STOPPED + REVERSED** | stopped, then price came back ≥1 band beyond entry | the read was right, the stop was inside the noise |
+
+Three of those **cannot** be judged at close — "was that exit early" is
+unanswerable until you see what price did next. So those trades are parked and
+judged `SN_LateCheckSecs` (default 600s) later, on the timer, against where
+price actually went. That is the difference between a diagnosis and a guess.
+
+`SN_PeakOf()` reads the peak from the registry `TradePeakCash` already maintains
+without mutating it, so the ledger and TRADE-LOCK never fight over the same row.
+
+# 14. SMC_LIQUIDITY — leg-to-leg in trend, ping-pong in range
+
+`mq5/SMC_LIQUIDITY.mq5` + `pine/SMC_LIQUIDITY.pine`.
+
+### TP and SL are read off the chart, never from an R-multiple
+
+- **SL** = beyond the wick that did the running **+ one full noise band**. A stop
+  inside the noise is not a stop, it is a donation — and that is precisely the
+  `STOPPED + REVERSED` class above.
+- **TP** = the next opposing pool. If **2+ live levels** sit between here and it,
+  the target is **HIGH RESISTANCE** and the trade is refused. A target you have
+  to grind through is a bad target.
+- Refused if the structural TP/SL gives worse than 1.0 RR. The geometry has to
+  earn the trade; you do not pick the RR, the chart does.
+
+### Two regimes, one engine, measured not assumed
+
+| regime | ER | what it does |
+|---|---|---|
+| TREND | > 0.30 | **leg-to-leg** — bias from the last BOS, wait for the counter-side pool to be swept (the inducement being taken), enter the reclaim, target the next pool |
+| RANGE | < 0.15 | **ping-pong** — both boundaries, needs ≥3 ATR width to pay the spread twice |
+| MIXED | between | **stands down** |
+
+The reference day ran at ER **0.038** and was traded as a trend. That is the
+failure this replaces.
+
+### Confluence is counted, never assumed
+
+OTE 0.62–0.79, premium/discount vs the 50%, order-block tap, unfilled FVG. Each
+is optional, each is counted, and `InpMinConfluence` says how many must agree.
+None of them is a **trigger** — the sweep is the trigger. That ordering is
+deliberate: prior measurement in this repo put OB, FVG, BOS and CHoCH at or
+below a random-entry baseline as standalone triggers.
+
+### The position box
+
+Risk shaded red from entry to stop, reward shaded green from entry to target,
+entry line in gold, and one text row: `LONG 4314.20  SL 4312.80  TP 4318.90
++2.40 GBP  peak kept 78%`. Four numbers. Nothing else.
+
+On the chart side, **refusals are drawn, not hidden** — an orange tag reading
+`chop`, `no room`, `no confluence`, `RR` or `stop too wide`. A missing arrow
+always has a visible reason next to it, which is what makes the Pine useful for
+finding *where* signals go wrong rather than just *that* they did.
+
+# 15. tools/pine_check.py
+
+There is no Pine compiler here either. It caught a real one immediately:
+`OMEGA_ENGINE.pine` had `var int d0 = 0, d1 = 0` — **Pine allows one
+declaration per line**, so that file would not have compiled. Eleven such lines,
+all split. All seven Pine files now pass.

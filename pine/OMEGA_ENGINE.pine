@@ -162,16 +162,25 @@ structTp(int dir, float ent, float dist) =>
     lvl
 
 // ------------------------------------------------- two simulated slots
-var int   d0 = 0, d1 = 0
-var float e0 = na, e1 = na
-var float s0 = na, s1 = na
-var float k0 = na, k1 = na          // stop distance
-var float t0 = na, t1 = na          // tp1
-var float p0 = 0.0, p1 = 0.0        // peak
-var int   b0 = na, b1 = na
-var bool  h0 = false, h1 = false    // tp1 hit
+var int d0 = 0
+var int d1 = 0
+var float e0 = na
+var float e1 = na
+var float s0 = na
+var float s1 = na
+var float k0 = na
+var float k1 = na          // stop distance
+var float t0 = na
+var float t1 = na          // tp1
+var float p0 = 0.0
+var float p1 = 0.0        // peak
+var int b0 = na
+var int b1 = na
+var bool h0 = false
+var bool h1 = false    // tp1 hit
 var bool  be1 = false
-var bool  a0 = false, a1 = false    // trail armed
+var bool a0 = false
+var bool a1 = false    // trail armed
 
 if confirmed
     // ---- SCALP slot
@@ -237,8 +246,13 @@ if confirmed
             a1 := false
 
 // ------------------------------------------------- drawing
-var box  bx0 = na, bx1 = na
-var line ln0 = na, ln1 = na, lt0 = na, lt1 = na, aBx = na
+var box bx0 = na
+var box bx1 = na
+var line ln0 = na
+var line ln1 = na
+var line lt0 = na
+var line lt1 = na
+var line aBx = na
 var box  aBox = na
 
 if barstate.islast
