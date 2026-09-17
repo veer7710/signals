@@ -2114,6 +2114,37 @@ double   g_wEntry[SN_WATCH], g_wExit[SN_WATCH], g_wPeak[SN_WATCH], g_wNet[SN_WAT
 datetime g_wWhen[SN_WATCH];
 bool     g_wUsed[SN_WATCH];
 
+// ══════ (v20.00 SNIPER) LATE ENTRIES: A FILL PROBLEM, NOT A FILTER ══════
+// "it sometimes enters late... although the signal may make a few pounds it is
+//  additional risk... I don't wanna tune out signals but I also don't wanna
+//  take more loss than I have to."
+//
+// Both halves of that are satisfiable at once, and refusing the trade is not
+// how. If price has already run past the signal bar's equilibrium, a market
+// fill buys the last of the move: the stop is further away, so the SAME idea
+// now carries MORE risk for LESS room. That is the whole complaint.
+//
+// So a late signal is not refused and not chased. A BUY LIMIT goes in at the
+// equilibrium of the signal bar, at least one noise band better than market.
+// THE STOP DOES NOT MOVE -- it stays at the same structural level -- so a
+// better entry means a SMALLER stop distance, smaller risk per trade and a
+// better reward-to-risk on the identical setup.
+//
+// If price comes back, you are filled at a price you would have wanted.
+// If it does not, you skipped a trade you would only have entered badly.
+// Either way nothing was "tuned out": the signal was taken at a price, or the
+// price never came. Every outcome is counted below so you can check that.
+input bool   SN_RetailLimit   = true;
+input double SN_LateATR       = 0.50;   // travelled this far past equilibrium = LATE
+input int    SN_LimitBars     = 3;      // cancel the limit after this many bars
+input bool   SN_LimitOnlyLate = true;   // false = ALWAYS try for the better price
+
+ulong  g_snLimitTk = 0;
+int    g_snLimitBar = 0;
+int    g_snLimitDir = 0;
+int    g_snLateSeen = 0, g_snLimitSent = 0, g_snLimitFill = 0, g_snLimitMiss = 0;
+double g_snSavedPts = 0.0;
+
 int g_snSpreadN = 0;
 double g_snSpread[];
 datetime g_snLastExitT = 0, g_snLastLossT = 0;
@@ -11255,6 +11286,114 @@ int SameDirFillsInWindow(int dir, double px, int secs, double pts)
 // same candle. Looks back far enough to cover the whole pause window.
 // Returns the seconds remaining, or 0 if we are clear to trade.
 //====================================================================
+//  (v20.00 SNIPER) THE RETAIL LIMIT -- a better price for the same idea
+//====================================================================
+
+//--- equilibrium of the signal bar. ICT's own 50% of the candle, and the one
+//--- reference point on a late signal that needs no parameter of its own.
+double SN_Equilibrium()
+{
+   return (iHigh(_Symbol, PERIOD_M1, 0) + iLow(_Symbol, PERIOD_M1, 0)) / 2.0;
+}
+
+//--- how far price has already travelled past equilibrium in our direction
+double SN_TravelPastEq(int dir)
+{
+   double px = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                         : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   return (px - SN_Equilibrium()) * dir;
+}
+
+void SN_CancelLimit(string why)
+{
+   if(g_snLimitTk == 0) return;
+   if(OrderSelect(g_snLimitTk))
+   {
+      Trade.OrderDelete(g_snLimitTk);
+      g_snLimitMiss++;
+      if(InpJournal)
+         PrintFormat("[SNIPER LIMIT] cancelled #%I64u (%s). Price never came back, "
+                     "so the trade was skipped rather than chased.", g_snLimitTk, why);
+   }
+   g_snLimitTk = 0; g_snLimitDir = 0;
+}
+
+//--- housekeeping: expire a stale limit, and notice when one filled
+void SN_LimitHousekeeping()
+{
+   if(g_snLimitTk == 0) return;
+   if(!OrderSelect(g_snLimitTk))
+   {
+      // gone from the order book: either filled or removed by the broker
+      if(PositionSelectByTicket(g_snLimitTk)) g_snLimitFill++;
+      g_snLimitTk = 0; g_snLimitDir = 0;
+      return;
+   }
+   if(Bars(_Symbol, PERIOD_M1) - g_snLimitBar >= SN_LimitBars)
+      SN_CancelLimit("expired");
+}
+
+//--- returns true when it has handled the entry (a limit is now working), so
+//--- Open() should NOT also send a market order.
+bool SN_TryLimit(int e, int dir, double sl, double tp, string why)
+{
+   if(!SN_RetailLimit) return false;
+   if(g_snLimitTk != 0)  return true;         // one working limit at a time
+   double a = SN_Atr();
+   if(a <= 0.0 || sl <= 0.0) return false;
+
+   double travelled = SN_TravelPastEq(dir);
+   bool late = (travelled >= SN_LateATR * a);
+   if(SN_LimitOnlyLate && !late) return false;
+   if(late) g_snLateSeen++;
+
+   double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK)
+                           : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double band = NoiseFloorPts(Buf(g_scAtr[0], 0, 1));
+   if(band <= 0.0) band = 0.25 * a;
+   double eq   = SN_Equilibrium();
+   // at least one band better than market, and never the wrong side of it
+   double want = (dir > 0) ? MathMin(eq, px - band) : MathMax(eq, px + band);
+   double gain = (px - want) * dir;             // how much better the fill is
+   if(gain < band) return false;                // not worth a pending order
+
+   // THE STOP DOES NOT MOVE. Better entry, same stop -> smaller risk.
+   double sdNew = MathAbs(want - sl);
+   if(sdNew <= 0.0) return false;
+   double lots = LotFor(e, sdNew);
+   if(lots <= 0.0) return false;
+
+   int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   want = NormalizeDouble(want, dg);
+   double lvl = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+                * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   if(MathAbs(px - want) <= lvl) return false;  // broker will not accept it
+
+   bool ok = (dir > 0)
+      ? Trade.BuyLimit (lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why)
+      : Trade.SellLimit(lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why);
+   if(!ok)
+   {
+      if(InpJournal)
+         PrintFormat("[SNIPER LIMIT] rejected %d %s", Trade.ResultRetcode(),
+                     Trade.ResultRetcodeDescription());
+      return false;
+   }
+   g_snLimitTk  = Trade.ResultOrder();
+   g_snLimitBar = Bars(_Symbol, PERIOD_M1);
+   g_snLimitDir = dir;
+   g_snLimitSent++;
+   g_snSavedPts += gain;
+   if(InpJournal)
+      PrintFormat("[SNIPER LIMIT] %s signal was %.2f pts past equilibrium — market fill "
+                  "would be %.2f. Limit placed at %.2f instead: %.2f pts better, stop "
+                  "unchanged at %.2f so risk drops from %.2f to %.2f pts.",
+                  dir > 0 ? "BUY" : "SELL", travelled, px, want, gain, sl,
+                  MathAbs(px - sl), sdNew);
+   return true;
+}
+
+//====================================================================
 //  (v20.00 SNIPER) GIVE-BACK LEDGER AND EXECUTION SELF-DIAGNOSIS
 //====================================================================
 
@@ -11502,6 +11641,10 @@ bool Open(int e, int dir, double sl, double tp, string why, string tag = "")
    if(!SN_RoomOK(dir))    { Print("[SNIPER GATE] room refused: a shelf of equal levels is in the way"); return false; }
    if(!SN_FlipOK(dir))    { Print("[SNIPER GATE] flip refused: opposite side too soon after the last exit"); return false; }
    if(!SN_ReentryOK(dir)) { Print("[SNIPER GATE] reentry refused: same direction, same place, after a loss"); return false; }
+
+   // (v20.00 SNIPER) late signal -> take a better price instead of chasing.
+   // Returns true when a limit is working, in which case no market order goes.
+   if(SN_TryLimit(e, dir, sl, tp, why)) return false;
 
    // (v17.59) STOP-DISTANCE CAP — applied before sizing so the lot maths sees
    // the real risk, and before the order is sent so the broker gets the capped
@@ -20682,6 +20825,10 @@ void QSP_Recompute()
    QSP_Row(r++, lad, (hitTop > 0) ? okC : InpPanelInk);
 
    // ALL-TIME, since the account opened
+   if(SN_RetailLimit && (g_snLimitSent > 0 || g_snLateSeen > 0))
+      QSP_Row(r++, StringFormat("late signals %d | limits %d -> filled %d missed %d | %.1f pts better",
+              g_snLateSeen, g_snLimitSent, g_snLimitFill, g_snLimitMiss, g_snSavedPts), dimC);
+
    // (v20.00 SNIPER) the give-back ledger. This is the number that was missing:
    // the panel always showed the P/L and never the peak that came before it.
    if(SN_Ledger && g_gbN > 0)
@@ -20970,7 +21117,7 @@ void LiveMarginWatch()
 void OnTick()
 {
    static datetime snLast = 0;
-   if(TimeCurrent() != snLast) { snLast = TimeCurrent(); SN_LateCheck(); }
+   if(TimeCurrent() != snLast) { snLast = TimeCurrent(); SN_LateCheck(); SN_LimitHousekeeping(); }
    // (v18.69 B) PEAK FIRST, BEFORE ANY EXIT VOTES. See the note at
    // T_TrackPeaksAlways. This used to run last, inside PanelTick(), behind the
    // panel's on/off switch -- so the peak-relative gates read a stale or zero

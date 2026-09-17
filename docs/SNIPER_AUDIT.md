@@ -582,3 +582,73 @@ There is no Pine compiler here either. It caught a real one immediately:
 `OMEGA_ENGINE.pine` had `var int d0 = 0, d1 = 0` — **Pine allows one
 declaration per line**, so that file would not have compiled. Eleven such lines,
 all split. All seven Pine files now pass.
+
+---
+
+# 16. Late entries — a fill problem, not a filter problem
+
+Your words: *"it sometimes enters late... although the signal may make a few
+pounds it's additional risk... I don't wanna tune out signals but I also don't
+wanna take more loss than I have to."*
+
+Both halves of that are satisfiable at once, and refusing the trade is not how.
+
+When price has already run past the signal bar's equilibrium, a market fill buys
+the last of the move: the stop is further away, so **the same idea now carries
+more risk for less room**. That is the complaint, exactly.
+
+So a late signal is neither refused nor chased. A **BUY LIMIT goes in at the
+equilibrium of the signal bar**, at least one noise band better than market —
+and **the stop does not move.** It stays at the same structural level. A better
+entry with the same stop means:
+
+- smaller stop distance → **smaller risk per trade**
+- same target → **better reward-to-risk on an identical setup**
+
+If price comes back, you are filled at a price you would have wanted. If it does
+not, you skipped a trade you would only have entered badly. **Nothing is tuned
+out** — the signal was either taken at a price, or the price never came.
+
+```
+[SNIPER LIMIT] BUY signal was 0.82 pts past equilibrium — market fill would be
+4292.20. Limit placed at 4291.35 instead: 0.85 pts better, stop unchanged at
+4289.60 so risk drops from 2.60 to 1.75 pts.
+```
+
+Panel row: `late signals 14 | limits 11 -> filled 7 missed 4 | 8.3 pts better`.
+Four out of eleven did not fill. That is the honest cost, and it is counted so
+you can decide whether the seven were worth the four.
+
+Controls: `SN_RetailLimit` (on), `SN_LateATR` 0.50, `SN_LimitBars` 3, and
+`SN_LimitOnlyLate` — set that false to try for a better price on **every**
+signal, not just late ones.
+
+# 17. Your account rules, in four lines
+
+`SMC_LIQUIDITY.mq5` now takes the firm's actual numbers and derives the rest:
+
+```
+InpAccTargetPct   8.0    profit target %, 0 = live account
+InpDailyLossPct   4.0    daily loss limit %
+InpMaxDDPct       6.0    overall drawdown limit %
+InpTrailingDD     true   drawdown from equity PEAK, not from start
+InpMaxLossesDay   3      stop for the day after this many losers
+InpSafetyPct      70     halve size once this much of the daily limit is spent
+```
+
+That last one matters more than it looks. **A funded account is not lost by one
+bad trade — it is lost by the last trade of a bad day being the same size as the
+first.** At 70% of the daily limit consumed, size halves automatically.
+
+Risk stays at **0.20%** because the Monte-Carlo says so: P(pass) peaks there at
+80% and falls monotonically as risk rises — 0.5% → 59%, 1% → 49%, 5% → 37%.
+Raising risk to pass faster makes you pass less often.
+
+# 18. Chart changes
+
+- Entries are now **small blue and red triangles**, not word labels
+- **The position box is anchored at the SIGNAL bar, not the fill bar.** The gap
+  between the box's left edge and the actual entry *is* the late entry — drawn
+  rather than hidden, which is the point of having the Pine at all
+- Live P/L in the box at **0.01 lots**, via `ppp` (default 0.733 = GBP per point
+  on XAUUSD at 0.01). Change that one number for another symbol or currency

@@ -102,11 +102,30 @@ input int    InpMaxOpen      = 1;
 input bool   InpSpreadGate   = true;
 input double InpMaxSpreadMult= 1.60;
 
-input group "=== ACCOUNT RULES ==="
-enum SmcRules { SMC_LIVE, SMC_PROP_8_4_6, SMC_PROP_10_5_10 };
-input SmcRules InpRules      = SMC_LIVE;
-input double InpDailyLossPct = 4.0;
-input double InpMaxDDPct     = 6.0;
+//====================================================================
+//  ACCOUNT RULES -- type your firm's actual numbers here and the EA
+//  derives the rest. Nothing below needs a second thought once these
+//  four lines match your dashboard.
+//
+//  WHY THE RISK DEFAULT IS 0.20% AND NOT HIGHER. Monte-Carlo over the
+//  measured trade distribution, 6,000 runs of a +8% / 6% challenge:
+//      0.10% risk -> 48% pass   (ran out of trades)
+//      0.20% risk -> 80% pass   <-- peak
+//      0.50% risk -> 59% pass
+//      1.00% risk -> 49% pass
+//      5.00% risk -> 37% pass
+//  P(pass) falls MONOTONICALLY above 0.2%. Raising risk to pass faster
+//  makes you pass less often. That is the whole reason a challenge gets
+//  blown on a strategy that works.
+//====================================================================
+input group "=== YOUR ACCOUNT RULES ==="
+input double InpAccTargetPct  = 8.0;   // profit target %. 0 = live account, no target
+input double InpDailyLossPct  = 4.0;   // firm's daily loss limit %
+input double InpMaxDDPct      = 6.0;   // firm's overall drawdown limit %
+input bool   InpTrailingDD    = true;  // true = drawdown measured from equity PEAK
+input bool   InpHaltAtTarget  = true;  // flatten and stop once the target is hit
+input int    InpMaxLossesDay  = 3;     // stop for the day after this many losers
+input double InpSafetyPct     = 70.0;  // start halving size at this % of the daily limit
 
 input group "=== DISPLAY ==="
 input bool   InpDrawLevels   = true;
@@ -146,11 +165,13 @@ double   gStart = 0, gDayStart = 0, gPeakEq = 0;
 datetime gDayStamp = 0;
 bool     gHalt = false;
 string   gHaltWhy = "";
+int      gLossesToday = 0;
 int      nT = 0, nWin = 0, nRefRoom = 0, nRefConf = 0, nRefRR = 0, nRefSpread = 0;
 double   sumPts = 0, sumPeak = 0;
 int      csvH = INVALID_HANDLE;
 double   spHist[200];
 int      spN = 0;
+
 
 
 //--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
@@ -177,6 +198,8 @@ void Manage();
 void Push(double want, double cur);
 void Settle();
 int CountOpen();
+double DayUsed();
+double SafetyMult();
 bool GuardsBlock();
 void OpenCSV();
 void WriteCSV(double pts);
@@ -580,7 +603,7 @@ double SizeFor(double sd)
    double mpp = tv/ts;
    if(stp<=0) stp=0.01;
    if(minL<=0) minL=0.01;
-   double lots=(AccountInfoDouble(ACCOUNT_BALANCE)*InpRiskPct/100.0)/(sd*mpp);
+   double lots=(AccountInfoDouble(ACCOUNT_BALANCE)*InpRiskPct/100.0*SafetyMult())/(sd*mpp);
    lots=MathFloor(lots/stp)*stp;
    if(lots<minL) return 0.0;              // skip, never round up
    return MathMin(lots,maxL);
@@ -643,7 +666,7 @@ void Settle()
       }
    if(vol>0) pts/=vol;
    sumPts += pts; sumPeak += pPeak;
-   if(pts>0) nWin++;
+   if(pts>0) nWin++; else gLossesToday++;
    WriteCSV(pts);
    if(InpJournal)
       PrintFormat("%s closed %s  peak %.2f  exit %.2f  kept %.0f%%  held %dm",
@@ -664,18 +687,39 @@ int CountOpen()
    return n;
 }
 
+//--- how much of the daily limit is already spent, 0..1
+double DayUsed()
+{
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   if(gDayStart <= 0 || InpDailyLossPct <= 0) return 0.0;
+   double lost = (gDayStart - eq) / gDayStart * 100.0;
+   return MathMax(0.0, MathMin(1.0, lost / InpDailyLossPct));
+}
+
+//--- size halves once the day is InpSafetyPct spent. A funded account is not
+//--- lost by one bad trade, it is lost by the last trade of a bad day being
+//--- the same size as the first.
+double SafetyMult()
+{
+   double u = DayUsed();
+   if(u < InpSafetyPct/100.0) return 1.0;
+   return 0.5;
+}
+
 bool GuardsBlock()
 {
    if(DayStamp()!=gDayStamp)
-   { gDayStamp=DayStamp(); gDayStart=AccountInfoDouble(ACCOUNT_EQUITY);
-     if(gHaltWhy=="daily"){gHalt=false;gHaltWhy="";} }
+   { gDayStamp=DayStamp(); gDayStart=AccountInfoDouble(ACCOUNT_EQUITY); gLossesToday=0;
+     if(gHaltWhy=="daily"||gHaltWhy=="losses"){gHalt=false;gHaltWhy="";} }
    double daily=InpDailyLossPct, maxdd=InpMaxDDPct;
-   if(InpRules==SMC_PROP_8_4_6){daily=4.0;maxdd=6.0;}
-   if(InpRules==SMC_PROP_10_5_10){daily=5.0;maxdd=10.0;}
    double eq=AccountInfoDouble(ACCOUNT_EQUITY);
    if(eq>gPeakEq) gPeakEq=eq;
-   if(gDayStart>0 && (gDayStart-eq)/gDayStart*100.0>=daily){gHalt=true;gHaltWhy="daily";}
-   if(gPeakEq>0 && (gPeakEq-eq)/gPeakEq*100.0>=maxdd){gHalt=true;gHaltWhy="maxdd";}
+   double base = InpTrailingDD ? gPeakEq : gStart;
+   if(gDayStart>0 && daily>0 && (gDayStart-eq)/gDayStart*100.0>=daily){gHalt=true;gHaltWhy="daily";}
+   if(base>0 && maxdd>0 && (base-eq)/base*100.0>=maxdd){gHalt=true;gHaltWhy="maxdd";}
+   if(InpMaxLossesDay>0 && gLossesToday>=InpMaxLossesDay){gHalt=true;gHaltWhy="losses";}
+   if(InpHaltAtTarget && InpAccTargetPct>0 && gStart>0
+      && (eq-gStart)/gStart*100.0>=InpAccTargetPct){gHalt=true;gHaltWhy="TARGET";}
    if(gHalt)
       for(int i=PositionsTotal()-1;i>=0;i--)
       {
@@ -814,7 +858,7 @@ void DrawPanel()
      "BSL %.2f  %s   SSL %.2f  %s\n"
      "trades %d  win %.0f%%  net %.1f pts\n"
      "peak pool %.1f  KEPT %.0f%%\n"
-     "session %+.2f%%   day %+.2f%%\n"
+     "session %+.2f%%/%.1f%%   day %+.2f%%/%.1f%%  used %.0f%%  losses %d/%d\n"
      "refused: room %d  confluence %d  RR %d  spread %d\n"
      "%s",
      SMC_BUILD,_Symbol,EnumToString((ENUM_TIMEFRAMES)_Period),
@@ -823,8 +867,9 @@ void DrawPanel()
      haveUp?up:0.0,(upN>InpMaxBetween?"HRL":"LRL"),
      haveDn?dn:0.0,(dnN>InpMaxBetween?"HRL":"LRL"),
      nT,(nT>0?100.0*nWin/nT:0.0),sumPts,sumPeak,kept,
-     (gStart>0?(AccountInfoDouble(ACCOUNT_EQUITY)-gStart)/gStart*100.0:0.0),
+     (gStart>0?(AccountInfoDouble(ACCOUNT_EQUITY)-gStart)/gStart*100.0:0.0), InpAccTargetPct,
      (gDayStart>0?(AccountInfoDouble(ACCOUNT_EQUITY)-gDayStart)/gDayStart*100.0:0.0),
+     InpDailyLossPct, 100.0*DayUsed(), gLossesToday, InpMaxLossesDay,
      nRefRoom,nRefConf,nRefRR,nRefSpread,
      gHalt?("HALTED "+gHaltWhy):"trading");
    string n="SMC_panel";

@@ -59,8 +59,13 @@ g7 = "Chart"
 showLv  = input.bool(true, "Pools",               group = g7)
 showBox = input.bool(true, "Position box",        group = g7)
 showWhy = input.bool(true, "Mark refusals",       group = g7)
-cBuy = input.color(#26a69a, "Buy",  group = g7)
+cBuy = input.color(#2962ff, "Buy",  group = g7)
 cSel = input.color(#ef5350, "Sell", group = g7)
+
+gP = "P/L display"
+ppp    = input.float(0.733, "Account currency per point at 0.01 lots", group = gP, step = 0.001,
+   tooltip = "XAUUSD 0.01 lot = 1 oz, so a $1 move is $1. In GBP that is about 0.733. Change it for another symbol or currency.")
+showPL = input.bool(true, "Live P/L in the box", group = gP)
 
 atr  = ta.atr(14)
 band = ta.tr * 0.5 + 0.0
@@ -221,7 +226,9 @@ if ok
         pstop := pe - pd * stopD[1]
         ptgt := pd == 1 ? tUp : tDn
         pk := 0.0
-        pb := bar_index
+        // anchored at the SIGNAL bar. The distance between the box's left edge
+        // and the actual fill is the late entry, drawn rather than hidden.
+        pb := bar_index - 1
 
 // ---------------------------------------------------------- draw
 var line[] ln = array.new_line()
@@ -281,19 +288,19 @@ if barstate.islast
                border_color = color.new(cSel, 60), bgcolor = color.new(cSel, 88))
         bxW := box.new(pb, pe, bar_index + 8, ptgt,
                border_color = color.new(cBuy, 60), bgcolor = color.new(cBuy, 90))
+        pl = (close - pe) * pd * ppp
         array.push(lb, label.new(bar_index + 8, pe,
             (pd == 1 ? "LONG " : "SHORT ") + str.tostring(pe, format.mintick) +
             "   SL " + str.tostring(pstop, format.mintick) +
             "   TP " + str.tostring(ptgt, format.mintick) +
+            (showPL ? "   " + (pl >= 0 ? "+" : "") + str.tostring(pl, "#.##") : "") +
             "   peak " + str.tostring(atr > 0 ? pk / atr : 0, "#.#") + " ATR",
             style = label.style_label_left, size = size.tiny,
             color = color.new(color.black, 70),
             textcolor = pd == 1 ? cBuy : cSel))
 
-plotshape(buy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
-          text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(sell, "SELL", shape.labeldown, location.abovebar, cSel,
-          text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(buy,  "BUY",  shape.triangleup,   location.belowbar, cBuy,  size = size.tiny)
+plotshape(sell, "SELL", shape.triangledown, location.abovebar, cSel, size = size.tiny)
 
 // a refusal is drawn, never hidden -- a missing arrow always has a reason
 rTxt = failReg  ? "chop"  : failRoom ? "no room" : failConf ? "no confluence"

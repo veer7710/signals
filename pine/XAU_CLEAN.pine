@@ -46,11 +46,16 @@ maxStop = input.float(3.00,"Skip if stop > (ATR)",    group = gX, step = 0.1)
 showBox = input.bool(true, "Position box",            group = gX)
 
 gV = "Look"
-cBuy  = input.color(#26a69a, "Buy",      group = gV)
+cBuy  = input.color(#2962ff, "Buy",      group = gV)
 cSell = input.color(#ef5350, "Sell",     group = gV)
 cBsl  = input.color(#ef5350, "BSL",      group = gV)
 cSsl  = input.color(#26a69a, "SSL",      group = gV)
 cDead = input.color(#546e7a, "Spent",    group = gV)
+
+gP = "P/L display"
+ppp    = input.float(0.733, "Account currency per point at 0.01 lots", group = gP, step = 0.001,
+   tooltip = "XAUUSD 0.01 lot = 1 oz, so a $1 move is $1. In GBP that is about 0.733. Change it for another symbol or currency.")
+showPL = input.bool(true, "Live P/L in the box", group = gP)
 
 atr  = ta.atr(14)
 band = ta.tr * 0.5          // one noise band; a trail cannot hold inside this
@@ -184,7 +189,9 @@ if ok
         ps := pe - pd * d
         pt := pd == 1 ? tgtUp : tgtDn          // target IS the opposing pool
         pk := 0.0
-        pb := bar_index
+        // anchor at the SIGNAL bar, not the fill bar: the gap between the two
+        // IS the late entry, and hiding it is how it stays unfixed
+        pb := bar_index - 1
 
 // ---------------------------------------------------------------- draw
 var line[] drawn = array.new_line()
@@ -255,10 +262,8 @@ if barstate.islast
         pTp := line.new(pb, pt, bar_index + 8, pt, color = cBuy, width = 1,
                 style = line.style_dotted)
 
-plotshape(buy,  "BUY",  shape.labelup,   location.belowbar, cBuy,
-          text = "BUY",  textcolor = color.white, size = size.tiny)
-plotshape(sell, "SELL", shape.labeldown, location.abovebar, cSell,
-          text = "SELL", textcolor = color.white, size = size.tiny)
+plotshape(buy,  "BUY",  shape.triangleup,   location.belowbar, cBuy,  size = size.tiny)
+plotshape(sell, "SELL", shape.triangledown, location.abovebar, cSell, size = size.tiny)
 plotshape(blocked, "no room", shape.circle, location.absolute,
           color.new(cDead, 35), size = size.tiny)
 
@@ -279,11 +284,13 @@ if barstate.islast
     table.cell(tb, 0, 1, "room  " + str.tostring(roomUp / atr, "#.#") + " up / " +
         str.tostring(roomDn / atr, "#.#") + " dn  (ATR)",
         text_color = color.new(color.gray, 12), text_size = size.tiny)
+    livePL = pd == 0 ? 0.0 : (close - pe) * pd * ppp
     table.cell(tb, 0, 2, pd == 0 ? (blocked ? "signal blocked - no room" : "flat") :
         (pd == 1 ? "LONG " : "SHORT ") + str.tostring(pe, format.mintick) +
+        (showPL ? "   " + (livePL >= 0 ? "+" : "") + str.tostring(livePL, "#.##") : "") +
         "   peak " + str.tostring(atr > 0 ? pk / atr : 0, "#.#") + " ATR",
         text_color = pd == 0 ? (blocked ? color.orange : color.gray) :
-                     (pd == 1 ? cBuy : cSell), text_size = size.tiny)
+                     (livePL >= 0 ? cBuy : cSell), text_size = size.tiny)
 
 alertcondition(buy,  "xau clean BUY",  "xau clean BUY")
 alertcondition(sell, "xau clean SELL", "xau clean SELL")
