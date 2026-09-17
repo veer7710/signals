@@ -424,3 +424,72 @@ stated (selected retrospectively), OTE/premium-discount as an entry (the dealing
 range repaints for R_range bars), liquidity voids (~90% redundant with FVG), and
 standalone OB/FVG/BOS/CHoCH triggers — which would be re-running an experiment
 this repo has already failed twice.
+
+---
+
+# 11. SNIPER is now your QUAD, renamed and gated
+
+`mq5/SNIPER.mq5` is **your 20,695-line file**, not a rewrite — 20,915 lines
+after the additions. It passes `tools/mql5_check.py`.
+
+### The rename
+Header, panel banner (`=== S N I P E R ===`), `EA_BUILD` → `v20.00`,
+`#property version` → 20.00, and the persisted global-variable keys
+`QUADRISK_` → `SNIPERRISK_`, `QUAD_hR_`/`QUAD_hN_` → `SNIPER_hR_`/`SNIPER_hN_`.
+
+Those last ones hold the hour-of-day stats the EA has been **learning on your
+account**, so the rename would have wiped them. There is a one-time migration:
+if the new key is absent and the old one exists, it is copied across. You lose
+nothing.
+
+### The gates — all at `Open()`, which every engine's fill passes through
+
+One insertion point covers TREND, SCALP and the rest. **Only the spread gate is
+on by default**, because your standing rule is *the lever is size, never
+refusal* — and spread is not a bet, it is a fee. Refusing a bad price gives up
+nothing you wanted.
+
+| gate | default | what it refuses |
+|---|---|---|
+| `SN_SpreadGate` | **ON** | live spread above 1.6× its own rolling median |
+| `SN_TravelGate` | off | entries more than 1.5 ATR into the bar's own range |
+| `SN_RoomGate` | off | longs with a shelf of equal highs inside 1.2 ATR |
+| `SN_FlipGate` | off | the opposite side within 180s of an exit |
+| `SN_ReentryGate` | off | same direction, same place, after a loss |
+
+Turn the others on **one at a time** and read the panel row
+`gates refused: spr N  trav N  room N  flip N  re N`.
+
+The flip and re-entry gates are fed from `OnTradeTransaction` at the
+`DEAL_ENTRY_OUT` check, **not** from `CloseTagged` — deliberately. A server-side
+stop never touches `CloseTagged`, and on 20 Aug that was **77% of all exits**. A
+gate fed only by EA-initiated closes would be blind to three quarters of them.
+
+### Two files, on purpose
+
+- `mq5/SNIPER.mq5` — your EA, renamed, gated, `T_BasketArmCash = 0.0`
+- `mq5/SNIPER_MANAGER.mq5` — the clean-room exit manager (magic 2000002). Runs
+  alongside on the same chart, generates nothing, adopts whatever SNIPER opens
+  and applies the band lock + breakeven floor. Use it if you want the exit fixes
+  without touching the 20k-line file at all.
+
+# 12. xau clean — what is on the chart and why
+
+Deliberately sparse: **nearest two pools each side, one label each side.** Forty
+levels on a chart is the same as none.
+
+| mark | meaning |
+|---|---|
+| **BSL** | buy-side liquidity — highs. Buy stops and resting sells sit *above*. |
+| **SSL** | sell-side liquidity — lows. Sell stops sit *below*. |
+| **LRL** | low resistance — clean path, nothing in between. Price travels fast. |
+| **HRL** | high resistance — 2+ live levels stacked in between. Price grinds, and a target behind HRL is a bad target. |
+| **\*\*\*** | a reaction level — price has already turned here 3+ times. Solid line; everything else is dotted. |
+
+`HRL`/`LRL` is computed, not guessed: it counts live, unspent levels strictly
+between price and the pool.
+
+**The target is the opposing pool**, not an R-multiple — price is *going* there,
+which is the whole point of marking it. The `room` row on the panel shows clear
+air up and down in ATR, and a signal with less than 1.2 ATR of room is drawn as
+a grey circle rather than an arrow, so you can see it was seen and refused.
