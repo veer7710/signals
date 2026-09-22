@@ -95,7 +95,7 @@ if not na(ph)
             old = array.shift(hiLn)
             if not na(old)
                 line.delete(old)
-            array.shift(hiLvl)
+            float dropHi = array.shift(hiLvl)
 
 if not na(pl)
     tol = eqTol * atr
@@ -113,7 +113,7 @@ if not na(pl)
             old = array.shift(loLn)
             if not na(old)
                 line.delete(old)
-            array.shift(loLvl)
+            float dropLo = array.shift(loLvl)
 
 // RULE 2: the distance of the maxPools-th nearest pool on each side.
 // A pool further than this is not eligible this bar.
@@ -173,7 +173,7 @@ if array.size(loLvl) > 0 and loCut > 0
                         if not na(ln)
                             line.set_color(ln, color.new(cRun, 20))
                             line.set_style(ln, line.style_dotted)
-                        array.remove(loLn, i)
+                        line rmLo = array.remove(loLn, i)
                 else if close <= lv
                     brokeDir := -1
 
@@ -191,7 +191,7 @@ if sweptDir == 0 and array.size(hiLvl) > 0 and hiCut > 0
                         if not na(ln)
                             line.set_color(ln, color.new(cRun, 20))
                             line.set_style(ln, line.style_dotted)
-                        array.remove(hiLn, i)
+                        line rmHi = array.remove(hiLn, i)
                 else if close >= lv
                     brokeDir := 1
 

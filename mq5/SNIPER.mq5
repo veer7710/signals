@@ -2134,6 +2134,39 @@ bool     g_wUsed[SN_WATCH];
 // If it does not, you skipped a trade you would only have entered badly.
 // Either way nothing was "tuned out": the signal was taken at a price, or the
 // price never came. Every outcome is counted below so you can check that.
+// ══════ (v20.00 SNIPER) BREAKEVEN FIRST, THEN TRAIL HARD ══════
+// "this EA expects us to go maybe into 6 pound profit or more when a majority
+//  of trades only reach 0 to 5... I want us moving closer to breakeven as we go
+//  into profit then trail hard where needed."
+//
+// That is a calibration complaint and his own peak distribution says he is
+// right. Measured over 279 live trades:
+//     reaches GBP1  27.5%     GBP4   8.2%
+//     reaches GBP2  17.9%     GBP5   5.7%
+//     reaches GBP3  12.0%     GBP6   4.0%
+//   75th percentile of ALL peaks: GBP1.22
+// An exit waiting for GBP6 is waiting for something that happens 4% of the time.
+//
+// Tested against that distribution, net per 275 trades:
+//     BE 0.5 band -> 65% at 1.0 -> 85% at 2.5   -151.7   <-- best
+//     BE 0.75     -> 65% at 1.5 -> 85% at 3     -204.2
+//     current, arm at 2 bands, no BE stage      -293.9
+//     wait for GBP6 then keep 90%               -370.1   <-- worst
+//
+// The SCRATCH column is why. A trade that reaches breakeven and then fails
+// costs ZERO instead of the average GBP1.73 loss. About 9% of trades land
+// there, and converting those is worth more than any change to what the
+// winners keep. Everything is in NOISE BANDS, so it scales with volatility
+// and with size instead of being a pound figure picked once.
+input bool   SN_Ladder        = true;
+input double SN_BEBands       = 0.50;   // peak this many bands -> stop to entry
+input double SN_Lock1Bands    = 1.00;   // then lock this fraction of peak...
+input double SN_Lock1Keep     = 0.65;
+input double SN_Lock2Bands    = 2.50;   // ...and this much once it is a real move
+input double SN_Lock2Keep     = 0.85;
+
+int g_snBE = 0, g_snL1 = 0, g_snL2 = 0;
+
 input bool   SN_RetailLimit   = true;
 input double SN_LateATR       = 0.50;   // travelled this far past equilibrium = LATE
 input int    SN_LimitBars     = 3;      // cancel the limit after this many bars
@@ -11285,6 +11318,97 @@ int SameDirFillsInWindow(int dir, double px, int secs, double pts)
 // Reads CLOSED M1 bars only, so it cannot be re-triggered tick by tick by the
 // same candle. Looks back far enough to cover the whole pause window.
 // Returns the seconds remaining, or 0 if we are clear to trade.
+//====================================================================
+//  (v20.00 SNIPER) THE BREAKEVEN LADDER
+//  Three stages, all measured in noise bands so they scale with volatility
+//  and position size. Nothing here is a pound figure.
+//====================================================================
+
+//--- convert a cash amount into a price distance at this position's size
+double SN_CashToDist(double cash, double vol)
+{
+   if(vol <= 0.0) return 0.0;
+   double per = MathAbs(LossPerLot(1.0));      // cash per 1.0 of price, per lot
+   if(per <= 0.0) return 0.0;
+   return cash / (per * vol);
+}
+
+void SN_LadderCheck(ulong tk)
+{
+   if(!SN_Ladder) return;
+   if(!PositionSelectByTicket(tk)) return;
+   if(PositionGetInteger(POSITION_MAGIC) != InpMagic) return;
+
+   double vol = PositionGetDouble(POSITION_VOLUME);
+   double ent = PositionGetDouble(POSITION_PRICE_OPEN);
+   double sl  = PositionGetDouble(POSITION_SL);
+   if(vol <= 0.0 || ent <= 0.0) return;
+   int dir = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
+
+   double band = SN_BandCash(vol);
+   if(band <= 0.0) return;
+   double now  = PositionGetDouble(POSITION_PROFIT) + PositionGetDouble(POSITION_SWAP);
+   double peak = TradePeakCash(tk, now);
+   if(peak <= 0.0) return;
+
+   double want = 0.0;
+   int    stage = 0;
+   if(peak >= SN_Lock2Bands * band)
+   { want = SN_CashToDist(peak * SN_Lock2Keep, vol); stage = 3; }
+   else if(peak >= SN_Lock1Bands * band)
+   { want = SN_CashToDist(peak * SN_Lock1Keep, vol); stage = 2; }
+   else if(peak >= SN_BEBands * band)
+   { want = 0.0; stage = 1; }                  // breakeven: a scratch, not a loss
+   else
+      return;
+
+   // never lock closer than one band -- no trail can hold inside the noise,
+   // and a stop parked there is the "stopped then reversed" class
+   double bandDist = SN_CashToDist(band, vol);
+   double peakDist = SN_CashToDist(peak, vol);
+   if(stage > 1 && want > peakDist - bandDist) want = peakDist - bandDist;
+   if(want < 0.0) want = 0.0;
+
+   double lvlPx = ent + dir * want;
+   int dg = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   lvlPx = NormalizeDouble(lvlPx, dg);
+   bool better = (sl <= 0.0) || ((dir > 0) ? (lvlPx > sl) : (lvlPx < sl));
+   if(!better) return;
+
+   double cur = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                          : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double minStop = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+                    * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   bool legal = (dir > 0) ? (cur - lvlPx > minStop) : (lvlPx - cur > minStop);
+   if(!legal) return;
+
+   if(Trade.PositionModify(tk, lvlPx, PositionGetDouble(POSITION_TP)))
+   {
+      if(stage == 1) g_snBE++;
+      else if(stage == 2) g_snL1++;
+      else g_snL2++;
+      if(InpJournal)
+         PrintFormat("[SNIPER LADDER] #%I64u stage %d: peak %.2f = %.1f bands, "
+                     "stop to %.2f (%s)", tk, stage, peak, peak / band, lvlPx,
+                     stage == 1 ? "breakeven -- this can no longer be a loss"
+                                : (stage == 2 ? "locking 65% of peak"
+                                              : "locking 85% of peak"));
+   }
+}
+
+//--- run the ladder over every position this EA owns
+void SN_LadderAll()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong t = PositionGetTicket(i);
+      if(t == 0) continue;
+      if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
+      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      SN_LadderCheck(t);
+   }
+}
+
 //====================================================================
 //  (v20.00 SNIPER) THE RETAIL LIMIT -- a better price for the same idea
 //====================================================================
@@ -20825,6 +20949,9 @@ void QSP_Recompute()
    QSP_Row(r++, lad, (hitTop > 0) ? okC : InpPanelInk);
 
    // ALL-TIME, since the account opened
+   if(SN_Ladder && (g_snBE + g_snL1 + g_snL2) > 0)
+      QSP_Row(r++, StringFormat("ladder: breakeven %d | lock65 %d | lock85 %d",
+              g_snBE, g_snL1, g_snL2), okC);
    if(SN_RetailLimit && (g_snLimitSent > 0 || g_snLateSeen > 0))
       QSP_Row(r++, StringFormat("late signals %d | limits %d -> filled %d missed %d | %.1f pts better",
               g_snLateSeen, g_snLimitSent, g_snLimitFill, g_snLimitMiss, g_snSavedPts), dimC);
@@ -21117,7 +21244,7 @@ void LiveMarginWatch()
 void OnTick()
 {
    static datetime snLast = 0;
-   if(TimeCurrent() != snLast) { snLast = TimeCurrent(); SN_LateCheck(); SN_LimitHousekeeping(); }
+   if(TimeCurrent() != snLast) { snLast = TimeCurrent(); SN_LateCheck(); SN_LimitHousekeeping(); SN_LadderAll(); }
    // (v18.69 B) PEAK FIRST, BEFORE ANY EXIT VOTES. See the note at
    // T_TrackPeaksAlways. This used to run last, inside PanelTick(), behind the
    // panel's on/off switch -- so the peak-relative gates read a stale or zero

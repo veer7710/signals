@@ -104,10 +104,12 @@ add(float[] A, int[] T, bool[] D, float v, float tol) =>
         array.push(A, v)
         array.push(T, 1)
         array.push(D, false)
-        if array.size(A) > 40
-            array.shift(A)
-            array.shift(T)
-            array.shift(D)
+    // CE10235 fix -- see the note in xau clean. array.shift returns the removed
+    // element, so it cannot be the last statement of an if-block.
+    if array.size(A) > 60
+        float dropA = array.shift(A)
+        int   dropT = array.shift(T)
+        bool  dropD = array.shift(D)
 
 if not na(ph)
     add(H, HT, HD, ph, eqTol * atr)

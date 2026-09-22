@@ -652,3 +652,97 @@ Raising risk to pass faster makes you pass less often.
   rather than hidden, which is the point of having the Pine at all
 - Live P/L in the box at **0.01 lots**, via `ppp` (default 0.733 = GBP per point
   on XAUUSD at 0.01). Change that one number for another symbol or currency
+
+---
+
+# 19. CE10235 — what it was, and the two more it found
+
+Your error: `Return type of one of the "if" or "switch" blocks is not
+compatible with return type of other block(s) (void; series bool)`.
+
+**`array.shift()` returns the element it removes.** Using it as the last
+statement of an `if` block gives that block the element's type — `series bool`
+for the bool array — while the implicit `else` is `void`. That is the
+`(void; series bool)` in your message, exactly.
+
+Fixed in both files by hoisting the trim out of the `if/else` (so both branches
+end on a void call) and **binding** the shift results.
+
+Then I added the check to `tools/pine_check.py`, and it immediately found **four
+more instances in `LIQUIDITY_ENGINE.pine`** — a file already shipped that would
+not have compiled either.
+
+It also caught a bug **I introduced in the fix itself**: `keepN` used at line 94
+and declared nowhere. So an undefined-identifier check went in too. That one is
+a warning, not an error, because a heuristic scanner will always miss some Pine
+builtin — but it is how `keepN` was caught.
+
+# 20. Your exit was calibrated above where your peaks actually are
+
+Your words: *"this EA expects us to go maybe into 6 pound profit or more when a
+majority of trades only reach 0 to 5."*
+
+Measured over your 279 trades:
+
+| peak reaches | % of trades |
+|---|---|
+| £1 | 27.5% |
+| £2 | 17.9% |
+| £3 | 12.0% |
+| £5 | 5.7% |
+| **£6** | **4.0%** |
+
+**75th percentile of all peaks: £1.22.** An exit waiting for £6 is waiting for
+something that happens 4% of the time. You were right.
+
+Ranked on that same distribution, net per 275 trades:
+
+| exit shape | win% | **scratch%** | net |
+|---|---|---|---|
+| **BE 0.5 band → 65% at 1.0 → 85% at 2.5** | 20.0% | **9.2%** | **−151.7** |
+| BE 0.75 → 65% at 1.5 → 85% at 3 | 14.0% | 9.9% | −204.2 |
+| current (arm at 2 bands, no BE stage) | 9.9% | 0% | −293.9 |
+| wait for £6 then keep 90% | 3.8% | 0% | **−370.1** |
+
+**Waiting for £6 is the worst of everything tested**, and the early ladder beats
+the current config by **+£142 per 275 trades** — most of a £147 losing day.
+
+### The scratch column is the whole mechanism
+
+A trade that reaches breakeven and then fails costs **zero** instead of the
+average £1.73 loss. About 9% of trades land exactly there. **Converting those is
+worth more than any change to what the winners keep** — which is the opposite of
+where the last three sessions of work were aimed, including mine.
+
+Now in both EAs, everything in **noise bands** so it scales with volatility and
+size rather than being a pound figure picked once:
+
+```
+peak >= 0.50 band  ->  stop to entry        (this can no longer be a loss)
+peak >= 1.00 band  ->  lock 65% of peak
+peak >= 2.50 band  ->  lock 85% of peak
+never closer than one band -- no trail holds inside the noise
+```
+
+Panel row: `ladder: breakeven 31 | lock65 18 | lock85 6`.
+
+**Still negative overall**, because the entry edge is negative — that has not
+changed and I am not going to pretend otherwise. What changed is that the exit
+now stops donating the 9% that get to breakeven and fail.
+
+# 21. xau clean, rebuilt
+
+On screen: **DEMA**, small blue/red arrows, the live position box, nearest two
+pools each side, structure. Nothing else.
+
+- **BOS / CHoCH / EQH / EQL / Strong High / Strong Low** in the LuxAlgo idiom
+- Pools **remembered 40 deep, drawn 2 deep** — price reacts to zones from hours
+  back, but a chart with forty lines on it carries the same information as one
+  with none
+- **Session tag under the bar where each session opens**, plus current and next
+  session in the panel
+- Position box says **SCALP or SWING** based on whether the structural target is
+  under 2.5 ATR. Most M1 trades are scalps and the box now says so, so you know
+  what to expect from it before it starts
+- **Live P/L at 0.01 lots** in the box, and a separate **daily P/L box** top
+  right with the day's trade count

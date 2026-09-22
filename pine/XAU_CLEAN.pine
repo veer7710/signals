@@ -1,68 +1,77 @@
 //@version=6
 // =====================================================================
-//  xau clean  --  the chart SNIPER.mq5 trades from
+//  xau clean  --  the chart SNIPER trades from
 //
-//  Deliberately sparse. Everything drawn here is something the EA acts on
-//  or refuses on. Nothing is decoration.
+//  Deliberately sparse. On screen: the DEMA, the signal arrows, the live
+//  position box, the nearest liquidity each side, and structure. Nothing
+//  else. Everything drawn is something the EA acts or refuses on.
 //
-//    BSL  buy-side liquidity   -- highs. Buy stops and resting sells rest
-//                                 ABOVE price. Drawn above.
-//    SSL  sell-side liquidity  -- lows. Sell stops rest BELOW price.
-//    LRL  low resistance       -- clean path to the pool, nothing in the way.
-//                                 Price travels to these fast.
-//    HRL  high resistance      -- levels stacked in between. Price grinds,
-//                                 and a target behind HRL is a bad target.
-//    ***  a REACTION level     -- price has already turned here 3+ times.
-//                                 These are the ones that matter.
+//  BSL  buy-side liquidity   -- highs. Buy stops and resting sells sit ABOVE.
+//  SSL  sell-side liquidity  -- lows. Sell stops sit BELOW.
+//  LRL  low resistance       -- clean path. Price travels there fast.
+//  HRL  high resistance      -- levels stacked in between. Price grinds.
+//  ***  reaction level       -- price has already turned here 3+ times.
 //
-//  A level is NOT resistance. It is a shelf of resting orders plus the stops
-//  of everyone positioned underneath it. Price is ATTRACTED to it, trades
-//  through to fill them, and only then reverses. So the chart marks where
+//  A level is not resistance. It is a shelf of resting orders plus the
+//  stops of everyone positioned under it. Price is ATTRACTED to it, trades
+//  through to fill them, and only then turns. So the chart marks where
 //  price is GOING, not where it will stop.
 //
-//  Signals appear only on CONFIRMED bars. Nothing that appears ever vanishes.
+//  Levels are remembered far further back than they are drawn: price reacts
+//  to zones from hours ago, not just the last few candles.
 // =====================================================================
-indicator("xau clean", overlay = true, max_lines_count = 100,
-          max_labels_count = 60, max_boxes_count = 20)
+indicator("xau clean", overlay = true, max_lines_count = 120,
+          max_labels_count = 200, max_boxes_count = 20)
+
+gT = "Trend"
+demaLen = input.int(50,   "DEMA length",            group = gT, minval = 2)
+showDema= input.bool(true,"Show DEMA",              group = gT)
 
 gL = "Liquidity"
-swN     = input.int(3,    "Swing strength",           group = gL, minval = 1)
-lookN   = input.int(300,  "Lookback (bars)",          group = gL, minval = 50)
-showN   = input.int(2,    "Pools shown each side",    group = gL, minval = 1, maxval = 4,
-   tooltip = "Kept low on purpose. Forty levels on a chart is the same as none.")
-eqTol   = input.float(0.15,"Equal levels merge (ATR)",group = gL, step = 0.05)
-reactN  = input.int(3,    "Touches to call it a reaction level", group = gL, minval = 2)
-hrlN    = input.int(2,    "Levels in between = HRL",  group = gL, minval = 1)
+swN     = input.int(3,    "Swing strength",         group = gL, minval = 1)
+keepN   = input.int(40,   "Pools remembered",       group = gL, minval = 10, maxval = 80,
+   tooltip = "How many levels stay in MEMORY. Price reacts to zones from far back, so this is much larger than the number drawn.")
+showN   = input.int(2,    "Pools drawn each side",  group = gL, minval = 1, maxval = 4)
+eqTol   = input.float(0.15,"Equal levels merge (ATR)", group = gL, step = 0.05)
+reactN  = input.int(3,    "Touches = reaction level", group = gL, minval = 2)
+hrlN    = input.int(2,    "Levels between = HRL",   group = gL, minval = 1)
 
 gS = "Signal"
-pierceA = input.float(0.05,"Pierce depth (ATR)",      group = gS, step = 0.01)
-expandA = input.float(0.35,"Close beyond = dead (ATR)",group = gS, step = 0.05,
-   tooltip = "A close this far past the level means the stops were taken. The level is spent and must not be faded.")
+pierceA = input.float(0.05,"Pierce depth (ATR)",    group = gS, step = 0.01)
+expandA = input.float(0.35,"Close beyond = spent (ATR)", group = gS, step = 0.05)
 minRoom = input.float(1.20,"Min clear air to trade (ATR)", group = gS, step = 0.1)
 
 gX = "Trade"
-bufA    = input.float(0.30,"Stop buffer (ATR)",       group = gX, step = 0.05)
-maxStop = input.float(3.00,"Skip if stop > (ATR)",    group = gX, step = 0.1)
-showBox = input.bool(true, "Position box",            group = gX)
+bufA    = input.float(0.30,"Stop buffer (ATR)",     group = gX, step = 0.05)
+maxStop = input.float(3.00,"Skip if stop > (ATR)",  group = gX, step = 0.1)
+scalpATR= input.float(2.50,"Target under this ATR = SCALP", group = gX, step = 0.25,
+   tooltip = "Most M1 trades are scalps. The box says which it is so you know what to expect from it.")
+
+gP = "P/L"
+ppp     = input.float(0.733,"Currency per point at 0.01 lots", group = gP, step = 0.001,
+   tooltip = "XAUUSD 0.01 lot = 1 oz, so a $1 move is $1. In GBP about 0.733.")
+
+gM = "Structure"
+showBOS = input.bool(true, "BOS / CHoCH",           group = gM)
+showEQ  = input.bool(true, "EQH / EQL",             group = gM)
+showSW  = input.bool(true, "Strong / weak high-low",group = gM)
 
 gV = "Look"
-cBuy  = input.color(#2962ff, "Buy",      group = gV)
-cSell = input.color(#ef5350, "Sell",     group = gV)
-cBsl  = input.color(#ef5350, "BSL",      group = gV)
-cSsl  = input.color(#26a69a, "SSL",      group = gV)
-cDead = input.color(#546e7a, "Spent",    group = gV)
-
-gP = "P/L display"
-ppp    = input.float(0.733, "Account currency per point at 0.01 lots", group = gP, step = 0.001,
-   tooltip = "XAUUSD 0.01 lot = 1 oz, so a $1 move is $1. In GBP that is about 0.733. Change it for another symbol or currency.")
-showPL = input.bool(true, "Live P/L in the box", group = gP)
+cBuy  = input.color(#2962ff, "Buy",   group = gV)
+cSell = input.color(#f23645, "Sell",  group = gV)
+cBsl  = input.color(#f23645, "BSL",   group = gV)
+cSsl  = input.color(#2962ff, "SSL",   group = gV)
+cDim  = input.color(#787b86, "Dim",   group = gV)
 
 atr  = ta.atr(14)
-band = ta.tr * 0.5          // one noise band; a trail cannot hold inside this
+band = ta.tr * 0.5
+dema = ta.dema(close, demaLen)
 ok   = barstate.isconfirmed or barstate.ishistory
 
+plot(showDema ? dema : na, "DEMA", close > dema ? color.new(cBuy, 35)
+     : color.new(cSell, 35), 2)
+
 // ---------------------------------------------------------------- pools
-// level, touch count, spent flag. Newest last.
 var float[] hL = array.new_float()
 var int[]   hT = array.new_int()
 var bool[]  hD = array.new_bool()
@@ -73,74 +82,106 @@ var bool[]  lD = array.new_bool()
 ph = ta.pivothigh(high, swN, swN)
 pl = ta.pivotlow(low,  swN, swN)
 
-push(float[] L, int[] T, bool[] D, float v, float tol) =>
+// CE10235 note: array.shift RETURNS the element it removes, so it must never
+// be the last statement of a block -- the block would take that type while the
+// implicit else stays void. Bound below, and the trim sits outside the if/else
+// so both branches end on a void call.
+push(float[] A, int[] T, bool[] D, float v, float tol, int cap) =>
     hit = -1
-    if array.size(L) > 0
-        for i = 0 to array.size(L) - 1
-            if math.abs(array.get(L, i) - v) <= tol
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            if math.abs(array.get(A, i) - v) <= tol
                 hit := i
     if hit >= 0
-        array.set(T, hit, array.get(T, hit) + 1)     // an equal level is a TOUCH
+        array.set(T, hit, array.get(T, hit) + 1)
     else
-        array.push(L, v)
+        array.push(A, v)
         array.push(T, 1)
         array.push(D, false)
-        if array.size(L) > 30
-            array.shift(L)
-            array.shift(T)
-            array.shift(D)
+    if array.size(A) > cap
+        float dropA = array.shift(A)
+        int   dropT = array.shift(T)
+        bool  dropD = array.shift(D)
 
+eqhNow = false
+eqlNow = false
 if not na(ph)
-    push(hL, hT, hD, ph, eqTol * atr)
+    n0 = array.size(hL)
+    push(hL, hT, hD, ph, eqTol * atr, keepN)
+    eqhNow := array.size(hL) == n0        // merged into an existing level = EQH
 if not na(pl)
-    push(lL, lT, lD, pl, eqTol * atr)
+    n0 = array.size(lL)
+    push(lL, lT, lD, pl, eqTol * atr, keepN)
+    eqlNow := array.size(lL) == n0
 
-// count how many live levels sit BETWEEN price and a target -> HRL or LRL
 between(float target, int dir) =>
     n = 0
-    if dir == 1 and array.size(hL) > 0
-        for i = 0 to array.size(hL) - 1
-            v = array.get(hL, i)
-            if not array.get(hD, i) and v > close and v < target
-                n += 1
-    if dir == -1 and array.size(lL) > 0
-        for i = 0 to array.size(lL) - 1
-            v = array.get(lL, i)
-            if not array.get(lD, i) and v < close and v > target
+    A = dir == 1 ? hL : lL
+    D = dir == 1 ? hD : lD
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            v = array.get(A, i)
+            if not array.get(D, i) and (dir == 1 ? (v > close and v < target)
+                                                 : (v < close and v > target))
                 n += 1
     n
 
-// nearest live pool on a side
 nearest(int dir) =>
-    best = 0.0
+    b = 0.0
     bi = -1
-    if dir == 1 and array.size(hL) > 0
-        for i = 0 to array.size(hL) - 1
-            v = array.get(hL, i)
-            if not array.get(hD, i) and v > close and (bi < 0 or v < best)
-                best := v
-                bi := i
-    if dir == -1 and array.size(lL) > 0
-        for i = 0 to array.size(lL) - 1
-            v = array.get(lL, i)
-            if not array.get(lD, i) and v < close and (bi < 0 or v > best)
-                best := v
-                bi := i
-    [best, bi]
+    A = dir == 1 ? hL : lL
+    D = dir == 1 ? hD : lD
+    if array.size(A) > 0
+        for i = 0 to array.size(A) - 1
+            v = array.get(A, i)
+            if not array.get(D, i) and (dir == 1 ? v > close : v < close)
+                if bi < 0 or (dir == 1 ? v < b : v > b)
+                    b := v
+                    bi := i
+    [b, bi]
+
+// ---------------------------------------------------------------- structure
+var float swHi = na
+var float swLo = na
+var int   bias = 0
+var float strongLo = na
+var float strongHi = na
+bosUp = false
+bosDn = false
+chochUp = false
+chochDn = false
+
+if ok
+    if not na(ph)
+        swHi := ph
+    if not na(pl)
+        swLo := pl
+    if not na(swHi) and close > swHi
+        chochUp := bias < 0
+        bosUp := bias >= 0
+        // the low that launched the leg is now PROTECTED -- it held and caused
+        // the break, which is what makes it strong rather than merely recent
+        strongLo := swLo
+        bias := 1
+        swHi := na
+    if not na(swLo) and close < swLo
+        chochDn := bias > 0
+        bosDn := bias <= 0
+        strongHi := swHi
+        bias := -1
+        swLo := na
 
 // ---------------------------------------------------------------- signal
-// pierce a pool, fail to expand, close back inside -> the stops were taken
-// and the level did NOT hold. That is the only thing traded here.
 sig = 0
 if ok
     [bslLv, bi] = nearest(1)
     [sslLv, li] = nearest(-1)
     if li >= 0 and low <= sslLv - pierceA * atr
         if close < sslLv - expandA * atr
-            array.set(lD, li, true)                  // spent: broke, never fade
+            array.set(lD, li, true)              // broke: spent, never fade it
         else if close > sslLv
             sig := 1
-            array.set(lD, li, true)                  // one event per level
+            array.set(lD, li, true)
     if sig == 0 and bi >= 0 and high >= bslLv + pierceA * atr
         if close > bslLv + expandA * atr
             array.set(hD, bi, true)
@@ -148,16 +189,14 @@ if ok
             sig := -1
             array.set(hD, bi, true)
 
-// room to the opposing pool -- a trade with a shelf in its face has nowhere to go
-[tgtUp, _iu] = nearest(1)
-[tgtDn, _id] = nearest(-1)
-roomUp = _iu >= 0 ? tgtUp - close : 1e9
-roomDn = _id >= 0 ? close - tgtDn : 1e9
+[tgtUp, iu] = nearest(1)
+[tgtDn, id] = nearest(-1)
+roomUp = iu >= 0 ? tgtUp - close : 1e9
+roomDn = id >= 0 ? close - tgtDn : 1e9
 room   = sig == 1 ? roomUp : sig == -1 ? roomDn : 0.0
-
-swLo = ta.lowest(low,  swN)
-swHi = ta.highest(high, swN)
-stopD = sig == 1 ? close - swLo + bufA * atr : sig == -1 ? swHi - close + bufA * atr : na
+sLo = ta.lowest(low,  swN)
+sHi = ta.highest(high, swN)
+stopD = sig == 1 ? close - sLo + bufA * atr : sig == -1 ? sHi - close + bufA * atr : na
 blocked = sig != 0 and (room < minRoom * atr or stopD > maxStop * atr)
 buy  = sig ==  1 and not blocked
 sell = sig == -1 and not blocked
@@ -169,6 +208,7 @@ var float ps = na
 var float pt = na
 var float pk = 0.0
 var int   pb = na
+var bool  pscalp = false
 
 if ok
     if pd != 0
@@ -176,22 +216,42 @@ if ok
         if (pd == 1 ? low <= ps : high >= ps) or (pd == 1 ? high >= pt : low <= pt)
             pd := 0
             pk := 0.0
-        else if pk >= 0.5 * atr
-            // keep 65% of the peak, rising to 90% as the peak grows, and never
-            // closer than one noise band -- no trail can hold inside the noise
-            k = math.min(0.90, 0.65 + 0.25 * math.min(1.0, (pk / atr - 0.5) / 1.5))
-            want = pe + (pd == 1 ? 1 : -1) * math.min(pk * k, pk - band)
-            ps := pd == 1 ? math.max(ps, want) : math.min(ps, want)
+        else
+            // breakeven FIRST, then trail hard. Most trades here reach 0-5
+            // pounds, not 6+, so the ladder has to start where the peaks
+            // actually are instead of where a swing system would put it.
+            if pk >= 0.75 * band
+                ps := pd == 1 ? math.max(ps, pe) : math.min(ps, pe)
+            if pk >= 2.0 * band
+                k = math.min(0.90, 0.65 + 0.25 * math.min(1.0, (pk / atr - 0.5) / 1.5))
+                w = pe + (pd == 1 ? 1 : -1) * math.min(pk * k, pk - band)
+                ps := pd == 1 ? math.max(ps, w) : math.min(ps, w)
     if pd == 0 and (buy[1] or sell[1])
         pd := buy[1] ? 1 : -1
         pe := open
-        d = pd == 1 ? stopD[1] : stopD[1]
-        ps := pe - pd * d
-        pt := pd == 1 ? tgtUp : tgtDn          // target IS the opposing pool
+        ps := pe - pd * stopD[1]
+        pt := pd == 1 ? tgtUp : tgtDn
         pk := 0.0
-        // anchor at the SIGNAL bar, not the fill bar: the gap between the two
-        // IS the late entry, and hiding it is how it stays unfixed
+        // anchored at the SIGNAL bar: the gap to the fill IS the late entry
         pb := bar_index - 1
+        pscalp := math.abs(pt - pe) < scalpATR * atr
+
+// ---------------------------------------------------------------- sessions
+sessName(int h) =>
+    h >= 23 or h < 7 ? "ASIA" : h < 12 ? "LONDON" : h < 16 ? "LDN/NY" :
+       h < 21 ? "NEW YORK" : "OFF"
+nextSess(int h) =>
+    h < 7 ? "LONDON 07:00" : h < 12 ? "LDN/NY 12:00" : h < 16 ? "NEW YORK 16:00" :
+       h < 21 ? "ASIA 23:00" : h < 23 ? "ASIA 23:00" : "LONDON 07:00"
+hNow = hour(time, "GMT")
+isOpen = hNow != hour(time[1], "GMT") and (hNow == 7 or hNow == 12 or hNow == 16 or hNow == 23)
+
+// small tag at the bar where a session opens, sitting under the bar so it
+// reads along the time axis rather than over price
+if ok and isOpen
+    label.new(bar_index, low, sessName(hNow), style = label.style_none,
+        yloc = yloc.belowbar, size = size.tiny,
+        textcolor = color.new(cDim, 25))
 
 // ---------------------------------------------------------------- draw
 var line[] drawn = array.new_line()
@@ -210,42 +270,46 @@ if barstate.islast
             label.delete(array.get(tags, i))
         array.clear(tags)
 
-    // nearest showN live pools each side, nothing more
     for side = -1 to 1 by 2
-        L = side == 1 ? hL : lL
+        A = side == 1 ? hL : lL
         T = side == 1 ? hT : lT
         D = side == 1 ? hD : lD
         col = side == 1 ? cBsl : cSsl
-        shown = 0
-        prev = side == 1 ? 0.0 : 1e12
+        prev = close
         for pass = 1 to showN
             b = 0.0
             bi = -1
-            if array.size(L) > 0
-                for i = 0 to array.size(L) - 1
-                    v = array.get(L, i)
-                    inFront = side == 1 ? (v > close and v > prev) : (v < close and v < prev)
-                    if not array.get(D, i) and inFront and (bi < 0 or (side == 1 ? v < b : v > b))
-                        b := v
-                        bi := i
+            if array.size(A) > 0
+                for i = 0 to array.size(A) - 1
+                    v = array.get(A, i)
+                    if not array.get(D, i) and (side == 1 ? v > prev : v < prev)
+                        if bi < 0 or (side == 1 ? v < b : v > b)
+                            b := v
+                            bi := i
             if bi >= 0
-                t = array.get(T, bi)
-                react = t >= reactN
+                react = array.get(T, bi) >= reactN
                 res = between(b, side) >= hrlN ? "HRL" : "LRL"
-                ln = line.new(bar_index - 40, b, bar_index + 12, b,
-                     color = color.new(col, react ? 10 : 55),
-                     width = react ? 2 : 1,
-                     style = react ? line.style_solid : line.style_dotted)
-                array.push(drawn, ln)
+                array.push(drawn, line.new(bar_index - 60, b, bar_index + 14, b,
+                    color = color.new(col, react ? 15 : 62),
+                    width = react ? 2 : 1,
+                    style = react ? line.style_solid : line.style_dotted))
                 if pass == 1
-                    txt = (side == 1 ? "BSL " : "SSL ") + str.tostring(b, format.mintick) +
-                          "  " + res + (react ? "  ***" : "")
-                    array.push(tags, label.new(bar_index + 12, b, txt,
-                        style = side == 1 ? label.style_label_left : label.style_label_left,
-                        size = size.tiny, color = color.new(col, 88),
-                        textcolor = color.new(col, 10)))
+                    array.push(tags, label.new(bar_index + 14, b,
+                        (side == 1 ? "BSL " : "SSL ") + str.tostring(b, format.mintick) +
+                        "  " + res + (react ? "  ***" : ""),
+                        style = label.style_label_left, size = size.tiny,
+                        color = color.new(col, 90), textcolor = color.new(col, 10)))
                 prev := b
-                shown += 1
+
+    if showSW
+        if not na(strongLo)
+            array.push(tags, label.new(bar_index + 14, strongLo, "Strong Low",
+                style = label.style_label_left, size = size.tiny,
+                color = color.new(cSsl, 92), textcolor = color.new(cSsl, 25)))
+        if not na(strongHi)
+            array.push(tags, label.new(bar_index + 14, strongHi, "Strong High",
+                style = label.style_label_left, size = size.tiny,
+                color = color.new(cBsl, 92), textcolor = color.new(cBsl, 25)))
 
     if not na(pBox)
         box.delete(pBox)
@@ -253,44 +317,82 @@ if barstate.islast
         line.delete(pSl)
     if not na(pTp)
         line.delete(pTp)
-    if pd != 0 and showBox
+    if pd != 0
         c = pd == 1 ? cBuy : cSell
-        pBox := box.new(pb, math.max(pe, ps), bar_index + 8, math.min(pe, ps),
-                border_color = color.new(c, 55), bgcolor = color.new(c, 91))
-        pSl := line.new(pb, ps, bar_index + 8, ps, color = cSell, width = 1,
-                style = line.style_dashed)
-        pTp := line.new(pb, pt, bar_index + 8, pt, color = cBuy, width = 1,
-                style = line.style_dotted)
+        pBox := box.new(pb, math.max(pe, ps), bar_index + 10, math.min(pe, ps),
+            border_color = color.new(c, 55), bgcolor = color.new(c, 92))
+        pSl := line.new(pb, ps, bar_index + 10, ps, color = cSell, width = 1,
+            style = line.style_dashed)
+        pTp := line.new(pb, pt, bar_index + 10, pt, color = cBuy, width = 1,
+            style = line.style_dotted)
 
 plotshape(buy,  "BUY",  shape.triangleup,   location.belowbar, cBuy,  size = size.tiny)
 plotshape(sell, "SELL", shape.triangledown, location.abovebar, cSell, size = size.tiny)
 plotshape(blocked, "no room", shape.circle, location.absolute,
-          color.new(cDead, 35), size = size.tiny)
+          color.new(cDim, 40), size = size.tiny)
+plotshape(showBOS and bosUp,   "BOS up",   shape.labelup,   location.belowbar,
+          color.new(cBuy, 80),  text = "BOS",   textcolor = color.new(cBuy, 10),  size = size.tiny)
+plotshape(showBOS and bosDn,   "BOS down", shape.labeldown, location.abovebar,
+          color.new(cSell, 80), text = "BOS",   textcolor = color.new(cSell, 10), size = size.tiny)
+plotshape(showBOS and chochUp, "CHoCH up", shape.labelup,   location.belowbar,
+          color.new(cBuy, 70),  text = "CHoCH", textcolor = color.new(cBuy, 5),   size = size.tiny)
+plotshape(showBOS and chochDn, "CHoCH dn", shape.labeldown, location.abovebar,
+          color.new(cSell, 70), text = "CHoCH", textcolor = color.new(cSell, 5),  size = size.tiny)
+plotshape(showEQ and eqhNow, "EQH", shape.labeldown, location.abovebar,
+          color.new(cBsl, 88), text = "EQH", textcolor = color.new(cBsl, 20), size = size.tiny)
+plotshape(showEQ and eqlNow, "EQL", shape.labelup,   location.belowbar,
+          color.new(cSsl, 88), text = "EQL", textcolor = color.new(cSsl, 20), size = size.tiny)
 
-// ---------------------------------------------------------------- panel
-sess() =>
-    h = hour(time, "GMT")
-    h >= 23 or h < 7 ? "ASIA" : h < 12 ? "LONDON" : h < 16 ? "LDN/NY" :
-       h < 21 ? "NY" : "OFF"
+// ---------------------------------------------------------------- daily P/L
+// every closed simulated trade on this chart, today only, at 0.01 lots
+var float dayPL = 0.0
+var int   dayN = 0
+var int   dayStamp = na
+var float lastPd = 0.0
+newDay = na(dayStamp) or dayStamp != dayofmonth(time, "GMT")
+if ok and newDay
+    dayPL := 0.0
+    dayN := 0
+    dayStamp := dayofmonth(time, "GMT")
+if ok and pd == 0 and pd[1] != 0
+    dayPL := dayPL + (close - pe) * pd[1] * ppp
+    dayN := dayN + 1
+
+livePL = pd == 0 ? 0.0 : (close - pe) * pd * ppp
 
 var table tb = na
 if barstate.islast
     if na(tb)
-        tb := table.new(position.bottom_right, 1, 3,
+        tb := table.new(position.bottom_right, 1, 4,
               bgcolor = color.new(color.black, 84),
-              border_color = color.new(color.gray, 75), border_width = 1)
-    table.cell(tb, 0, 0, sess() + "   ATR " + str.tostring(atr, "#.##"),
+              border_color = color.new(color.gray, 78), border_width = 1)
+    table.cell(tb, 0, 0, sessName(hNow) + "   next " + nextSess(hNow) +
+        "   " + (bias == 1 ? "bullish" : bias == -1 ? "bearish" : "no bias"),
         text_color = color.new(color.white, 15), text_size = size.tiny)
-    table.cell(tb, 0, 1, "room  " + str.tostring(roomUp / atr, "#.#") + " up / " +
-        str.tostring(roomDn / atr, "#.#") + " dn  (ATR)",
-        text_color = color.new(color.gray, 12), text_size = size.tiny)
-    livePL = pd == 0 ? 0.0 : (close - pe) * pd * ppp
+    table.cell(tb, 0, 1, "room " + str.tostring(roomUp / atr, "#.#") + " up / " +
+        str.tostring(roomDn / atr, "#.#") + " dn   ATR " + str.tostring(atr, "#.##"),
+        text_color = color.new(cDim, 5), text_size = size.tiny)
     table.cell(tb, 0, 2, pd == 0 ? (blocked ? "signal blocked - no room" : "flat") :
         (pd == 1 ? "LONG " : "SHORT ") + str.tostring(pe, format.mintick) +
-        (showPL ? "   " + (livePL >= 0 ? "+" : "") + str.tostring(livePL, "#.##") : "") +
+        (pscalp ? "  SCALP" : "  SWING") +
+        "   SL " + str.tostring(ps, format.mintick) +
+        "   TP " + str.tostring(pt, format.mintick),
+        text_color = pd == 0 ? (blocked ? color.orange : color.gray)
+                             : (pd == 1 ? cBuy : cSell), text_size = size.tiny)
+    table.cell(tb, 0, 3, pd == 0 ? "" :
+        "live " + (livePL >= 0 ? "+" : "") + str.tostring(livePL, "#.##") +
         "   peak " + str.tostring(atr > 0 ? pk / atr : 0, "#.#") + " ATR",
-        text_color = pd == 0 ? (blocked ? color.orange : color.gray) :
-                     (livePL >= 0 ? cBuy : cSell), text_size = size.tiny)
+        text_color = livePL >= 0 ? cBuy : cSell, text_size = size.tiny)
+
+var table dt = na
+if barstate.islast
+    if na(dt)
+        dt := table.new(position.top_right, 1, 1,
+              bgcolor = color.new(color.black, 84),
+              border_color = color.new(color.gray, 78), border_width = 1)
+    table.cell(dt, 0, 0, "today  " + (dayPL >= 0 ? "+" : "") +
+        str.tostring(dayPL, "#.##") + "   " + str.tostring(dayN) + " trades",
+        text_color = dayPL >= 0 ? cBuy : cSell, text_size = size.tiny)
 
 alertcondition(buy,  "xau clean BUY",  "xau clean BUY")
 alertcondition(sell, "xau clean SELL", "xau clean SELL")
