@@ -2228,6 +2228,23 @@ input double SN_ChandelierATR = 2.00;   // 0 = percentage only
 // holds 65-68% win rate, cuts the give-back to 2-3%, cuts drawdown by a third
 // and still keeps ~0.45 of the rockets.
 //
+// ══ THE ARGUMENT AGAINST, WHICH WAS ALREADY IN THIS FILE AND IS CORRECT ══
+// v18.50 switched T_BankPartial off with this reasoning, quoted rather than
+// paraphrased: "the partial only ever fires in PROFIT. So full size is exposed
+// to every loss and two-thirds size to every win. That makes the average trade
+// ARITHMETICALLY worse than the average price move, no matter how good the
+// exits get." That is right, and the frontier above is the same fact with a
+// number on it: +1.70 becomes +0.24 per trade.
+// Where that note is INCOMPLETE: it prices the mechanism without the breakeven
+// stop that rides with it. A trade that reaches 0.45R and then fails no longer
+// loses full size -- it loses about nothing. So the asymmetry is not "full size
+// on losses, part size on wins"; it is "full size only on the trades that never
+// got going". That third category IS the 37% -> 2% number.
+// Both things are true at once: the bank leg costs expectancy per trade, and it
+// removes the give-back and a third of the drawdown. Which one matters more is
+// a decision about the account, not a fact about the market, so this input is a
+// real choice and not a default to be trusted blindly.
+//
 // MEASURED IN R, NOT IN BANDS AND NOT IN POUNDS. R is this position's own stop
 // distance, which is what the research measured and what makes the number mean
 // the same thing at every volatility and every lot size. If the position has no
@@ -2246,6 +2263,7 @@ input double SN_BankFrac   = 0.33;   // fraction closed there. measured band 0.2
 input double SN_BankBEOff  = 0.10;   // stop to entry + this many R once banked
 
 int g_snBE = 0, g_snL1 = 0, g_snL2 = 0, g_snBank = 0, g_snBankSkip = 0;
+bool g_snBankWarned = false;
 
 // per-ticket "already banked" flag, on the same slot pattern the TRADE-LOCK
 // peak registry uses, so it is reclaimed by SlotDead() the same way.
@@ -11460,8 +11478,20 @@ void SN_LadderCheck(ulong tk)
    // R is this position's own stop distance. No stop, no R, no bank -- the
    // alternative is inventing one, and an invented R makes 0.45R meaningless.
    double rDist = (sl > 0.0) ? MathAbs(ent - sl) : 0.0;
-   if(SN_BankLeg && SN_BankFrac > 0.0 && SN_BankAtR > 0.0 && rDist > 0.0
-      && !SN_WasBanked(tk))
+   // T_BankPartial (line ~2628) is THE SAME MECHANISM, already in this file
+   // since v12d and switched off at v18.50. Two partial-close engines on one
+   // ticket is precisely the complication that breeds the bugs, so the newer
+   // one stands down rather than stacking on top of the older one.
+   if(SN_BankLeg && T_BankPartial && !g_snBankWarned)
+   {
+      g_snBankWarned = true;
+      Print("[SNIPER BANK] T_BankPartial is ON, so SN_BankLeg stands down. "
+            "They are the same idea -- bank a slice, let the rest ride -- and "
+            "running both would close two partials on one ticket. Pick one: "
+            "SN_BankLeg is measured at 0.45R, T_BankPartial fires at 1.0R.");
+   }
+   if(SN_BankLeg && !T_BankPartial && SN_BankFrac > 0.0 && SN_BankAtR > 0.0
+      && rDist > 0.0 && !SN_WasBanked(tk))
    {
       double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
                               : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -11501,7 +11531,30 @@ void SN_LadderCheck(ulong tk)
                sl  = PositionGetDouble(POSITION_SL);
                SN_RebasePeak(tk, PositionGetDouble(POSITION_PROFIT)
                                  + PositionGetDouble(POSITION_SWAP));
-               double beLvl = NormalizeDouble(ent + dir * SN_BankBEOff * rDist,
+               // (AUDIT C2) THE STANDOFF THIS BLOCK WAS MISSING. Five mechanisms
+               // in this file write POSITION_SL, and every other one obeys
+               // T_LockRoomAtr: an early stop must keep that much ATR of air
+               // between itself and live price. v17.84 raised it 0.60 -> 0.90
+               // BECAUSE the trail was being taken out by ordinary pullbacks.
+               // The bank leg's breakeven move was placing a stop with no
+               // standoff at all, which re-creates exactly that bug -- and it
+               // would have done it on the trade right after banking, when the
+               // position has already proved it can move.
+               double beRaw = ent + dir * SN_BankBEOff * rDist;
+               double atrSt = SN_Atr();
+               if(T_LockRoomAtr > 0.0 && atrSt > 0.0)
+               {
+                  double pxNow = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                           : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+                  double room  = T_LockRoomAtr * atrSt;
+                  double capped = pxNow - dir * room;
+                  if((dir > 0 && beRaw > capped) || (dir < 0 && beRaw < capped))
+                     beRaw = capped;
+                  // ...but never WORSE than the stop already there
+                  if((dir > 0 && beRaw < ent - rDist) || (dir < 0 && beRaw > ent + rDist))
+                     beRaw = ent - dir * rDist;
+               }
+               double beLvl = NormalizeDouble(beRaw,
                                  (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
                bool up = (sl <= 0.0) || ((dir > 0) ? (beLvl > sl) : (beLvl < sl));
                double cNow = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
