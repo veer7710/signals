@@ -72,7 +72,7 @@ FUNC_DEF = re.compile(
 FUNC_FWD = re.compile(
     r"^[ \t]*(?:void|int|double|bool|string|long|ulong|datetime|color|char|short|uchar|uint|float)\s+"
     r"(\w+)\s*\([^;{\n]*\)[ \t]*;[ \t]*$", re.M)
-INPUT_DEF = re.compile(r"^\s*(?:input|sinput|extern)\s+\w+(?:\s+\w+)?\s+(\w+)\s*=", re.M)
+INPUT_DEF = re.compile(r"^[ \t]*(?:input|sinput|extern)\s+\w+(?:\s+\w+)?\s+(\w+)\s*=", re.M)
 GLOBAL_DEF = re.compile(r"^(?:static\s+)?(?:void|int|double|bool|string|long|ulong|datetime|color|uchar|uint)\s+(\w+)\s*(?:=[^;]*)?;", re.M)
 
 def check(path):

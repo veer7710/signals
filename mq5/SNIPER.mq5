@@ -11400,7 +11400,7 @@ bool SN_MaturityOK(int dir)
    double travel = SN_LegTravelATR(dir);
    if(travel < SN_MatureATR) return true;
    g_snMature++;
-   if(InpJournal)
+   if(InpVerboseLog)
       PrintFormat("[SNIPER MATURITY] %s leg has already run %.2f ATR. Measured on "
                   "GOLD 15m, entries past %.1f ATR of travel pay -0.10 to -0.77 per "
                   "trade while the WIN RATE rises -- more winners, less money. %s",
@@ -11430,7 +11430,12 @@ void SN_LadderCheck(ulong tk)
 {
    if(!SN_Ladder) return;
    if(!PositionSelectByTicket(tk)) return;
-   if(PositionGetInteger(POSITION_MAGIC) != InpMagic) return;
+   // (AUDIT) was `!= InpMagic`, an identifier that does not exist in this file --
+   // it was carried over from SMC_LIQUIDITY.mq5 with the rest of this block. Every
+   // position this EA opens carries one of the per-engine magics in Cfg[].magic,
+   // so ownership is EngineOf() >= 0. As written the ladder could not compile, and
+   // had it compiled it would have matched no position at all.
+   if(EngineOf(PositionGetInteger(POSITION_MAGIC)) < 0) return;
 
    double vol = PositionGetDouble(POSITION_VOLUME);
    double ent = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -11489,12 +11494,12 @@ void SN_LadderCheck(ulong tk)
    bool legal = (dir > 0) ? (cur - lvlPx > minStop) : (lvlPx - cur > minStop);
    if(!legal) return;
 
-   if(Trade.PositionModify(tk, lvlPx, PositionGetDouble(POSITION_TP)))
+   if(trade.PositionModify(tk, lvlPx, PositionGetDouble(POSITION_TP)))
    {
       if(stage == 1) g_snBE++;
       else if(stage == 2) g_snL1++;
       else g_snL2++;
-      if(InpJournal)
+      if(InpVerboseLog)
          PrintFormat("[SNIPER LADDER] #%I64u stage %d: peak %.2f = %.1f bands, "
                      "stop to %.2f (%s)", tk, stage, peak, peak / band, lvlPx,
                      stage == 1 ? "breakeven -- this can no longer be a loss"
@@ -11511,7 +11516,7 @@ void SN_LadderAll()
       ulong t = PositionGetTicket(i);
       if(t == 0) continue;
       if(PositionGetString(POSITION_SYMBOL) != _Symbol) continue;
-      if(PositionGetInteger(POSITION_MAGIC) != InpMagic) continue;
+      if(EngineOf(PositionGetInteger(POSITION_MAGIC)) < 0) continue;   // (AUDIT) was InpMagic, undeclared here
       SN_LadderCheck(t);
    }
 }
@@ -11540,9 +11545,9 @@ void SN_CancelLimit(string why)
    if(g_snLimitTk == 0) return;
    if(OrderSelect(g_snLimitTk))
    {
-      Trade.OrderDelete(g_snLimitTk);
+      trade.OrderDelete(g_snLimitTk);
       g_snLimitMiss++;
-      if(InpJournal)
+      if(InpVerboseLog)
          PrintFormat("[SNIPER LIMIT] cancelled #%I64u (%s). Price never came back, "
                      "so the trade was skipped rather than chased.", g_snLimitTk, why);
    }
@@ -11601,21 +11606,21 @@ bool SN_TryLimit(int e, int dir, double sl, double tp, string why)
    if(MathAbs(px - want) <= lvl) return false;  // broker will not accept it
 
    bool ok = (dir > 0)
-      ? Trade.BuyLimit (lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why)
-      : Trade.SellLimit(lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why);
+      ? trade.BuyLimit (lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why)
+      : trade.SellLimit(lots, want, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "SNIPER-lim-" + why);
    if(!ok)
    {
-      if(InpJournal)
-         PrintFormat("[SNIPER LIMIT] rejected %d %s", Trade.ResultRetcode(),
-                     Trade.ResultRetcodeDescription());
+      if(InpVerboseLog)
+         PrintFormat("[SNIPER LIMIT] rejected %d %s", trade.ResultRetcode(),
+                     trade.ResultRetcodeDescription());
       return false;
    }
-   g_snLimitTk  = Trade.ResultOrder();
+   g_snLimitTk  = trade.ResultOrder();
    g_snLimitBar = Bars(_Symbol, PERIOD_M1);
    g_snLimitDir = dir;
    g_snLimitSent++;
    g_snSavedPts += gain;
-   if(InpJournal)
+   if(InpVerboseLog)
       PrintFormat("[SNIPER LIMIT] %s signal was %.2f pts past equilibrium — market fill "
                   "would be %.2f. Limit placed at %.2f instead: %.2f pts better, stop "
                   "unchanged at %.2f so risk drops from %.2f to %.2f pts.",

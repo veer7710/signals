@@ -188,3 +188,82 @@ win rate *rises* to 35.6% while expectancy goes negative.
 Detection needs n≈600 for a 54% effect, 196 for 60%. **So a 60% effect would be
 comfortably visible here, and an 80% one would be unmissable. Its absence across
 every test run in this repo is itself evidence.**
+
+---
+
+## The exit frontier — measured, not argued
+
+`research/run_partials.py` and `research/run_frontier.py`.
+
+The attribution said the exit is ~70% of the leak. It did not say what to
+replace it with. This does. Same entries, same stop, same bars, same costs for
+every row — only the exit changes, so any difference **is** the exit.
+
+Three knobs, nothing else: the fraction banked at a first target, where that
+target sits in R, and where the stop goes once the bank fills. The runner is
+always ATR-3 trailed.
+
+### GOLD 1h — 873 calendar days, 1543 entries
+
+| exit | win% | $/trade | t | gave back | rocket keep | maxDD |
+|---|---|---|---|---|---|---|
+| runner only, ATR-3 trail | 31.3 | **+1.70** | 1.88 | **37%** | **0.63** | 1183 |
+| bank 50% @0.5R, stop→0.1R | 65.1 | +0.24 | 0.47 | 2% | 0.30 | 830 |
+| bank 40% @0.25R, stop→0.1R | **70.1** | **−0.05** | — | 7% | 0.33 | 777 |
+
+### GOLD 15m — 68 calendar days, 498 entries *(short sample, treat as a hint)*
+
+| exit | win% | $/trade | t | gave back | rocket keep | maxDD |
+|---|---|---|---|---|---|---|
+| runner only, ATR-3 trail | 33.7 | **+4.64** | 3.45 | 37% | **0.71** | 535 |
+| bank 25% @0.5R, stop→BE | 67.5 | +1.66 | 1.99 | 3% | 0.47 | 385 |
+| bank 40% @0.4R, stop→BE | **70.1** | +1.14 | 1.72 | 2% | 0.36 | 296 |
+
+"gave back" = reached +1R and still closed at a **loss**. "rocket keep" = the
+fraction of the excursion kept on the top 5% of moves — the £30 runners.
+
+### What it actually says
+
+**1. 70% is reachable. It is not free.** On 1h it costs 103% of the
+expectancy — the whole edge. On 15m it costs 75%. The mechanism is the
+geometry identity already in this document: `P(target before stop) ≈ S/(S+T)`.
+Banking 40% at 0.25R with the stop at +0.1R makes that leg a near-certainty,
+and you are buying the win rate with target size, not with skill. Anyone
+selling a 70-80% win rate is selling this trade, whether they know it or not.
+
+**2. The scale-out fixes the thing you actually complained about.** Not the
+win rate — the give-back. "Up 4 quid ten times and closed at 2." "Was at +5,
+came down to 3, closed at −6.58." Both are the same metric, and it goes from
+**37% of trades to 2%**. Max drawdown falls 30-45% with it.
+
+**3. And it does cut the rockets.** Rocket capture 0.63 → 0.30 on 1h. Taking
+half off at 0.5R means half the £30 move is not yours. That is arithmetic, not
+a tuning failure, and no setting escapes it. The 25%-bank row exists precisely
+because it keeps 0.47 instead of 0.30.
+
+**4. The 1h and 15m sets disagree at 70%,** and 68 days is not enough to
+settle it. 1h says the edge is gone at 70%; 15m says +1.14 at t=1.72. Do not
+assume 15m is right because it is the answer you want. The 1h set is 13× longer.
+
+### The recommendation, in one line
+
+Ship **bank 25-40% at 0.4-0.5R, stop to breakeven+0.1R, ATR-3 trail on the
+rest**. It is not the highest-expectancy exit and I am not going to pretend it
+is. It is the one that holds 65-68% win rate, cuts the give-back from 37% to
+2-3%, cuts drawdown by a third, and still keeps ~0.45 of the rockets. The lost
+expectancy per trade is recovered with frequency and size, not by tuning the
+exit further — the frontier above is the whole frontier.
+
+### Limits of this test
+
+- Positive on 2 of 5 instrument sets (GOLD 1h and 15m). Flat-to-negative on
+  EURUSD, GBPUSD, US500 1h. These entry families are gold-shaped.
+- The first run of `run_partials.py` charged $0.15/side on EURUSD — which is
+  1500 pips — and returned a 0% win rate on every FX row. Costs are now
+  per-instrument. The FX rows above the fix were meaningless and are not quoted.
+- The same first run had the ATR trail arming only after a partial filled, so
+  the "no partial" reference rows were not trailing at all. `trail_after_leg`
+  now controls it, and trail-2.0 and trail-3.0 no longer return identical
+  numbers, which is how the bug was caught.
+- No M1 data. Every number here is 15m or 1h. The M1 export is still the one
+  test that would settle this for how SNIPER actually trades.
