@@ -2095,7 +2095,7 @@ input double SN_StopRevBands  = 1.0;    // price came back through entry by this
 
 double g_gbPeak = 0.0, g_gbNet = 0.0, g_gbLost = 0.0, g_gbBest = 0.0;
 int    g_gbN = 0;
-int    g_eGave = 0, g_eNever = 0, g_eEarly = 0, g_eStopRev = 0, g_eChop = 0, g_eNoRoom = 0;
+int    g_eGave = 0, g_eNever = 0, g_eEarly = 0, g_eStopRev = 0;   // (AUDIT) g_eChop/g_eNoRoom removed -- never incremented, never read
 
 #define SN_WATCH 64
 ulong    g_wTk[SN_WATCH];
@@ -5153,10 +5153,10 @@ int    g_lastEntryK = -1;
 // each from a DIFFERENT timeframe — and they were all being managed as if they
 // came from whichever one opened last. Every fade-exit and every trail decision
 // on the older scalps was reading the wrong timeframe's data. Per-ticket now.
-int    g_scTFofPos = 4;
+// (AUDIT) g_scTFofPos and g_scTfN removed -- the per-ticket registry below
+// replaced the single global, and neither leftover is read anywhere.
 ulong  g_scTfTk[64];
 int    g_scTfK[64];
-int    g_scTfN = 0;
 
 // (v17.53 REAL BUG, all seven registries) Each registry used
 // PositionSelectByTicket() as its "is this slot's ticket still open?" liveness
@@ -5198,8 +5198,7 @@ int ScalpTFOf(ulong tk)
 // ticket and a SCALP ticket sharing a number (they never do, but to be safe)
 // never collide.
 ulong  g_trTfTk[64];
-int    g_trTfK[64];
-int    g_trTfN = 0;
+int    g_trTfK[64];   // (AUDIT) g_trTfN removed -- never read
 // (v16.47 RING-BUFFER EVICTION FIX — SEVERE) The old body wrapped g_trTfN back
 // to 0 once 64 tickets had been registered and overwrote slot 0 blindly. At
 // ~130 trades/day the ring wraps about twice a day, so a LONG-LIVED position
@@ -10948,8 +10947,7 @@ bool AtLegExtreme(ENUM_TIMEFRAMES tf, int dir, double px)
 input int    T_MaxPerDirWindow = 3;    // max entries per direction inside the window below
 input int    T_DirWindowSecs   = 600;  // the window, in seconds
 
-ulong  g_dirTk[64];
-long   g_dirAt[64];
+long   g_dirAt[64];   // (AUDIT) g_dirTk[64] removed -- never read; this registry keys on time + side
 int    g_dirSide[64];
 int    g_dirN = 0;
 
@@ -11470,11 +11468,18 @@ void SN_LadderCheck(ulong tk)
       double favR = (px - ent) * dir / rDist;
       if(favR >= SN_BankAtR)
       {
-         // round DOWN to the lot step, and only bank if BOTH halves survive the
-         // broker minimum -- a partial that leaves a sub-minimum remainder is
-         // rejected by the server and would retry on every tick.
+         // ROUND TO THE NEAREST LOT STEP, NOT DOWN. This is not a detail at the
+         // size he actually trades. 0.33 x 0.03 lots = 0.0099, and rounding that
+         // down is 0.00 -- the bank leg would have been silently inert on every
+         // 0.02-0.05 position, which is most of them. Rounded to nearest, 0.03
+         // banks 0.01 and leaves 0.02: 33%, exactly the measured fraction.
+         // Then clamp: at least one step, and never so much that the remainder
+         // falls under the broker minimum (the server rejects such a partial and
+         // it would retry on every tick).
          double cut = vol * SN_BankFrac;
-         if(g_lotStep > 0.0) cut = MathFloor(cut / g_lotStep) * g_lotStep;
+         if(g_lotStep > 0.0) cut = MathRound(cut / g_lotStep) * g_lotStep;
+         if(cut < g_lotStep) cut = g_lotStep;
+         if(cut > vol - g_lotMin) cut = vol - g_lotMin;
          cut = NormalizeDouble(cut, 2);
          if(cut >= g_lotMin - 1e-9 && (vol - cut) >= g_lotMin - 1e-9)
          {
@@ -11519,9 +11524,11 @@ void SN_LadderCheck(ulong tk)
             if(InpVerboseLog && g_snBankSkip <= 3)
                PrintFormat("[SNIPER BANK] #%I64u at %.2f lots cannot be split "
                            "(step %.2f, min %.2f). The bank leg needs at least "
-                           "%.2f lots to work; below that SNIPER is the runner-only "
-                           "exit, 31%% win rate and all of the give-back.",
-                           tk, vol, g_lotStep, g_lotMin, g_lotMin * 2.0);
+                           "%.2f lots -- one step to bank and the minimum to keep. "
+                           "Below that SNIPER is the runner-only exit: 31%% win "
+                           "rate and all 37%% of the give-back. That is a SIZE "
+                           "limit, not a settings problem.",
+                           tk, vol, g_lotStep, g_lotMin, g_lotMin + g_lotStep);
             SN_MarkBanked(tk);          // do not re-test this ticket every tick
          }
       }
