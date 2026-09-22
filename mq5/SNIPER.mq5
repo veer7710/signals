@@ -2164,6 +2164,17 @@ input double SN_Lock1Bands    = 1.00;   // then lock this fraction of peak...
 input double SN_Lock1Keep     = 0.65;
 input double SN_Lock2Bands    = 2.50;   // ...and this much once it is a real move
 input double SN_Lock2Keep     = 0.85;
+// A PERCENTAGE LOCK IS TOO TIGHT ON A RUNNER, and he is the one who spotted it:
+// "sometimes it does go up there, seen some rockets go to 30 pound."
+// Keeping 85% of a 10-point peak allows 1.50 pts of pullback = 1.02 ATR. Gold
+// breathes more than that INSIDE a live move, so the lock would take you out of
+// precisely the trades worth staying in. So the give-back is the WIDER of the
+// percentage rule and an ATR chandelier: tight percentage on small peaks (which
+// is what turns a small winner into a scratch), a chandelier once it is a real
+// move. The two cross near 20 points, which is rocket territory.
+// The stop is still never allowed below entry once breakeven has been set, so
+// the wide chandelier costs nothing on the small trades.
+input double SN_ChandelierATR = 2.00;   // 0 = percentage only
 
 int g_snBE = 0, g_snL1 = 0, g_snL2 = 0;
 
@@ -11351,22 +11362,36 @@ void SN_LadderCheck(ulong tk)
    double peak = TradePeakCash(tk, now);
    if(peak <= 0.0) return;
 
-   double want = 0.0;
-   int    stage = 0;
-   if(peak >= SN_Lock2Bands * band)
-   { want = SN_CashToDist(peak * SN_Lock2Keep, vol); stage = 3; }
-   else if(peak >= SN_Lock1Bands * band)
-   { want = SN_CashToDist(peak * SN_Lock1Keep, vol); stage = 2; }
-   else if(peak >= SN_BEBands * band)
-   { want = 0.0; stage = 1; }                  // breakeven: a scratch, not a loss
-   else
-      return;
-
-   // never lock closer than one band -- no trail can hold inside the noise,
-   // and a stop parked there is the "stopped then reversed" class
-   double bandDist = SN_CashToDist(band, vol);
    double peakDist = SN_CashToDist(peak, vol);
-   if(stage > 1 && want > peakDist - bandDist) want = peakDist - bandDist;
+   double bandDist = SN_CashToDist(band, vol);
+   double atrNow   = SN_Atr();
+
+   double keep = 0.0;
+   int    stage = 0;
+   if(peak >= SN_Lock2Bands * band)      { keep = SN_Lock2Keep; stage = 3; }
+   else if(peak >= SN_Lock1Bands * band) { keep = SN_Lock1Keep; stage = 2; }
+   else if(peak >= SN_BEBands * band)    { keep = 0.0;          stage = 1; }
+   else return;
+
+   double want = 0.0;
+   if(stage == 1)
+      want = 0.0;                              // breakeven: a scratch, not a loss
+   else
+   {
+      // give back the WIDER of the percentage rule and the ATR chandelier.
+      // Percentage protects a small winner; the chandelier keeps a runner alive
+      // through the pullbacks a real move makes.
+      double givePct = peakDist * (1.0 - keep);
+      double giveCha = (SN_ChandelierATR > 0.0 && atrNow > 0.0)
+                       ? SN_ChandelierATR * atrNow : 0.0;
+      double give = MathMax(givePct, giveCha);
+      // ...but never closer than one band either way
+      if(give < bandDist) give = bandDist;
+      want = peakDist - give;
+   }
+   // once breakeven has been set the stop NEVER goes below entry again, which
+   // is what lets the chandelier be wide without costing anything on a small
+   // trade: on those it simply clamps back to entry.
    if(want < 0.0) want = 0.0;
 
    double lvlPx = ent + dir * want;

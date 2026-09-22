@@ -746,3 +746,81 @@ pools each side, structure. Nothing else.
   what to expect from it before it starts
 - **Live P/L at 0.01 lots** in the box, and a separate **daily P/L box** top
   right with the day's trade count
+
+---
+
+# 22. "Small trends, and we're late — but sometimes rockets to £30"
+
+This correction changed a conclusion of mine, so it goes on the record.
+
+### My peak distribution measured the wrong thing
+
+I built it from the reference day's 279 trades and concluded a £20 peak happens
+0.08% of the time. The brief's own Finding 6 says otherwise:
+
+> **16 ten-point excursions in 16.7 hours, median duration 42 minutes.**
+> Average hold: 4 minutes.
+
+A 10-point move at 0.02 lots is **£14.66**. A 20-pointer is **£29.32** — that is
+the £30 rocket, and the tape produced one roughly every hour.
+
+**So the distribution measured what the EA CAPTURED, not what the market
+OFFERED.** Mean captured peak £1.07 against a tape carrying a 10-point move
+every hour. The EA was not present for them.
+
+### The two losses multiply, they do not add
+
+| trend | late by | captured | % of move |
+|---|---|---|---|
+| 3.0p | 1.5p | 1.5p | **50%** |
+| 5.0p | 1.0p | 4.0p | 80% |
+| 8.0p | 1.0p | 7.0p | 88% |
+
+A 3-point trend entered 1.5 points late gives up **half the move before the exit
+logic does anything**. That is an entry loss, not an exit loss, and it is what
+the retail limit in §16 exists for.
+
+### Your "£6" is a literal input
+
+`T_MinWinnerExitPts = 6.00`, with this beside it in your own file, from your own
+panel:
+
+```
+BASKET-LOCK     24 fired   +46.7 pts   lost -2.0
+~BASKET-LOCK   157 SUPPRESSED
+```
+
+That floor vetoed **157 of 181** basket-lock attempts. Previous sessions already
+exempted BASKET-LOCK, STACK-BANK, TRADE-LOCK, INFANT-CUT and GIVEBACK from it.
+**The new ladder is immune by construction** — it moves the stop rather than
+asking to close, so the broker executes it and no veto can reach it.
+
+### And my ladder would have killed your rockets
+
+Checking the thing you flagged, on the config I shipped:
+
+| peak | 85% lock gives back | in ATR | |
+|---|---|---|---|
+| 3pt | 0.45p | 0.31 | knocked out |
+| 6pt | 0.90p | 0.61 | knocked out |
+| 10pt | 1.50p | 1.02 | knocked out |
+| 20pt | 3.00p | 2.04 | survives |
+
+**A percentage lock is too tight on a runner.** Keeping 85% of a 10-point peak
+allows one ATR of pullback, and gold breathes more than that *inside* a move. It
+would have exited precisely the trades worth staying in.
+
+Fixed: the give-back is now the **wider** of the percentage rule and a **2 ATR
+chandelier**, floored at one band, with the stop never below entry once
+breakeven is set.
+
+| peak | stage | stop | gives back |
+|---|---|---|---|
+| 1.0p | breakeven | entry | — |
+| 3.0p | lock | entry (clamps) | 2.94p |
+| 5.0p | lock | 2.06p | 2.00 ATR |
+| 20p | lock | 17.0p | 2.04 ATR |
+| 30p | lock | 25.5p | 3.06 ATR |
+
+Small trades protected at breakeven; the wide chandelier costs nothing there
+because it clamps to entry. Runners left alone.

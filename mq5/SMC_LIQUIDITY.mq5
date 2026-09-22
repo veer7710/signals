@@ -95,6 +95,8 @@ input double InpLock1Bands   = 1.00;   // then lock this fraction of the peak...
 input double InpLock1Keep    = 0.65;
 input double InpLock2Bands   = 2.50;   // ...and this much once it is a real move
 input double InpLock2Keep    = 0.85;
+input double InpChandelierATR= 2.00;   // runner trail: give back the WIDER of the
+                                       // percentage rule and this many ATR
 input int    InpMaxHoldMin   = 120;
 
 input group "=== RISK ==="
@@ -172,6 +174,7 @@ double   sumPts = 0, sumPeak = 0;
 int      csvH = INVALID_HANDLE;
 double   spHist[200];
 int      spN = 0;
+
 
 
 
@@ -636,17 +639,25 @@ void Manage()
    // fails costs nothing instead of a full stop. About 9% of trades land there.
    if(InpLockPeak)
    {
-      double want = 0.0;
+      double keep = 0.0;
       int stage = 0;
-      if(pPeak >= InpLock2Bands*band)      { want = pPeak*InpLock2Keep; stage = 3; }
-      else if(pPeak >= InpLock1Bands*band) { want = pPeak*InpLock1Keep; stage = 2; }
-      else if(pPeak >= InpBEBands*band)    { want = 0.0;                stage = 1; }
+      if(pPeak >= InpLock2Bands*band)      { keep = InpLock2Keep; stage = 3; }
+      else if(pPeak >= InpLock1Bands*band) { keep = InpLock1Keep; stage = 2; }
+      else if(pPeak >= InpBEBands*band)    { keep = 0.0;          stage = 1; }
       if(stage > 0)
       {
-         // never closer than one band: no trail holds inside the noise
-         if(stage > 1 && want > pPeak - band) want = pPeak - band;
-         if(want < 0.0) want = 0.0;
-         if(stage > 1 && !pLocked) pLocked = true;
+         double want = 0.0;
+         if(stage > 1)
+         {
+            // WIDER of the percentage rule and an ATR chandelier. Keeping 85%
+            // of a 10-point peak allows only ~1 ATR of pullback, and a real
+            // move breathes more than that -- the lock would exit the runner.
+            double give = MathMax(pPeak*(1.0-keep), InpChandelierATR*a);
+            if(give < band) give = band;
+            want = pPeak - give;
+            if(!pLocked) pLocked = true;
+         }
+         if(want < 0.0) want = 0.0;    // never below entry once BE is set
          Push(pEntry + pDir*want, cur);
       }
    }
