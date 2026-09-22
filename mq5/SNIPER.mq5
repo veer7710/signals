@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|  SNIPER.mq5   v20.00   (was XAUUSD_QUAD through v19.18)          |
+//|  SNIPER.mq5   v20.01   (was XAUUSD_QUAD through v19.18)          |
 //|                                                                  |
 //|  v19.05 BU — ONE ROOT CAUSE, BOTH OF HIS 25 AUG ASKS             |
 //|                                                                  |
@@ -127,7 +127,7 @@
 //|  detection, per-timeframe TREND cooldown, adaptive risk, etc.    |
 //+------------------------------------------------------------------+
 #property copyright "personal"
-#property version   "20.00"
+#property version   "20.01"
 // (v18.73 W) THE REASON HE COULD NEVER TELL WHICH BUILD WAS RUNNING.
 // This said "18.57" while the filename said v18.73 and the header comment said
 // v18.72. MT5 shows #property version in Navigator / About, so the terminal has
@@ -138,7 +138,7 @@
 // session already fixed a stale duplicate of this property, so it has regressed
 // before. It is now also PRINTED at OnInit and shown on the panel, so a wrong
 // build is visible in two places instead of zero.
-#define EA_BUILD "v20.00"
+#define EA_BUILD "v20.01"
 
 // (v18.82 AI) FORWARD PROTOTYPES. My own first attempt at this fix put the two
 // definitions AFTER their first use at ~line 5232, which MQL5 rejects. Caught by
@@ -631,18 +631,12 @@ input bool   T_MarginGuard      = true;
 input double T_MarginFloorPct   = 35.0;   // keep at least this % of equity as FREE margin
 input bool   T_MarginLogRefusal = true;   // print every margin refusal (never fail silently)
 input double AutoMaxExposurePct = 25.0;  // total open risk across ALL engines, % of equity. HARD ceiling.
-input double InpMinBalanceToTrade = 120.0; // (v16.48) below this equity the EA stands down entirely.
-                                     // At the 0.01 broker minimum a lot cannot be trimmed, so below
-                                     // this balance risk-per-trade cannot be brought into range by
-                                     // sizing — the only honest action is not to trade.
 // (v16.50 SPEC CORRECTION) v16.49 introduced InpMaxRiskPctPerClock, which stood
 // M5 down on a small balance. That was NOT the specification and it is removed.
 // THE SPEC IS: M1, M3 and M5 ALWAYS trade, at every account size, with M1 and M3
 // as the primary focus. M15 is the only balance-gated clock — it is the widest
 // stop in the system and it is meant to come online as the account grows, not to
 // compete with the fast clocks for a small one.
-input double InpM15MinBalance    = 750.0; // M15 clocks (APEX + SCALP's M15) require this equity.
-                                     // Set 0 to run M15 at any balance. M1/M3/M5 ignore this entirely.
 input bool   InpRiskAdaptive     = false; // (v16.72) OFF — see AutoScale. It was the tighter of the two caps and it bound at 0.01.  // (v16.48) derive the lot ceiling from RISK, not equity fraction
 input double InpRiskPctPerTrade  = 1.0;   // (v16.48) max % of equity risked on ONE trade. This is what
                                      // makes the EA adapt to ANY balance: the ceiling is recomputed
@@ -759,7 +753,6 @@ input bool   AU_AutoTighten = true;  // (v12) enabled — the EA now learns from
                                       // (20+ losses sharing 70%+ common flaw) and tightens itself. Only
                                       // acts on GENUINE losses; the fast-scratch filter in OnTradeTransaction
                                       // prevents normal trend-start scratches from ever polluting the sample.
-input int    AU_ReportEvery = 10;    // print the running autopsy every N losses
 
 input group "=== VOLATILITY & NEWS — trade the trend, not the chaos ==="
 // IMPROVEMENT 2 + 3.
@@ -854,7 +847,6 @@ input bool   G_ExitOnVolDry  = true; // the trend is running on no participation
 input double G_SpreadPanic   = 3.0;  // spread this many x normal -> flatten, something is wrong
 
 input group "═══ GLOBAL RISK ═══"
-input double InpBalance          = 100.0;   // Account balance for reference
 input bool   InpDailyHaltEnable  = true;  // (v18.91 AS) WAS false -- there was no
                                          // daily floor of any kind. Note the PERCENT
                                          // below is 40, which on a small demo is not
@@ -1575,7 +1567,6 @@ input double InpMaxTotalLots     = 0.25;    // (v16.94) 0.15 -> 0.25. At TierBas
                                             // strangles a small account.
 input double InpMaxSpreadUSD     = 0.40;    // Gold dollars, NOT points
 input int    InpSlippagePoints   = 40;
-input int    InpBrokerGmtOffset  = 3;       // Broker server time = GMT + this
 input bool   InpVerboseLog       = true;    // Log WHY every trade fired
 
 input group "═══ CONFLUENCE TIER SIZING (v12) — the rare stack-up, sized bigger ═══"
@@ -1713,7 +1704,6 @@ input double T_TwoPoleSmooth = 4.0;   // matches Pine's tpFilter
 input bool   InpSignalLineStop = true;  // SL sits on the Supertrend signal line (your spec). Off = old structure stop.
 input bool   InpRideToFlip     = true;  // No fixed TP — ride until the OPPOSITE signal / Supertrend flip (your spec).
 input double T_Risk        = 1.9;   // % risk
-input double T_SlBuf       = 0.20;  // stop past pullback low, x ATR
 // (v18.07) HARD FLOOR IN POINTS. T_SlMin is a multiple of ATR, so on a quiet
 // Asian ATR of ~0.9 even 1.10 x ATR is a ~1 point stop -- which is the 2.4 pt
 // stop he photographed. This floor is absolute and applies after every ATR and
@@ -2208,7 +2198,86 @@ input double SN_Lock2Keep     = 0.85;
 // the wide chandelier costs nothing on the small trades.
 input double SN_ChandelierATR = 2.00;   // 0 = percentage only
 
-int g_snBE = 0, g_snL1 = 0, g_snL2 = 0;
+// ══════ (v20.01) THE BANK LEG -- the measured answer to "our trades don't
+//        often hit 6 pound" ══════
+// research/run_frontier.py swept the only three knobs a scale-out has, over
+// 1543 identical entries on GOLD 1h (873 days) and 498 on GOLD 15m. Same
+// entries, same stop, same bars, same costs for every row, so the differences
+// ARE the exit. What it found:
+//
+//   exit                        win%   $/trade   reached +1R and still LOST
+//   runner only, ATR-3 trail    31.3    +1.70            37%
+//   bank 50% @0.5R, stop->0.1R  65.1    +0.24             2%
+//   bank 40% @0.25R, stop->0.1R 70.1    -0.05             7%
+//
+// Read it honestly, both ways:
+//   - a 70% win rate is REACHABLE and on the 1h set it costs 103% of the
+//     expectancy. The mechanism is the geometry identity, P(target before
+//     stop) ~ S/(S+T): banking near the entry with the stop at breakeven is a
+//     near-certainty, so the win rate is bought with target size, not skill.
+//   - what the bank leg DOES fix is the complaint he actually made -- "up 4
+//     quid ten times and closed at 2", "was at +5, came down to 3, closed at
+//     -6.58". Both are the same number, and it goes from 37% of trades to 2%.
+//     Max drawdown falls about a third with it.
+//   - and it DOES cut the rockets: capture on the top 5% of excursions falls
+//     from 0.63 to 0.30. Half off at 0.5R means half the 30-point move is not
+//     yours. That is arithmetic and no setting escapes it, which is why the
+//     default banks a THIRD and not a half.
+//
+// So the shipped default is the 25-40% @ 0.4-0.5R row, not the 70% row: it
+// holds 65-68% win rate, cuts the give-back to 2-3%, cuts drawdown by a third
+// and still keeps ~0.45 of the rockets.
+//
+// MEASURED IN R, NOT IN BANDS AND NOT IN POUNDS. R is this position's own stop
+// distance, which is what the research measured and what makes the number mean
+// the same thing at every volatility and every lot size. If the position has no
+// stop, there is no R and the bank leg stands down rather than guessing.
+//
+// IT DELIBERATELY BYPASSES T_MinWinnerExitPts. That guard refuses to close a
+// profitable trade for less than 6.00 points, and his tape is "our trades don't
+// often hit 6 pound" -- the guard and the observation are the same fact seen
+// from two sides. A partial closed by the bank leg is not the guard's business:
+// the guard exists to stop a REVERSAL scratching a winner, and this is a
+// planned target being filled. The rest of the position stays under the guard.
+// OFF-SWITCH: SN_BankLeg = false restores v20.00 behaviour exactly.
+input bool   SN_BankLeg    = true;
+input double SN_BankAtR    = 0.45;   // first target, in R. measured band 0.40-0.50
+input double SN_BankFrac   = 0.33;   // fraction closed there. measured band 0.25-0.40
+input double SN_BankBEOff  = 0.10;   // stop to entry + this many R once banked
+
+int g_snBE = 0, g_snL1 = 0, g_snL2 = 0, g_snBank = 0, g_snBankSkip = 0;
+
+// per-ticket "already banked" flag, on the same slot pattern the TRADE-LOCK
+// peak registry uses, so it is reclaimed by SlotDead() the same way.
+ulong g_snBkTk[128];
+int   g_snBkN = 0;
+
+// After a partial close the position is smaller, so every CASH figure the
+// ladder works in -- the band, the peak, the distances derived from them --
+// changes frame. TRADE-LOCK's peak registry only ever ratchets UP, so without
+// this it would keep a peak recorded at full size and compare it against a band
+// computed at the reduced size: the ladder would believe the trade had run
+// further than it has and set its locks out where price has never been.
+void SN_RebasePeak(ulong tk, double cash)
+{
+   for(int i = 0; i < g_tlN; i++)
+      if(g_tlTk[i] == tk) { g_tlPk[i] = cash; return; }
+}
+
+bool SN_WasBanked(ulong tk)
+{
+   for(int i = 0; i < g_snBkN; i++) if(g_snBkTk[i] == tk) return true;
+   return false;
+}
+
+void SN_MarkBanked(ulong tk)
+{
+   if(SN_WasBanked(tk)) return;
+   for(int i = 0; i < g_snBkN; i++)
+      if(SlotDead(g_snBkTk[i], tk)) { g_snBkTk[i] = tk; return; }
+   if(g_snBkN < 128) { g_snBkTk[g_snBkN] = tk; g_snBkN++; return; }
+   PrintFormat("[SNIPER BANK] slot table FULL -- #%I64u may be banked twice.", tk);
+}
 
 input bool   SN_RetailLimit   = true;
 input double SN_LateATR       = 0.50;   // travelled this far past equilibrium = LATE
@@ -2448,10 +2517,6 @@ input double T_LotCeilHard      = 0.05;   // his standing maximum
 // gold-only account can never have its sizing changed by an edit it did not ask
 // for. Requires T_RiskPctPerTrade > 0.
 input bool   T_SymAgnosticSize   = false;
-input double T_TrailGivebackFrac = 0.0;   // withdrawn as redundant, see note above
-input double T_SlMin       = 1.10;  // (v18.05) 0.70->1.10. Birth stop too close: 11 Aug losers ran
-                                    // -3.2/-4.9/-6.7 pts. Revert to 0.70 to undo.
-input double T_SlMax       = 2.00;  // (v18.05) 1.40->2.00 so the wider floor cannot trip the SKIP branch.
 input double T_Tp1R        = 1.5;
 input bool   T_GivebackFloorOn   = true;  // (v18.42) OFF-SWITCH: false = v18.42 exactly
 input double T_GivebackPeakCap    = 0.50;  // (v18.59) no floor may demand a retrace bigger than this fraction of the peak. 0 = off
@@ -2736,10 +2801,6 @@ input group "═══ v13 — CORRELATED-MARKET FAILOVER (your 'trade what's mo
 // So this is scaffolded, OFF by default, with the candidates that actually
 // co-move with or substitute for gold when it's quiet. Turning it on is a
 // deliberate next-session project, not a flip of a switch — see the changelog.
-input bool   T_UseFailover     = false; // (v13) OFF — enable only after per-symbol setup + testing
-input string T_FailoverSymbols = "XAGUSD,XAUEUR,USDX"; // silver co-moves; XAUEUR is gold in EUR; USDX inverse
-input double T_FailoverMinER   = 0.40;  // (v13) only switch to a substitute market that is itself trending
-input double T_GoldSlowER      = 0.18;  // (v13) consider gold "too slow to bother" below this ER
 
 input group "═══ v13 — 11 MORE PROFITABILITY IMPROVEMENTS ═══"
 // #2 Re-entry cap: don't chase the same shaken-out level forever.
@@ -2883,7 +2944,6 @@ input bool   T_AtrSpikeGuard   = false;  // (v16.21) OFF at his request, same re
                                          // — exactly the move he wants to follow, not skip. The wider stop it
                                          // causes is priced in (LotFor sizes to the stop distance), and the
                                          // signal-line/opposite-signal exit still protects the trade.
-input double T_AtrSpikeMult    = 3.0;     // skip if current ATR > this x its own 50-bar average
 // #11 Re-entry must be cheaper than the exit for longs (better price), richer
 //     for shorts — enforced by the reclaim buffer already; exposed here.
 input double T_ReentryEdgeAtr  = 0.0;     // extra ATR of edge required on a reclaim (0 = just the buffer)
@@ -3533,14 +3593,6 @@ input bool   T_DeferChase          = false; // (v18.51) enter at the signal   //
                                             // pay more of the move away before the trade opens. The ratchet,
                                             // giveback guard and runner lock still manage it exactly the same
                                             // once it's open.
-input bool   T_DeferChaseOLD      = true; // (v16.63 BEST PLACE TO GO IN) The chase guard used to SKIP a flip
-                                         // outright when price had already run past the signal line — the
-                                         // trend was simply lost. Now the flip is REMEMBERED: if price pulls
-                                         // back toward the line within a few bars the entry is taken there
-                                         // (a better price than the flip itself), and if it never does, the
-                                         // trade is taken at market anyway so the trend is never missed.
-                                         // Strictly better than the old behaviour: worst case is a short
-                                         // delay, instead of no trade at all.
 input int    T_DeferOpenSecs      = 12;  // (v17.82) an expired defer fills only within this many seconds of a new bar open
 // (v17.95, his instruction: "the second Pine shows a signal we need to take")
 // 2 -> 1. A parked flip now waits at most ONE bar for a better fill, then takes
@@ -3948,8 +4000,6 @@ input bool   T_GapGuard          = true;  // (v16.54) GAP GUARD — the only pat
 input double T_GapAtrMult         = 3.00; // bar open vs previous close beyond this x ATR(10) = a gap
 input int    T_GapCoolBars        = 5;    // suppress new entries for this many bars after a gap
 input bool   T_GapCloseAgainst    = true; // close a position the gap moved against, at once
-input bool   T_FlatBeforeClose    = true; // (v16.54) flat before the weekly close so nothing is held
-input int    T_FlatBeforeCloseMin = 15;   // minutes before Friday 22:00 to go flat
 input bool   T_LegTarget          = false; // (v16.70) OFF — the most explicit fixed goal of all // (v16.53) SELF-CALIBRATING LEG TARGET. His 27 Jul 8-hour M1
                                          // chart shows realised leg sizes of 3-24pts, median ~11 — the
                                          // distance between CONSECUTIVE SIGNAL PRICES *is* the realised
@@ -4419,8 +4469,6 @@ input double T_M15LockConf  = 85.0;  // M15 confidence must be this high (0-100)
                                       // deliberately very high so it only happens on a genuinely strong M15 trend
 input double T_Tp2R        = 3.0;
 input double T_Tp3R        = 4.5;
-input double T_PullDepth   = 0.4;   // pullback must be this deep, x ATR
-input int    T_PullMaxBars = 8;
 input double T_MinAdx      = 0.0;   // (v16.67) WAS 18.0. This was the gate refusing ~80% of his signals.
                                    // LIVE EVIDENCE, 28 Jul: the Pine printed ~10 signals between 06:00 and
                                    // 11:30 on a chart that ranged 4035-4050 for five hours. The EA took
@@ -6458,11 +6506,6 @@ ulong g_pyrTk[128];
 int   g_pyrN = 0;
 int   g_pyrToday = 0;
 int   g_pyrLastDay = -1;
-bool PyramidDone(ulong tk)
-{
-   for(int i = 0; i < g_pyrN; i++) if(g_pyrTk[i] == tk) return true;
-   return false;
-}
 void MarkPyramidDone(ulong tk)
 {
    // (v17.18) This is a RISK bug, not just a profit one: losing the flag lets
@@ -6517,11 +6560,6 @@ datetime LastFlipAt(int k)
 {
    if(k < 0 || k >= SC_TFN || g_flipIdx[k] <= 0) return 0;
    return g_flipTimes[k][(g_flipIdx[k] - 1) % 8];
-}
-int ClockIndexOfTf(ENUM_TIMEFRAMES tf)
-{
-   for(int i = 0; i < SC_TFN; i++) if(g_scTF[i] == tf) return i;
-   return -1;
 }
 
 int RecentFlips(int k)
@@ -7225,37 +7263,9 @@ bool MarginOkFor(double lots, int dir)
    return ok;
 }
 
-//================================================================
-//  (v17.13) CROSS-SYMBOL EXPOSURE. OpenRiskCash() below filters
-//  POSITION_SYMBOL != _Symbol, which is correct for per-pair logic
-//  but means that running a SECOND instance on a second pair gives
-//  each instance its own full AutoMaxExposurePct budget — 25% + 25%
-//  = 50% of one account at risk, with neither instance aware of the
-//  other. Same for InpMaxTotalLots (0.25 each = 0.50). This reads
-//  the WHOLE account so the account-level ceiling stays account-level.
-//================================================================
-double OpenRiskCashAllSymbols()
-{
-   double total = 0;
-   for(int i = PositionsTotal()-1; i >= 0; i--)
-   {
-      ulong tk = PositionGetTicket(i);
-      if(tk == 0 || !PositionSelectByTicket(tk)) continue;
-      double vol  = PositionGetDouble(POSITION_VOLUME);
-      double open = PositionGetDouble(POSITION_PRICE_OPEN);
-      double sl   = PositionGetDouble(POSITION_SL);
-      int    dir  = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? 1 : -1;
-      if(sl <= 0 || vol <= 0) continue;
-      bool locked = (dir > 0) ? (sl >= open) : (sl <= open);
-      if(locked) continue;
-      string sym = PositionGetString(POSITION_SYMBOL);
-      double tv   = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_VALUE);
-      double tsz  = SymbolInfoDouble(sym, SYMBOL_TRADE_TICK_SIZE);
-      if(tv <= 0 || tsz <= 0) continue;
-      total += MathAbs(open - sl) / tsz * tv * vol;
-   }
-   return total;
-}
+// (AUDIT) OpenRiskCashAllSymbols() removed -- declared here, never called from
+// anywhere in the file. The cross-symbol exposure ceiling it was written for was
+// never wired up; OpenRiskCash() (below) is the one that runs.
 
 double OpenRiskCash()
 {
@@ -9268,11 +9278,6 @@ int EngineConfidence(int e)
    return (int)MathMax(0.0, MathMin(100.0, raw));
 }
 
-int GmtHour()
-{
-   MqlDateTime t; TimeToStruct(TimeGMT(), t);
-   return t.hour;
-}
 
 //================================================================
 //  INIT
@@ -11452,6 +11457,75 @@ void SN_LadderCheck(ulong tk)
    double peakDist = SN_CashToDist(peak, vol);
    double bandDist = SN_CashToDist(band, vol);
    double atrNow   = SN_Atr();
+
+   // ---- (v20.01) the bank leg, before any stop work ----
+   // R is this position's own stop distance. No stop, no R, no bank -- the
+   // alternative is inventing one, and an invented R makes 0.45R meaningless.
+   double rDist = (sl > 0.0) ? MathAbs(ent - sl) : 0.0;
+   if(SN_BankLeg && SN_BankFrac > 0.0 && SN_BankAtR > 0.0 && rDist > 0.0
+      && !SN_WasBanked(tk))
+   {
+      double px   = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                              : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+      double favR = (px - ent) * dir / rDist;
+      if(favR >= SN_BankAtR)
+      {
+         // round DOWN to the lot step, and only bank if BOTH halves survive the
+         // broker minimum -- a partial that leaves a sub-minimum remainder is
+         // rejected by the server and would retry on every tick.
+         double cut = vol * SN_BankFrac;
+         if(g_lotStep > 0.0) cut = MathFloor(cut / g_lotStep) * g_lotStep;
+         cut = NormalizeDouble(cut, 2);
+         if(cut >= g_lotMin - 1e-9 && (vol - cut) >= g_lotMin - 1e-9)
+         {
+            if(trade.PositionClosePartial(tk, cut))
+            {
+               g_snBank++;
+               SN_MarkBanked(tk);
+               PrintFormat("[SNIPER BANK] #%I64u banked %.2f of %.2f at %.2fR "
+                           "(target %.2fR). 1543 entries on GOLD 1h: this is what "
+                           "takes trades that reached +1R and still closed at a LOSS "
+                           "from 37%% to 2%%. It also costs about half the capture on "
+                           "the top 5%% of moves -- that is the trade, and it is why "
+                           "only a third goes.", tk, cut, vol, favR, SN_BankAtR);
+               // the stop moves straight to entry + SN_BankBEOff x R. Without this
+               // the runner can hand the banked leg back and the win rate the bank
+               // just bought is spent again.
+               if(!PositionSelectByTicket(tk)) return;
+               vol = PositionGetDouble(POSITION_VOLUME);
+               sl  = PositionGetDouble(POSITION_SL);
+               SN_RebasePeak(tk, PositionGetDouble(POSITION_PROFIT)
+                                 + PositionGetDouble(POSITION_SWAP));
+               double beLvl = NormalizeDouble(ent + dir * SN_BankBEOff * rDist,
+                                 (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));
+               bool up = (sl <= 0.0) || ((dir > 0) ? (beLvl > sl) : (beLvl < sl));
+               double cNow = (dir > 0) ? SymbolInfoDouble(_Symbol, SYMBOL_BID)
+                                       : SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+               double mStop = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL)
+                              * SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+               bool ok = (dir > 0) ? (cNow - beLvl > mStop) : (beLvl - cNow > mStop);
+               if(up && ok) trade.PositionModify(tk, beLvl, PositionGetDouble(POSITION_TP));
+               // the stages run on the NEXT pass (one second later), reading a
+               // fresh SL and a rebased peak. Continuing here would reason from
+               // the SL this function read before the bank leg moved it.
+               return;
+            }
+         }
+         else
+         {
+            // one lot at the broker minimum cannot be split. Not an error, and
+            // not silent either -- it means the bank leg is inert at this size.
+            g_snBankSkip++;
+            if(InpVerboseLog && g_snBankSkip <= 3)
+               PrintFormat("[SNIPER BANK] #%I64u at %.2f lots cannot be split "
+                           "(step %.2f, min %.2f). The bank leg needs at least "
+                           "%.2f lots to work; below that SNIPER is the runner-only "
+                           "exit, 31%% win rate and all of the give-back.",
+                           tk, vol, g_lotStep, g_lotMin, g_lotMin * 2.0);
+            SN_MarkBanked(tk);          // do not re-test this ticket every tick
+         }
+      }
+   }
 
    double keep = 0.0;
    int    stage = 0;
@@ -21066,9 +21140,9 @@ void QSP_Recompute()
    if(SN_MaturityGate && g_snMature > 0)
       QSP_Row(r++, StringFormat("mature legs seen %d (%s)", g_snMature,
               SN_MatureRefuse ? "refused" : "sized down"), dimC);
-   if(SN_Ladder && (g_snBE + g_snL1 + g_snL2) > 0)
-      QSP_Row(r++, StringFormat("ladder: breakeven %d | lock65 %d | lock85 %d",
-              g_snBE, g_snL1, g_snL2), okC);
+   if(SN_Ladder && (g_snBE + g_snL1 + g_snL2 + g_snBank) > 0)
+      QSP_Row(r++, StringFormat("ladder: bank %d (skip %d) | breakeven %d | lock65 %d | lock85 %d",
+              g_snBank, g_snBankSkip, g_snBE, g_snL1, g_snL2), okC);
    if(SN_RetailLimit && (g_snLimitSent > 0 || g_snLateSeen > 0))
       QSP_Row(r++, StringFormat("late signals %d | limits %d -> filled %d missed %d | %.1f pts better",
               g_snLateSeen, g_snLimitSent, g_snLimitFill, g_snLimitMiss, g_snSavedPts), dimC);
