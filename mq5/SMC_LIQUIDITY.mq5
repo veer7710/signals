@@ -63,6 +63,26 @@ input double InpExpandATR    = 0.35;   // close beyond by this = EXPANSION, leve
 input int    InpResolveBars  = 3;      // bars allowed to resolve absorption vs expansion
 input bool   InpNeedReclaim  = true;   // require close back inside before entry
 
+input group "=== MULTI-TIMEFRAME ==="
+input ENUM_TIMEFRAMES InpHTF = PERIOD_M15;  // the clock that sets the bias
+input bool   InpUseHTFBias   = true;   // only trade with the higher-timeframe leg
+input bool   InpUseHTFGap    = true;   // a higher-timeframe FVG is worth more than a local one
+input int    InpHTFEma       = 21;
+
+input group "=== FVG / IFVG ==="
+// A fair value gap is a three-bar imbalance: price moved so fast that bar i-2's
+// high never traded against bar i's low. Unfilled, it is a magnet.
+//
+// AN INVERSE FVG IS THE SAME OBJECT AFTER IT FAILS. If a bullish gap is closed
+// THROUGH rather than respected, everyone who bought it is now offside and their
+// stops sit below. The zone flips polarity: it was support, it is now resistance.
+// That flip is the tradeable part, and it is why an IFVG is worth more than the
+// FVG it came from -- there is a trapped side to squeeze.
+input bool   InpUseFVGZone   = true;
+input double InpMinGapATR    = 0.25;   // ignore gaps smaller than this
+input int    InpGapLife      = 400;    // bars a gap stays on the books
+input bool   InpTradeIFVG    = true;   // trade the inversion, not just the gap
+
 input group "=== CONFLUENCE (each is optional, each is counted) ==="
 input bool   InpUseOTE       = true;   // entry inside the 0.62-0.79 retracement
 input double InpOTELo        = 0.62;
@@ -151,6 +171,21 @@ int      hiTouch[MAXLV], loTouch[MAXLV];
 bool     hiDead[MAXLV], loDead[MAXLV];
 int      hiN = 0, loN = 0;
 
+//--- FVG registry. dir +1 bullish / -1 bearish; inverted flips that polarity.
+#define MAXGAP 96
+struct Gap
+{
+   double top, bot;
+   int    dir;
+   int    bornBar;
+   bool   inverted;
+   bool   dead;
+   bool   htf;
+};
+Gap      gaps[MAXGAP];
+int      gapN = 0;
+int      hHtfEma = INVALID_HANDLE;
+
 int      hAtr = INVALID_HANDLE;
 datetime lastBar = 0;
 double   gAtr = 0.0, gBand = 0.0;
@@ -179,6 +214,7 @@ int      spN = 0;
 
 
 
+
 //--- forward declarations (auto-generated; see tools/add_fwd_decls.py)
 datetime DayStamp();
 double Atr();
@@ -192,6 +228,11 @@ double EfficiencyRatio();
 string Regime();
 double NearestPool(int dir, int &idx);
 int LevelsBetween(double target, int dir);
+int HTFBias();
+void AddGap(double top, double bot, int dir, bool isHtf);
+void ScanGaps(ENUM_TIMEFRAMES tf, bool isHtf);
+void UpdateGaps();
+int GapScore(int dir);
 bool InOTE(int dir);
 bool InDiscount(int dir);
 bool TapsOB(int dir);
@@ -213,6 +254,7 @@ void Rect(string n,datetime t1,double p1,datetime t2,double p2,color c);
 void HLine(string n,double p,color c,int st,int w);
 void Txt(string n,datetime t,double p,string s,color c);
 void DrawLevels();
+int LiveGaps();
 void DrawPanel();
 //--- end forward declarations
 
@@ -221,6 +263,8 @@ int OnInit()
 {
    hAtr = iATR(_Symbol, _Period, 14);
    if(hAtr == INVALID_HANDLE) { Print(SMC_BUILD, ": ATR failed"); return INIT_FAILED; }
+   hHtfEma = iMA(_Symbol, InpHTF, InpHTFEma, 0, MODE_EMA, PRICE_CLOSE);
+   if(hHtfEma == INVALID_HANDLE) { Print(SMC_BUILD, ": HTF EMA failed"); return INIT_FAILED; }
    Trade.SetExpertMagicNumber(InpMagic);
    Trade.SetDeviationInPoints(InpSlippage);
    Trade.SetTypeFillingBySymbol(_Symbol);
@@ -238,6 +282,7 @@ void OnDeinit(const int r)
    if(csvH != INVALID_HANDLE) { FileClose(csvH); csvH = INVALID_HANDLE; }
    ObjectsDeleteAll(0, "SMC_");
    if(hAtr != INVALID_HANDLE) IndicatorRelease(hAtr);
+   if(hHtfEma != INVALID_HANDLE) IndicatorRelease(hHtfEma);
 }
 
 void OnTimer()
@@ -386,6 +431,97 @@ int LevelsBetween(double target, int dir)
 }
 
 //====================================================================
+//  MULTI-TIMEFRAME BIAS AND THE FVG / IFVG REGISTRY
+//====================================================================
+
+//--- the higher clock's leg direction. Lookahead-safe: only closed HTF bars.
+int HTFBias()
+{
+   if(!InpUseHTFBias) return 0;
+   double m[]; ArraySetAsSeries(m, true);
+   if(CopyBuffer(hHtfEma, 0, 1, 4, m) < 4) return 0;
+   if(m[0] > m[3]) return 1;
+   if(m[0] < m[3]) return -1;
+   return 0;
+}
+
+void AddGap(double top, double bot, int dir, bool isHtf)
+{
+   if(top - bot < InpMinGapATR * gAtr) return;
+   for(int i = 0; i < gapN; i++)
+      if(!gaps[i].dead && MathAbs(gaps[i].top - top) < gAtr * 0.05
+         && MathAbs(gaps[i].bot - bot) < gAtr * 0.05) return;   // already have it
+   if(gapN >= MAXGAP)
+   {
+      for(int i = 0; i < gapN - 1; i++) gaps[i] = gaps[i+1];
+      gapN--;
+   }
+   gaps[gapN].top = top; gaps[gapN].bot = bot; gaps[gapN].dir = dir;
+   gaps[gapN].bornBar = Bars(_Symbol,_Period);
+   gaps[gapN].inverted = false; gaps[gapN].dead = false; gaps[gapN].htf = isHtf;
+   gapN++;
+}
+
+//--- scan the last few bars of a timeframe for new three-bar imbalances
+void ScanGaps(ENUM_TIMEFRAMES tf, bool isHtf)
+{
+   int need = 6;
+   if(Bars(_Symbol, tf) < need + 2) return;
+   for(int i = 1; i <= 3; i++)
+   {
+      double hi2 = iHigh(_Symbol, tf, i+2), lo2 = iLow(_Symbol, tf, i+2);
+      double hi0 = iHigh(_Symbol, tf, i),   lo0 = iLow(_Symbol, tf, i);
+      if(lo0 > hi2) AddGap(lo0, hi2,  1, isHtf);   // bullish imbalance
+      if(lo2 > hi0) AddGap(lo2, hi0, -1, isHtf);   // bearish imbalance
+   }
+}
+
+//--- state machine. A gap that is CLOSED THROUGH does not die -- it INVERTS.
+//    That is the whole point: the side that bought it is now trapped.
+void UpdateGaps()
+{
+   double c = iClose(_Symbol,_Period,1);
+   int now = Bars(_Symbol,_Period);
+   for(int i = 0; i < gapN; i++)
+   {
+      if(gaps[i].dead) continue;
+      if(now - gaps[i].bornBar > InpGapLife) { gaps[i].dead = true; continue; }
+      if(!gaps[i].inverted)
+      {
+         // a close BEYOND the far side is a failure, not a fill
+         if(gaps[i].dir > 0 && c < gaps[i].bot) { gaps[i].inverted = true; gaps[i].dir = -1; }
+         else if(gaps[i].dir < 0 && c > gaps[i].top) { gaps[i].inverted = true; gaps[i].dir = 1; }
+      }
+      else
+      {
+         // an inverted zone that is reclaimed again is finished
+         if(gaps[i].dir > 0 && c < gaps[i].bot) gaps[i].dead = true;
+         else if(gaps[i].dir < 0 && c > gaps[i].top) gaps[i].dead = true;
+      }
+   }
+}
+
+//--- is price inside a usable zone in this direction? HTF zones score higher,
+//--- and an inversion scores higher than a virgin gap.
+int GapScore(int dir)
+{
+   if(!InpUseFVGZone) return 0;
+   double c = iClose(_Symbol,_Period,1);
+   int best = 0;
+   for(int i = 0; i < gapN; i++)
+   {
+      if(gaps[i].dead || gaps[i].dir != dir) continue;
+      if(gaps[i].inverted && !InpTradeIFVG) continue;
+      if(c < gaps[i].bot || c > gaps[i].top) continue;
+      int sc = 1;
+      if(gaps[i].inverted) sc++;                       // trapped side to squeeze
+      if(gaps[i].htf && InpUseHTFGap) sc++;            // a bigger clock's imbalance
+      if(sc > best) best = sc;
+   }
+   return best;
+}
+
+//====================================================================
 //  CONFLUENCE
 //====================================================================
 //--- OTE: is price inside the 0.62-0.79 retracement of the dealing range?
@@ -463,6 +599,7 @@ int Confluence(int dir)
    if(InpUseDiscount && InDiscount(dir)) n++;
    if(InpUseOB       && TapsOB(dir))     n++;
    if(InpUseFVG      && TapsFVG(dir))    n++;
+   n += GapScore(dir);          // 1 virgin gap, 2 inverted, 3 inverted on the HTF
    return n;
 }
 
@@ -502,6 +639,9 @@ void OnTick()
 
    BuildLevels();
    UpdateBias();
+   ScanGaps(_Period, false);
+   if(InpUseHTFGap) ScanGaps(InpHTF, true);
+   UpdateGaps();
 
    string reg = Regime();
    int dir = 0; string why = "";
@@ -558,6 +698,10 @@ void OnTick()
    }
    else return;                                  // MIXED: stand down
 
+   // the higher clock has a veto: a leg against it is a counter-trend scalp,
+   // and those are where the measured loss concentrates
+   int hb = HTFBias();
+   if(InpUseHTFBias && hb != 0 && dir != hb && reg == "TREND") { nRefConf++; return; }
    if(Confluence(dir) < InpMinConfluence) { nRefConf++; return; }
 
    // ---- TP AND SL FROM THE CHART ----
@@ -871,6 +1015,13 @@ void DrawLevels()
    }
 }
 
+int LiveGaps()
+{
+   int n = 0;
+   for(int i = 0; i < gapN; i++) if(!gaps[i].dead) n++;
+   return n;
+}
+
 void DrawPanel()
 {
    int ti=-1;
@@ -879,7 +1030,8 @@ void DrawPanel()
    double kept=(sumPeak>0)?100.0*sumPts/sumPeak:0.0;
    string s=StringFormat(
      "%s   %s %s\n"
-     "regime %s (ER %.3f)   bias %s\n"
+     "regime %s (ER %.3f)   bias %s   HTF %s\n"
+     "gaps live %d   in-zone score %d/%d\n"
      "BSL %.2f  %s   SSL %.2f  %s\n"
      "trades %d  win %.0f%%  net %.1f pts\n"
      "peak pool %.1f  KEPT %.0f%%\n"
@@ -889,6 +1041,8 @@ void DrawPanel()
      SMC_BUILD,_Symbol,EnumToString((ENUM_TIMEFRAMES)_Period),
      Regime(),EfficiencyRatio(),
      (gBias>0?"bullish":(gBias<0?"bearish":"none")),
+     (HTFBias()>0?"up":(HTFBias()<0?"down":"flat")),
+     LiveGaps(), GapScore(1), GapScore(-1),
      haveUp?up:0.0,(upN>InpMaxBetween?"HRL":"LRL"),
      haveDn?dn:0.0,(dnN>InpMaxBetween?"HRL":"LRL"),
      nT,(nT>0?100.0*nWin/nT:0.0),sumPts,sumPeak,kept,

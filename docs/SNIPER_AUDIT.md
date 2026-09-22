@@ -824,3 +824,95 @@ breakeven is set.
 
 Small trades protected at breakeven; the wide chandelier costs nothing there
 because it clamps to entry. Runners left alone.
+
+---
+
+# 23. "Not buying or selling at peaks of trends" — measured two ways
+
+Your question turns out to be two different questions, and they give opposite
+answers. Separating them is the whole value.
+
+### Question 1: where in the range? — your instinct is WRONG here
+
+Trend-direction entries bucketed by position in the prior range. Win rate rises
+**monotonically on both timeframes**, which is far harder to dismiss than any
+single good cell:
+
+| position in range | 15m win% | 1h win% | 1h $/trade |
+|---|---|---|---|
+| 0–20% bottom | 17.2% | 12.4% | −0.92 |
+| 40–60% | 23.3% | 21.9% | +0.67 |
+| 60–80% | 28.6% | 29.0% | +1.42 |
+| **80–100% top** | **32.4%** | **35.5%** | **+2.45** |
+
+High in the range means **the trend is working**. Buying the deep pullback is
+the worst bucket on both clocks. So "don't buy high" is not the rule.
+
+### Question 2: how far has the leg already run? — here you are right
+
+| leg travelled | 15m win% | **15m $/trade** | 1h $/trade |
+|---|---|---|---|
+| under 1 ATR (fresh) | 26.8% | **+2.72** | +1.35 |
+| 1–2 ATR | 19.5% | **+1.91** | +1.92 |
+| 2–3.5 ATR | 21.5% | −0.10 | +0.99 |
+| 3.5–5 ATR | 29.5% | −0.20 | +4.01 |
+| over 5 ATR (mature) | **35.6%** | **−0.77** | +4.80 |
+
+**On 15m — the clock nearest your M1 — expectancy dies past 2 ATR of leg
+travel.** And look at what happens alongside it: **the win rate RISES to 35.6%
+while the money goes negative.**
+
+That is the trap, and it explains why entering late has felt survivable. More
+winners, less money. It is the same shape as the high-win-rate exits: the thing
+that feels best is the thing that pays least.
+
+1h says the reverse (mature legs pay +4.80), so this is a **fast-clock effect**,
+gated to fast clocks only.
+
+**`SN_MaturityGate`, default OFF.** t-stats are 1.0–1.5 — real enough to act on,
+not proven. It **sizes down to 0.40x** rather than refusing, per your standing
+rule that the lever is size. `SN_MatureRefuse = true` turns it into a refusal if
+you'd rather. Counter on the panel.
+
+# 24. SMC EA — multi-timeframe, and the inverse FVG done properly
+
+### An IFVG is not a different object, it is the same one after it fails
+
+A bullish fair value gap is a three-bar imbalance — bar i-2's high never traded
+against bar i's low. Unfilled, it is a magnet.
+
+**If it is closed THROUGH rather than respected, everyone who bought it is now
+offside and their stops sit below it.** The zone flips polarity: it was support,
+it is now resistance. *That flip is the tradeable part* — there is a trapped
+side to squeeze, which a virgin gap does not have.
+
+So the registry has three states, not two:
+
+```
+FRESH     -> price has not returned
+INVERTED  -> price CLOSED beyond the far side; polarity flips
+DEAD      -> an inverted zone reclaimed again, or aged out
+```
+
+Most implementations delete a gap when it is filled. Deleting it throws away the
+only state with a trapped side in it.
+
+### Confluence is now scored, not counted
+
+```
+virgin gap in the trade's direction      1
+inverted gap (trapped side)              2
+inverted gap on the higher timeframe     3
+```
+
+Plus OTE, premium/discount, order block, local FVG. `InpMinConfluence` sets the
+bar.
+
+### The higher clock has a veto
+
+`InpHTF` (default M15) sets bias from its own EMA leg, read lookahead-safe off
+closed HTF bars only. **In TREND regime a signal against the HTF leg is
+refused** — counter-trend scalps are where the measured loss concentrates
+(Finding 3: −£1.13/trade against drift vs −£0.15 with it).
+
+In RANGE regime the veto lifts, because rotation is supposed to trade both ways.

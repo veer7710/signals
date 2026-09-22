@@ -2158,6 +2158,38 @@ bool     g_wUsed[SN_WATCH];
 // there, and converting those is worth more than any change to what the
 // winners keep. Everything is in NOISE BANDS, so it scales with volatility
 // and with size instead of being a pound figure picked once.
+// ══════ (v20.00) LEG MATURITY -- "not buying at peaks of trends" ══════
+// He asked how to stop entering at the peak of a trend. Two different things
+// got tested because they are two different questions.
+//
+// WHERE IN THE RANGE: measured, and it says the OPPOSITE of the instinct.
+// Trend-direction entries bucketed by position in the prior range, win rate
+// rising monotonically on BOTH timeframes:
+//    bottom 20%  17.2% / 12.4%      top 20%  32.4% / 35.5%
+// High in the range means the trend is WORKING. That is not the problem.
+//
+// HOW FAR THE LEG HAS ALREADY RUN: this is what he actually means, and on the
+// fast timeframe it confirms him. GOLD 15m, $/trade by leg travel:
+//    under 1 ATR  +2.72      2-3.5 ATR  -0.10
+//    1-2 ATR      +1.91      over 5 ATR -0.77
+// And the trap is in the win rate, which RISES to 35.6% while the money goes
+// negative. More winners, less money -- which is exactly why entering late
+// feels survivable while it drains the account.
+//
+// GOLD 1h says the reverse (mature legs pay +4.80). So this is a FAST-clock
+// effect and it is gated to fast clocks only. t-stats are 1.0-1.5, so it ships
+// OFF: turn it on, watch the counter, decide from your own tape.
+//
+// It SIZES DOWN rather than refusing -- his standing rule is that the lever is
+// size, never refusal.
+input bool   SN_MaturityGate  = false;
+input double SN_MatureATR     = 2.00;   // leg already run this far = mature
+input double SN_MatureMult    = 0.40;   // size multiplier on a mature leg
+input bool   SN_MatureRefuse  = false;  // true = refuse instead of sizing down
+
+double g_snMatMult = 1.0;
+int    g_snMature = 0;
+
 input bool   SN_Ladder        = true;
 input double SN_BEBands       = 0.50;   // peak this many bands -> stop to entry
 input double SN_Lock1Bands    = 1.00;   // then lock this fraction of peak...
@@ -11330,6 +11362,56 @@ int SameDirFillsInWindow(int dir, double px, int secs, double pts)
 // same candle. Looks back far enough to cover the whole pause window.
 // Returns the seconds remaining, or 0 if we are clear to trade.
 //====================================================================
+//  (v20.00 SNIPER) LEG MATURITY
+//====================================================================
+
+//--- how far the current leg has run, in ATR, measured from the swing it
+//--- started at. This is "how late am I", expressed structurally.
+double SN_LegTravelATR(int dir)
+{
+   double a = SN_Atr();
+   if(a <= 0.0) return 0.0;
+   int look = MathMin(120, Bars(_Symbol, PERIOD_M1) - SN_ShelfSwingN - 2);
+   double ext = 0.0;
+   bool found = false;
+   for(int i = SN_ShelfSwingN + 1; i < look && !found; i++)
+   {
+      bool piv = true;
+      double v = (dir > 0) ? iLow(_Symbol, PERIOD_M1, i) : iHigh(_Symbol, PERIOD_M1, i);
+      for(int k = 1; k <= SN_ShelfSwingN && piv; k++)
+      {
+         if(dir > 0)
+         { if(iLow(_Symbol,PERIOD_M1,i+k)  <= v || iLow(_Symbol,PERIOD_M1,i-k)  <= v) piv = false; }
+         else
+         { if(iHigh(_Symbol,PERIOD_M1,i+k) >= v || iHigh(_Symbol,PERIOD_M1,i-k) >= v) piv = false; }
+      }
+      if(piv) { ext = v; found = true; }
+   }
+   if(!found) return 0.0;
+   double px = iClose(_Symbol, PERIOD_M1, 0);
+   return MathAbs(px - ext) / a;
+}
+
+//--- returns the size multiplier, and refuses only if asked to
+bool SN_MaturityOK(int dir)
+{
+   g_snMatMult = 1.0;
+   if(!SN_MaturityGate) return true;
+   double travel = SN_LegTravelATR(dir);
+   if(travel < SN_MatureATR) return true;
+   g_snMature++;
+   if(InpJournal)
+      PrintFormat("[SNIPER MATURITY] %s leg has already run %.2f ATR. Measured on "
+                  "GOLD 15m, entries past %.1f ATR of travel pay -0.10 to -0.77 per "
+                  "trade while the WIN RATE rises -- more winners, less money. %s",
+                  dir > 0 ? "BUY" : "SELL", travel, SN_MatureATR,
+                  SN_MatureRefuse ? "Refused." : "Sizing down instead.");
+   if(SN_MatureRefuse) return false;
+   g_snMatMult = SN_MatureMult;
+   return true;
+}
+
+//====================================================================
 //  (v20.00 SNIPER) THE BREAKEVEN LADDER
 //  Three stages, all measured in noise bands so they scale with volatility
 //  and position size. Nothing here is a pound figure.
@@ -11790,6 +11872,8 @@ bool Open(int e, int dir, double sl, double tp, string why, string tag = "")
    if(!SN_RoomOK(dir))    { Print("[SNIPER GATE] room refused: a shelf of equal levels is in the way"); return false; }
    if(!SN_FlipOK(dir))    { Print("[SNIPER GATE] flip refused: opposite side too soon after the last exit"); return false; }
    if(!SN_ReentryOK(dir)) { Print("[SNIPER GATE] reentry refused: same direction, same place, after a loss"); return false; }
+
+   if(!SN_MaturityOK(dir)) return false;
 
    // (v20.00 SNIPER) late signal -> take a better price instead of chasing.
    // Returns true when a limit is working, in which case no market order goes.
@@ -20974,6 +21058,9 @@ void QSP_Recompute()
    QSP_Row(r++, lad, (hitTop > 0) ? okC : InpPanelInk);
 
    // ALL-TIME, since the account opened
+   if(SN_MaturityGate && g_snMature > 0)
+      QSP_Row(r++, StringFormat("mature legs seen %d (%s)", g_snMature,
+              SN_MatureRefuse ? "refused" : "sized down"), dimC);
    if(SN_Ladder && (g_snBE + g_snL1 + g_snL2) > 0)
       QSP_Row(r++, StringFormat("ladder: breakeven %d | lock65 %d | lock85 %d",
               g_snBE, g_snL1, g_snL2), okC);
