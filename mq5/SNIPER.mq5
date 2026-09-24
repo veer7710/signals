@@ -1,5 +1,5 @@
 //+------------------------------------------------------------------+
-//|  SNIPER.mq5   v20.01   (was XAUUSD_QUAD through v19.18)          |
+//|  SNIPER.mq5   v20.02   (was XAUUSD_QUAD through v19.18)          |
 //|                                                                  |
 //|  v19.05 BU — ONE ROOT CAUSE, BOTH OF HIS 25 AUG ASKS             |
 //|                                                                  |
@@ -127,7 +127,7 @@
 //|  detection, per-timeframe TREND cooldown, adaptive risk, etc.    |
 //+------------------------------------------------------------------+
 #property copyright "personal"
-#property version   "20.01"
+#property version   "20.02"
 // (v18.73 W) THE REASON HE COULD NEVER TELL WHICH BUILD WAS RUNNING.
 // This said "18.57" while the filename said v18.73 and the header comment said
 // v18.72. MT5 shows #property version in Navigator / About, so the terminal has
@@ -138,7 +138,7 @@
 // session already fixed a stale duplicate of this property, so it has regressed
 // before. It is now also PRINTED at OnInit and shown on the panel, so a wrong
 // build is visible in two places instead of zero.
-#define EA_BUILD "v20.01"
+#define EA_BUILD "v20.02"
 
 // (v18.82 AI) FORWARD PROTOTYPES. My own first attempt at this fix put the two
 // definitions AFTER their first use at ~line 5232, which MQL5 rejects. Caught by
@@ -2177,7 +2177,6 @@ input double SN_MatureATR     = 2.00;   // leg already run this far = mature
 input double SN_MatureMult    = 0.40;   // size multiplier on a mature leg
 input bool   SN_MatureRefuse  = false;  // true = refuse instead of sizing down
 
-double g_snMatMult = 1.0;
 int    g_snMature = 0;
 
 input bool   SN_Ladder        = true;
@@ -8568,6 +8567,10 @@ input bool   T_BasketExemptFloor = true;
 // exits were mostly correct tops rather than pullbacks.
 // REVERT: T_MinWinnerExitPts = 3.00. Off entirely = 0.
 input double T_MinWinnerExitPts = 6.00;
+// (v20.02) see the derivation at the guard site. 1.0 = one noise band, the floor
+// this file's own physics rule already allows. 0 = off: use the fixed point
+// figure above and nothing else.
+input double T_MinWinnerExitBands = 1.0;
 // (v18.44) The escape hatch in this guard tested the LIVE TICK against the M1
 // DEMA. On M1 gold with DEMA 60 a tick crosses that line constantly, so any exit
 // could clear the floor on a wick and close a small winner -- that, not
@@ -8967,6 +8970,25 @@ bool CloseTagged(string tag, ulong t)
          // 2.18, so a bank is possible instead of impossible. At a 20 pt peak
          // 0.60 x 20 = 12 > 6.00, so the floor stays 6.00 exactly as v18.44 set it.
          double wFloor = PS(T_MinWinnerExitPts);
+         // ═══ (v20.02) THE FLOOR IS NOW DERIVED, NOT TYPED ═══
+         // T_MinWinnerExitPts = 6.00 is the literal "GBP6" off his tape, and the
+         // complexity audit counted NINE further inputs whose only job is to get
+         // past it -- T_PeakGateFrac/Winner/Arbiter/Trail and four *ExemptFloor
+         // switches, eight of the nine defaulting to true. Ten inputs exist to
+         // neutralise one constant. The constant is the thing to remove, not the
+         // doors cut into it.
+         // One noise band is this file's own physics rule -- nothing may lock or
+         // bank inside spread + 0.60 x ATR -- and it is the same quantity the
+         // basket arm, the margin watch and every ratchet already use. It is
+         // ~1.3-1.9 pts on gold, so it sits LOWER than min(6.00, 0.35 x peak) for
+         // any peak past ~4.3 pts: exactly the region where he was watching
+         // winners held past the price he wanted to bank at.
+         // OFF-SWITCH: T_MinWinnerExitBands = 0 restores v20.01 behaviour.
+         if(T_MinWinnerExitBands > 0.0)
+         {
+            double wBand = NoiseFloorPts(Buf(g_scAtr[0], 0, 1));
+            if(wBand > 0.0) wFloor = MathMin(wFloor, T_MinWinnerExitBands * wBand);
+         }
          if(T_PeakGateWinner && T_PeakGateFrac > 0.0)
          {
             double wpk = PeakPtsOf(t);
@@ -11416,7 +11438,6 @@ double SN_LegTravelATR(int dir)
 //--- returns the size multiplier, and refuses only if asked to
 bool SN_MaturityOK(int dir)
 {
-   g_snMatMult = 1.0;
    if(!SN_MaturityGate) return true;
    double travel = SN_LegTravelATR(dir);
    if(travel < SN_MatureATR) return true;
@@ -11428,7 +11449,16 @@ bool SN_MaturityOK(int dir)
                   dir > 0 ? "BUY" : "SELL", travel, SN_MatureATR,
                   SN_MatureRefuse ? "Refused." : "Sizing down instead.");
    if(SN_MatureRefuse) return false;
-   g_snMatMult = SN_MatureMult;
+   // (v20.02) THIS BLOCK USED TO WRITE A VARIABLE NOTHING READ. The multiplier
+   // was assigned here and at the top of this function and was never read
+   // anywhere in 21,000 lines, so the gate's own comment -- "it SIZES DOWN
+   // rather than refusing" -- was false: turning SN_MaturityGate on only
+   // incremented a counter, and every mature-leg entry still went out full size.
+   // The fix uses the channel the file already has for exactly this. LotFor()
+   // reads g_entryExtScale (~line 7602) as a consume-once size scale, and every
+   // other "size this one entry down" site sets it with MathMin so the tightest
+   // reduction wins rather than whichever ran last. Same idiom here.
+   g_entryExtScale = MathMin(g_entryExtScale, MathMax(0.10, SN_MatureMult));
    return true;
 }
 
