@@ -1,0 +1,16 @@
+REAL Supertrend: 93391 trades  sum MFE +292704  net -19906
+  random trial 1: sum MFE +217139   net -20729
+  random trial 2: sum MFE +217061   net -18902
+  random trial 3: sum MFE +216842   net -19098
+  random trial 4: sum MFE +218257   net -18295
+  random trial 5: sum MFE +216009   net -19545
+
+RANDOM mean: sum MFE +217062   net -19314
+Supertrend  : sum MFE +292704   net -19906
+
+=> Supertrend MFE is 135% of what a COIN FLIP shows.
+=> Supertrend net is -592 pt vs the coin flip.
+
+INTERPRETATION: if the ratio is ~100%, sum(MFE) carries no information about
+entry quality, and 'we left money on the table' was measuring a statistical
+artefact rather than a real missed edge.

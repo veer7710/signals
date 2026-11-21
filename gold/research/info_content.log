@@ -1,0 +1,42 @@
+bars 1,021,499  2024-01-01 23:05:00+00:00 -> 2026-11-19 15:46:00+00:00
+signals 93,392
+
+============================================================================
+FORWARD RETURN AFTER A FLIP — no costs, no exits, pure information content
+============================================================================
+ horizon    mean_pt   t_stat        n   verdict                     
+     1m    -0.0013    -0.26    93391   no information              
+     2m    -0.0056    -0.79    93391   no information              
+     3m    -0.0004    -0.05    93391   no information              
+     5m     0.0023     0.21    93391   no information              
+    10m    -0.0147    -0.95    93390   no information              
+    15m    -0.0148    -0.79    93390   no information              
+    30m    -0.0126    -0.48    93390   no information              
+    60m    -0.0169    -0.45    93386   no information              
+   120m    -0.0147    -0.28    93382   no information              
+   240m    -0.0142    -0.19    93372   no information              
+
+(|t| > 2 ~ 5% significance. With n ~ 175k the smallest detectable
+ edge at 2 SE is about 0.01-0.02 pt/trade, so this test has ample power.)
+
+============================================================================
+CONDITIONAL TESTS — is the edge hiding in a subset? (horizon 15m)
+============================================================================
+  ALL                                n=  93390  mean  -0.0148  t  -0.79
+  price AGREES with DEMA60           n=  59457  mean   0.0213  t   0.90
+  price AGAINST DEMA60               n=  33933  mean  -0.0781  t  -2.54  <== SIGNIFICANT
+  ATR Q1 quiet                       n=  18678  mean   0.0048  t   0.48
+  ATR Q2                             n=  18678  mean  -0.0038  t  -0.23
+  ATR Q3                             n=  18677  mean  -0.0086  t  -0.33
+  ATR Q4                             n=  18678  mean   0.0038  t   0.10
+  ATR Q5 wild                        n=  18678  mean  -0.0702  t  -0.88
+  Asia 00-06                         n=  28573  mean   0.0091  t   0.29
+  London 07-11                       n=  20807  mean  -0.0072  t  -0.20
+  Overlap 12-15                      n=  16539  mean  -0.0170  t  -0.30
+  NY 16-20                           n=  19302  mean  -0.0399  t  -1.03
+  Late 21-23                         n=   8169  mean  -0.0543  t  -0.87
+  BUY signals only                   n=  46695  mean   0.0059  t   0.22
+  SELL signals only                  n=  46695  mean  -0.0355  t  -1.34
+
+MULTIPLE-COMPARISONS NOTE: 15 subsets tested. At 5% significance, expect
+~0.75 false positives by chance. A single |t|~2 result here is NOT a finding.

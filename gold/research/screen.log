@@ -1,0 +1,63 @@
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  M1 done
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  M5 done
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  M15 done
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  M30 done
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  H1 done
+/home/user/signals/gold/research/screen.py:113: UserWarning: no explicit representation of timezones available for np.datetime64
+  isH1 = d.dt.values[s2] < np.datetime64(half)
+  H4 done
+
+total tests: 492
+
+=== TOP 25 BY |t| ===
+tf                cand  hor      n  mean_pt      t  spread  mean_over_spread   t_h1  t_h2
+M1   fade breakout 20b    2 356893   0.0287  11.08     0.2              0.14  13.52  6.78
+M1        breakout 20b    2 356893  -0.0287 -11.08     0.2             -0.14 -13.52 -6.78
+M1        breakout 20b    3 356893  -0.0330 -10.59     0.2             -0.16 -14.56 -5.90
+M1   fade breakout 20b    3 356893   0.0330  10.59     0.2              0.16  14.56  5.90
+M1        breakout 60b    2 187093  -0.0405 -10.01     0.2             -0.20 -11.71 -6.42
+M1   fade breakout 60b    2 187093   0.0405  10.01     0.2              0.20  11.71  6.42
+M1        breakout 20b    5 356893  -0.0389  -9.99     0.2             -0.19 -15.38 -4.92
+M1   fade breakout 20b    5 356893   0.0389   9.99     0.2              0.19  15.38  4.92
+M1   fade breakout 60b    3 187093   0.0469   9.68     0.2              0.23  12.35  5.84
+M1        breakout 60b    3 187093  -0.0469  -9.68     0.2             -0.23 -12.35 -5.84
+M1   fade breakout 60b    5 187093   0.0556   9.22     0.2              0.28  12.73  5.16
+M1        breakout 60b    5 187093  -0.0556  -9.22     0.2             -0.28 -12.73 -5.16
+M1 revert EMA14 1.5atr    2 548217   0.0195   9.16     0.2              0.10  14.51  4.23
+M1 revert EMA14 1.5atr    3 548217   0.0232   9.09     0.2              0.12  16.59  3.37
+M1  revert DEMA 3.0atr    2 286126   0.0250   8.56     0.2              0.13  10.03  5.15
+M1  revert DEMA 3.0atr    3 286126   0.0294   8.37     0.2              0.15  11.56  4.35
+M1 revert EMA14 1.5atr    1 548217   0.0127   8.32     0.2              0.06  11.62  4.39
+M1 revert EMA14 1.5atr    5 548217   0.0263   8.32     0.2              0.13  17.38  2.17
+M1   fade breakout 20b    1 356893   0.0157   8.29     0.2              0.08   9.88  5.13
+M1        breakout 20b    1 356893  -0.0157  -8.29     0.2             -0.08  -9.88 -5.13
+M1  revert DEMA 3.0atr    5 286126   0.0356   8.16     0.2              0.18  12.39  3.75
+M1   fade breakout 60b    1 187093   0.0235   7.85     0.2              0.12   9.33  4.93
+M1        breakout 60b    1 187093  -0.0235  -7.85     0.2             -0.12  -9.33 -4.93
+M1  continue DEMA 2atr    5 758464  -0.0200  -7.77     0.2             -0.10 -14.91 -2.62
+M1  revert DEMA 2.0atr    5 758464   0.0200   7.77     0.2              0.10  14.91  2.62
+
+=== PRE-REGISTERED ACCEPTANCE (PLAN2) ===
+ tf               cand  hor     n  mean_pt    t  spread  mean_over_spread  t_h1  t_h2
+M30 continue DEMA 2atr   20 22669   0.7998 5.59     0.2              4.00  2.83  4.91
+ H1       breakout 20b   20  4845   2.4114 5.05     0.2             12.06  2.65  4.43
+ H1 continue DEMA 2atr   10 11817   0.9998 4.51     0.2              5.00  3.82  3.46
+ H1 continue DEMA 2atr   20 11816   1.8060 5.53     0.2              9.03  6.29  3.86
+
+=== near-misses: |t|>=4 and clears spread, but fails walk-forward ===
+ tf               cand  hor     n  mean_pt    t  spread  mean_over_spread  t_h1  t_h2
+M30 continue DEMA 2atr   20 22669   0.7998 5.59     0.2              4.00  2.83  4.91
+ H1       breakout 20b   20  4845   2.4114 5.05     0.2             12.06  2.65  4.43
+ H1       breakout 60b   20  2809   3.1717 4.71     0.2             15.86  1.79  4.38
+ H1 continue DEMA 2atr   10 11817   0.9998 4.51     0.2              5.00  3.82  3.46
+ H1 continue DEMA 2atr   20 11816   1.8060 5.53     0.2              9.03  6.29  3.86

@@ -1,0 +1,6 @@
+# Raw third-party market data (747 MB) — regenerate with data/REGENERATE.md
+data/raw/
+# Consolidated dataset (116 MB, over GitHub's per-file limit) — rebuilt by build_dataset.py
+*.parquet
+__pycache__/
+*.pyc

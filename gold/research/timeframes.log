@@ -1,0 +1,19 @@
+M1 bars 2,787,238  2019-01-02 00:00:00+00:00 -> 2026-11-19 15:46:00+00:00
+  M1 done 57s  trades=283251
+  M5 done 11s  trades=51600
+  M15 done 4s  trades=16306
+  M30 done 2s  trades=7918
+  H1 done 1s  trades=3803
+  H4 done 1s  trades=1060
+
+ tf    bars  trades  per_day  avail_med  spread  avail_over_spread  gross_per_trade  gross_t  net_per_trade   net_pt  gbp_day  best_hor_bars  best_t
+ M1 2787238  283251   115.66       0.48   0.200               2.40          -0.0300    -5.44        -0.2656 -75233.0   -22.52              2   -3.12
+ M5  558491   51600    21.07       1.59   0.200               7.93          -0.0069    -0.23        -0.2435 -12563.0    -3.76              2   -1.31
+M15  186299   16306     6.66       3.25   0.200              16.24           0.0186     0.20        -0.2178  -3551.0    -1.06              2   -1.52
+M30   93166    7918     3.23       5.06   0.200              25.32           0.2060     1.04        -0.0293   -232.0    -0.07              1    0.83
+ H1   46602    3803     1.55       7.86   0.200              39.30           0.7947     1.88         0.5635   2143.0     0.64              5   -0.34
+ H4   12608    1060     0.43      15.51   0.202              76.90           1.5574     1.17         1.3259   1405.0     0.42             10    0.87
+
+avail_over_spread = median points the signal offers / median spread.
+Below ~3 the cost structurally dominates whatever the signal knows.
+gross_t = t-statistic of gross points per trade. |t|>2 would be a real edge.

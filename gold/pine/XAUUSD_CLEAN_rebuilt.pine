@@ -1,0 +1,41 @@
+//@version=6
+// XAUUSD CLEAN (rebuilt) -- the signal spec ea/XAUUSD_LEAN.mq5 is built against.
+// An INDICATOR, not a strategy, so TradingView draws no trade markers.
+// Settings match the EA: Supertrend ATR 7, multiplier 1.2, DEMA 60 on M1 / 100 on M3 / 200 else.
+//
+// NOTE ON THE SIGNAL: buy/sell are a PURE Supertrend direction flip on a CLOSED bar.
+// The DEMA is PLOTTED ONLY -- it does not gate the signal. Measured: adding it as a
+// filter does not create an edge (t=+0.90 on the agreeing subset). See research/FINDINGS.md.
+indicator("XAUUSD CLEAN", "CLEAN", overlay = true, max_labels_count = 500)
+
+stLen   = input.int(7,     "Supertrend ATR length")
+stMult  = input.float(1.2, "Supertrend multiplier", step = 0.1)
+demaLen = input.int(200,   "DEMA length (other timeframes)")
+perClk  = input.bool(true, "Match the EA: DEMA 60 on M1, 100 on M3")
+showStk = input.bool(false, "Show EMA 20/50/100/200 stack")
+
+len = not perClk ? demaLen : timeframe.period == "1" ? 60 : timeframe.period == "3" ? 100 : demaLen
+
+f_dema(src, n) =>
+    e1 = ta.ema(src, n)
+    e2 = ta.ema(e1, n)
+    2.0 * e1 - e2
+
+dema = f_dema(close, len)
+[stLine, stDir] = ta.supertrend(stMult, stLen)
+
+buy  = stDir == -1 and stDir[1] ==  1 and barstate.isconfirmed
+sell = stDir ==  1 and stDir[1] == -1 and barstate.isconfirmed
+
+plot(dema, "DEMA", color = close > dema ? color.new(color.teal, 0) : color.new(color.orange, 0), linewidth = 2)
+
+plotshape(buy,  "BUY",  shape.labelup,   location.belowbar, color = color.new(color.green, 0), text = "BUY",  textcolor = color.white, size = size.tiny)
+plotshape(sell, "SELL", shape.labeldown, location.abovebar, color = color.new(color.red, 0),   text = "SELL", textcolor = color.white, size = size.tiny)
+
+plot(showStk ? ta.ema(close, 20)  : na, "EMA 20",  color = color.new(color.gray, 50))
+plot(showStk ? ta.ema(close, 50)  : na, "EMA 50",  color = color.new(color.gray, 50))
+plot(showStk ? ta.ema(close, 100) : na, "EMA 100", color = color.new(color.gray, 50))
+plot(showStk ? ta.ema(close, 200) : na, "EMA 200", color = color.new(color.gray, 50))
+
+alertcondition(buy,  "BUY",  "XAUUSD CLEAN BUY")
+alertcondition(sell, "SELL", "XAUUSD CLEAN SELL")
