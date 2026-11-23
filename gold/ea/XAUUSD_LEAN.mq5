@@ -46,8 +46,8 @@
 //|      is fitted in Signal_Compute().                               |
 //+------------------------------------------------------------------+
 #property copyright "personal"
-#property version   "1.10"
-#define EA_BUILD "LEAN v1.10"
+#property version   "1.20"
+#define EA_BUILD "LEAN v1.20"
 
 #include <Trade/Trade.mqh>
 CTrade  trade;
@@ -84,6 +84,12 @@ input double InpMoneyPerPtPerLot    = 0.0;        // account currency per 1.00 g
 input group "=== EXITS — all optional ones OFF because they measured worthless ==="
 input bool   InpExitOnFlip          = true;       // exit when the opposite signal confirms.
                                                   // This IS the strategy's own exit. Keep ON.
+input double InpBreakEvenAtr        = 0.25;       // once profit reaches this x ATR, move the
+                                                  // stop to entry+spread. TRUE break-even: it
+                                                  // removes the loss WITHOUT capping the winner.
+                                                  // MEASURED BEST of everything tested: cuts the
+                                                  // loss 64% (-0.303 -> -0.109 pt/trade at his
+                                                  // real 0.320 spread). 0 = off.
 input double InpLockArmUSD          = 0.0;        // profit lock: arm at this gain. 0=off.
                                                   // best tested variant, still -0.134 pt/trade.
 input double InpLockGiveUSD         = 0.0;        // ...and park the stop this far behind the peak
@@ -593,6 +599,15 @@ void RatchetStop(int i)
    double gain = (px - g_pos[i].entry) * d;
    double want = g_pos[i].stop;
 
+   // TRUE BREAK-EVEN. Note this is NOT a profit target: it caps the LOSS and leaves the
+   // upside completely open. That distinction is the whole reason it works where a fixed
+   // target does not -- a target also caps the 6.7% of trades that carry everything.
+   if(InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0
+      && g_pos[i].peak >= InpBreakEvenAtr * g_pos[i].atr)
+   {
+      double be = g_pos[i].entry + d*SpreadUSD();
+      want = (d>0) ? MathMax(want, be) : MathMin(want, be);
+   }
    if(InpLockArmUSD > 0.0 && g_pos[i].peak >= InpLockArmUSD)
    {
       double lvl = g_pos[i].entry + d*(g_pos[i].peak - InpLockGiveUSD);
@@ -813,9 +828,16 @@ void Panel()
       double g = (px - g_pos[i].entry)*d;
       openNow += g; openPeak += g_pos[i].mfe;
       if(nOpen == 1)
-         openTxt = StringFormat("#%I64u %s now %+.2f peak %+.2f stop %.3f",
+      {
+         bool beOn = (InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0 &&
+                      g_pos[i].mfe >= InpBreakEvenAtr*g_pos[i].atr);
+         bool safe = (d>0) ? (g_pos[i].stop >= g_pos[i].entry)
+                           : (g_pos[i].stop <= g_pos[i].entry);
+         openTxt = StringFormat("#%I64u %s now %+.2f peak %+.2f stop %.3f  %s",
                                 g_pos[i].ticket, d>0?"BUY":"SELL", g, g_pos[i].mfe,
-                                g_pos[i].stop);
+                                g_pos[i].stop,
+                                safe ? "[RISK-FREE]" : (beOn ? "[BE arming]" : "[at risk]"));
+      }
    }
 
    int k = 0;
@@ -936,8 +958,10 @@ int OnInit()
    if(MoneyPerPt() <= 0.0)
       Print("WARNING: could not derive money-per-point from the symbol. Set "
             "InpMoneyPerPtPerLot manually or the panel's money column will read 0.");
-   PrintFormat("exits active: FLIP=%s TARGET=%s TIME=%s LOCK=%s TRAIL=%s",
-               InpExitOnFlip?"on":"off", InpTargetUSD>0?"on":"off",
+   PrintFormat("exits active: FLIP=%s BREAKEVEN=%s TARGET=%s TIME=%s LOCK=%s TRAIL=%s",
+               InpExitOnFlip?"on":"off",
+               InpBreakEvenAtr>0?StringFormat("%.2f ATR",InpBreakEvenAtr):"off",
+               InpTargetUSD>0?"on":"off",
                InpMaxHoldBars>0?"on":"off", InpLockArmUSD>0?"on":"off",
                InpTrailAtrMult>0?"on":"off");
    if(adopted>0) PrintFormat("adopted %d existing position(s) after restart", adopted);

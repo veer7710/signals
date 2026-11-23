@@ -76,3 +76,60 @@ know immediately.
 A trailing stop at 0.5 × ATR roughly halved the bleed in testing (−0.213 → −0.117 pt/trade).
 It is still a loss, and it stops you out of nearly every trade, but if you want to see it:
 set `InpTrailAtrMult = 0.5` and `InpTrailArmUSD = 0.0`.
+
+---
+
+# v1.20 — what changed, and why (from the first live run)
+
+The first live run on PU Prime found two things I had wrong.
+
+## 1. Break-even was missing, and it is the best thing tested
+I had every optional exit OFF because 38 variants had failed. But I had only ever tested
+profit *locks* (arm at X, give back Y) — **never a true break-even** (once +X, move the stop
+to entry). That was a real gap. Measured at his actual spread:
+
+| rule | net/trade | win rate | avg win | avg loss | GBP/day |
+|---|---|---|---|---|---|
+| nothing (v1.10 as shipped) | −0.303 | 26.4% | 3.79 | −1.77 | **−24.10** |
+| **break-even at +0.25 ATR** | **−0.109** | 64.7% | 0.81 | −1.79 | **−8.64** |
+| break-even at +0.50 ATR | −0.207 | 56.8% | 1.10 | −1.93 | −16.47 |
+| trail 0.5 ATR from +0.5 ATR | −0.173 | 56.8% | 1.16 | −1.92 | −13.78 |
+
+**Break-even at 0.25 ATR cuts the loss by 64%.** It is now ON by default
+(`InpBreakEvenAtr = 0.25`). The panel shows `[at risk]` → `[BE arming]` → `[RISK-FREE]`
+on the open trade so you can watch it work.
+
+Why break-even works where a profit target does not: **it caps the loss without capping the
+win.** A fixed target does both, and the 6.7% of trades that carry everything are exactly
+the ones it amputates.
+
+## 2. His broker costs nearly double what my data feed does
+Measured off his own panel: PU Prime XAUUSD.s spread **0.320**. My Exness research feed:
+**0.168**. That is **+90%**, and it alone doubles the loss:
+
+| spread | net/trade | GBP/day |
+|---|---|---|
+| 0.168 (my feed) | −0.151 | −12.05 |
+| 0.320 (his broker) | −0.303 | −24.10 |
+
+So every figure in FINDINGS.md **understates his real cost by about half.** On his account
+the bar is twice as high as the research said.
+
+## What is still true
+Best configuration of everything tested is still **−0.109 pt/trade, −£8.64/day**. It needs a
+68.9% win rate and gets 64.7% — short by 4.2 points, almost exactly the same shortfall the
+hold-to-flip version had (3.9 points). Every configuration lands about four points short of
+its own break-even requirement. That constant shortfall is the signature of no edge.
+
+## And why "bank the profit earlier" cannot fix it
+| target | win rate | avg win | avg loss | net/trade |
+|---|---|---|---|---|
+| 0.25 ATR | 64.8% | 0.44 | −1.79 | −0.344 |
+| 0.50 ATR | 56.9% | 0.89 | −1.93 | −0.327 |
+| 1.00 ATR | 44.0% | 1.77 | −1.96 | −0.320 |
+| 2.00 ATR | 29.5% | 3.27 | −1.81 | −0.311 |
+| hold to flip | 26.4% | 3.79 | −1.77 | −0.303 |
+
+Win rate climbs 26% → 65% as you bank earlier, and the average win falls 3.79 → 0.44 at
+exactly the same rate. The product barely moves, and it moves the **wrong way**. Banking
+early does not add money; it just relabels it.
