@@ -202,3 +202,90 @@ Two things follow:
   tradeable edge. The constraint is the cost-to-move ratio, not indicator choice.
 - UNTESTED and still open: tick volume (present in the dataset, never used), and any
   discretionary rule he applies by eye that is not written down in the code.
+
+---
+
+## 13. Break-even and trail (v1.30). Owner-prompted; includes a bug of mine.
+
+He said: *"there's no trailing SL or even break even here"* and *"we go into profit and
+it just doesn't know when to close... we are capturing small profits hundreds of times
+that's the goal."* Both fair. The 38-variant sweep in §7 contained profit LOCKS and
+TARGETS but **never a true break-even**, and never break-even combined with a tight
+trail. That was a real hole.
+
+### 13.0 My bug, first
+I placed the break-even stop at `fill + spread`. A long fills at ASK and exits on BID,
+so P/L = exit − fill; a stop **at the fill price** is already exactly flat. The extra
+spread booked **+0.32 pt/trade that never filled**. Every break-even figure I reported
+in the v1.20 message was inflated by roughly that. Corrected everywhere below.
+
+I also suspected same-bar look-ahead (arming a trail off the high of the bar the trade
+is inside). I checked: the simulator already evaluated the stop *before* updating the
+peak, so the level in force on bar *i* only used bars < *i*. That suspicion was wrong.
+
+### 13.1 Corrected results — real per-bar spread x 1.90 (his broker), 93,391 trades
+
+| rule | pt/trade | t | GBP/day |
+|---|---|---|---|
+| nothing (hold to flip) | −0.362 | −25.7 | −28.8 |
+| break-even 0.10 ATR | −0.179 | −20.0 | −14.2 |
+| break-even 0.10 + trail 0.25 ATR from +0.5 | **−0.075** | −12.1 | −5.9 |
+
+Break-even arm swept 0.05–1.00; **0.10 is best and it is monotone** — the tighter the
+better, which is itself evidence the entry has no drift to wait for. Fixed targets
+remain strictly worse at every size.
+
+### 13.2 The coin-flip control — this is the finding that matters
+Same entry bars, same exit rules, direction randomised:
+
+| | signal | random direction | signal's contribution |
+|---|---|---|---|
+| nothing | −0.362 | −0.358 | −0.004 |
+| BE + trail | −0.075 | −0.099 | **+0.024** |
+
+**The Supertrend's direction is worth +0.024 pt/trade, ~7% of one spread.** The exit
+rule produces essentially the entire improvement. Any future work belongs in the entry,
+not the exit — and the §3 result (flip is anti-predictive, t = −5.44) is consistent with
+this: the indicator is close to informationless and the exits were masking it.
+
+### 13.3 Slippage is now the binding constraint
+With a trail, **99–100% of trades exit on a stop**, so slippage is a flat per-trade tax:
+
+| avg stop slippage | BE+trail pt/trade |
+|---|---|
+| 0.00 | −0.075 |
+| 0.10 | −0.174 |
+| 0.20 | −0.274 |
+| 0.29 | −0.362 = the whole gain gone |
+
+No dataset I hold contains his broker's stop-fill slippage. **v1.30 measures it** in the
+panel and in the journal (`stop_level`, `stop_hit`, `slip_pts`). Open question, highest
+value of anything outstanding.
+
+### 13.4 ATR dependence — pre-registered in PLAN3.md, partially accepted
+Net rises monotonically with ATR, zero-crossing at **ATR ≈ 1.63** at a 0.320 spread.
+Weighted slope **+0.070 pt per unit of ATR/spread, t = 38.4**. Sign agrees in both
+walk-forward halves for every bucket.
+
+| ATR | N | nothing | BE+trail | half A | half B |
+|---|---|---|---|---|---|
+| 0.00–0.75 | 27,317 | −0.313 | −0.273 | −0.251 | −0.216 |
+| 0.75–1.25 | 21,652 | −0.312 | −0.174 | −0.176 | −0.187 |
+| 1.25–2.00 | 21,370 | −0.299 | −0.064 | −0.078 | −0.024 |
+| 2.00–2.50 | 8,597 | −0.197 | +0.051 | +0.116 | +0.174 |
+| 2.50–3.50 | 8,252 | −0.363 | +0.124 | +0.169 | +0.269 |
+| 3.50+ | 6,202 | −0.471 | +0.671 | +0.166 | +0.857 |
+
+**PLAN3 acceptance: PARTIAL.** Slope t > 4 PASS. All bucket signs agree across halves
+PASS. Top bucket positive with t > 2 in *both* halves **FAIL** (ATR 3.5+ gave t = 0.7 in
+half A). The 2.5–3.5 bucket passes fully (A t = 2.2, B t = 9.3). So the relationship is
+real; the extreme tail is not yet trustworthy.
+
+Mechanism is **not** the indicator — the coin flip is positive in the high buckets too.
+It is a long-volatility payoff: capped loss, open upside, which pays when realised
+movement exceeds what the stop-outs cost. His live ATR of 2.824 sits in the
+second-best bucket, which is the honest explanation for why the chart looks tradeable
+to him right now and did not look that way in the 2024 data.
+
+**Consequence is a signal filter, so it is NOT implemented.** Owner's call per the
+standing rules. Number brought, decision not taken.

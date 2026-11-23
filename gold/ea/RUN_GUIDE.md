@@ -79,7 +79,15 @@ set `InpTrailAtrMult = 0.5` and `InpTrailArmUSD = 0.0`.
 
 ---
 
-# v1.20 — what changed, and why (from the first live run)
+# v1.20 — RETRACTED. The numbers below are WRONG. See v1.30.
+
+> **Do not use this section.** The break-even figures in it are inflated by a bug I
+> wrote: I put the break-even stop at `fill + spread` instead of at the fill price.
+> A long fills at ASK and exits on BID, so P/L = exit − fill, and a stop sitting *at*
+> the fill is already exactly flat. Adding a spread on top booked +0.32 pt per trade
+> that never filled. Kept here only so the error is on the record.
+
+# v1.20 (superseded) — what changed, and why (from the first live run)
 
 The first live run on PU Prime found two things I had wrong.
 
@@ -133,3 +141,101 @@ its own break-even requirement. That constant shortfall is the signature of no e
 Win rate climbs 26% → 65% as you bank earlier, and the average win falls 3.79 → 0.44 at
 exactly the same rate. The product barely moves, and it moves the **wrong way**. Banking
 early does not add money; it just relabels it.
+
+
+---
+
+# v1.30 — the corrected version. Read this one.
+
+## What I got wrong in v1.20
+The break-even stop level. For a long, the fill is at **ask** and the exit triggers on
+**bid**, so profit = exit − fill. A stop sitting **at the fill price** is therefore
+already exactly flat. I had it at `fill + spread`, which:
+- in the simulator, booked **+0.32 pt per trade that never filled** — so every v1.20
+  break-even number was too good by about that much, and
+- in MT5, asked the broker for a stop price had not reached yet, which at low ATR it
+  would simply reject.
+
+Fixed. `InpBreakEvenCushUSD = 0.0` means the stop goes to the fill price itself.
+
+## The corrected numbers, on real per-bar spread scaled to his broker, 93,391 trades
+
+| rule | pt/trade | GBP/day | what it does |
+|---|---|---|---|
+| nothing (v1.10) | −0.362 | −28.8 | holds to the opposite signal |
+| break-even 0.10 ATR | −0.179 | −14.2 | caps the loss at zero |
+| **+ trail 0.25 ATR from +0.5 ATR** | **−0.075** | **−5.9** | **and rides the winner** |
+
+**Break-even + trail removes 79% of the loss.** Both are ON in v1.30. He was right that
+their absence was the problem; he was right that this is the mechanism.
+
+## The two things that stop it being an edge
+
+**1. A coin flip gets almost all of it.** Same entry bars, same exits, direction chosen
+at random instead of by the Supertrend:
+
+| | signal | coin flip | the signal's actual contribution |
+|---|---|---|---|
+| nothing | −0.362 | −0.358 | −0.004 |
+| BE + trail | −0.075 | −0.099 | **+0.024** |
+
+The Supertrend's *direction* is worth **+0.024 pt/trade — about 7% of one spread.** The
+exit rule is doing essentially all of the work. That is the cleanest measurement of the
+indicator's value in the whole project.
+
+**2. With a trail, ~100% of trades exit on a stop**, so slippage stops being a rounding
+error and becomes a flat per-trade tax:
+
+| avg stop slippage | BE+trail pt/trade |
+|---|---|
+| 0.00 | −0.075 |
+| 0.10 | −0.174 |
+| 0.20 | −0.274 |
+| **0.29** | **−0.362 — the entire gain gone** |
+
+**0.29 pt of average slippage erases everything break-even and the trail just won.** I
+have no dataset that contains his broker's stop-fill slippage, so v1.30 **measures it**:
+
+- panel line: `stop fills N | avg slippage +X.XXX pt | worst +X.XXX`
+- once 20 stop fills are in, it prints `slippage OK so far` or `SLIPPAGE IS EATING IT`
+- journal columns: `stop_level`, `stop_hit`, `slip_pts`, `be_armed`, `trail_armed`
+
+**This is the single most valuable number you can send back.** It decides whether the
+trail is worth having at all, and nothing but your own account can produce it.
+
+## The one genuinely new finding: it depends on volatility
+
+Net points per trade rise **monotonically** with ATR and cross zero at **ATR ≈ 1.63**
+at a 0.320 spread. Slope t = 38.4, and the sign of every bucket agrees across both
+walk-forward halves.
+
+| ATR at entry | share of trades | BE+trail pt/trade |
+|---|---|---|
+| under 0.75 | 29% | −0.273 |
+| 0.75–1.25 | 23% | −0.174 |
+| 1.25–2.00 | 23% | −0.064 |
+| 2.00–2.50 | 9% | **+0.051** |
+| 2.50–3.50 | 9% | **+0.124** |
+| over 3.50 | 7% | **+0.671** |
+
+**Your ATR right now is 2.824.** That is in the second-best bucket, and it is why the
+chart looks tradeable to you — in this regime it nearly is. On the 2024–2026 average
+(median ATR 1.18) it is not.
+
+Two honest caveats. The coin flip is positive in those high buckets too, so this is not
+the Supertrend working — it is a long-volatility payoff (capped loss, open upside) that
+pays when the market moves more than the stop-outs cost. And the strict pre-registered
+test in `research/PLAN3.md` **failed on the top bucket** (ATR 3.5+ had t = 0.7 in the
+first half, below the t > 2 I required), so the 2.5–3.5 bucket is the furthest I will
+stand behind.
+
+The actionable version of this is a **volatility condition** — don't trade below ATR
+~1.6. That is a signal filter, and the standing rules say I bring you the number and
+you decide. So it is **not** in this build. Say the word and it goes in behind an input.
+
+## Install
+Same as before: replace `XAUUSD_LEAN.mq5`, F7 to compile, re-attach to XAUUSD.s M1.
+New defaults you will see working: `InpBreakEvenAtr 0.10`, `InpTrailAtrMult 0.25`,
+`InpTrailArmAtr 0.50`. The open-trade line now reads `[at risk]` → `[RISK-FREE]` →
+`[TRAILING]`, and the Experts tab logs `BREAK-EVEN armed` and `TRAIL armed` with the
+level each time.

@@ -36,18 +36,45 @@
 //|   * 38 exit variants tested; NONE passed a pre-registered         |
 //|     acceptance test. Every early cut removed a LARGER share of    |
 //|     winning points than of losing points.                         |
+//|                                                                  |
+//|  CORRECTED IN v1.30 — the owner spotted a real gap: that sweep    |
+//|  only had profit LOCKS and TARGETS, never a true BREAK-EVEN. It   |
+//|  turns out to matter more than anything else tested. At his real  |
+//|  broker spread, per trade, 93,391 trades:                         |
+//|     nothing                        -0.362                         |
+//|     break-even 0.10 ATR            -0.179                         |
+//|     + trail 0.25 ATR from +0.5     -0.075                         |
+//|  So break-even + trail removes 79% of the loss. Both are now ON.  |
+//|                                                                  |
+//|  BUT TWO THINGS KEEP IT FROM BEING AN EDGE:                       |
+//|   a) A COIN FLIP GETS ALMOST ALL OF IT. Same entry bars, same     |
+//|      exits, direction randomised: -0.099 vs the signal's -0.075.  |
+//|      The Supertrend's direction is worth +0.024 pt/trade, about   |
+//|      7% of one spread. The exit rule is doing the work, not the   |
+//|      indicator.                                                  |
+//|   b) WITH A TRAIL, ~100% OF TRADES EXIT ON A STOP, so slippage    |
+//|      becomes a straight per-trade tax. 0.29 pt of average stop    |
+//|      slippage erases the entire +0.287 gain. That number is NOT   |
+//|      in any dataset I have, so v1.30 MEASURES it: see the panel   |
+//|      line "avg slippage" and the journal's slip_pts column.      |
+//|   * Net points rise monotonically with ATR and cross zero at      |
+//|     ATR ~1.63 at a 0.320 spread (slope t = 38.4, sign agrees in   |
+//|     both walk-forward halves). A volatility CONDITION is the one  |
+//|     untested idea with a real basis -- but it is a signal filter, |
+//|     so it is NOT in this build. Owner decides that one.           |
 //|   * The edge improves monotonically with timeframe and is only    |
 //|     non-negative at H1/H4 (gross t = +1.88 / +1.17 — suggestive,  |
 //|     still not significant).                                       |
-//|   => every optional exit below defaults to OFF, and this EA will  |
-//|      LOSE MONEY on the Supertrend signal, fastest on M1. It is a  |
+//|   => break-even and the trail are ON; targets and locks stay OFF. |
+//|      On the Supertrend signal this EA is still expected to        |
+//|      LOSE MONEY, just far more slowly than v1.10 did. It is a     |
 //|      trustworthy chassis, not a profitable strategy. Do not run   |
 //|      it live expecting profit until a signal with measured edge   |
 //|      is fitted in Signal_Compute().                               |
 //+------------------------------------------------------------------+
 #property copyright "personal"
-#property version   "1.20"
-#define EA_BUILD "LEAN v1.20"
+#property version   "1.30"
+#define EA_BUILD "LEAN v1.30"
 
 #include <Trade/Trade.mqh>
 CTrade  trade;
@@ -81,21 +108,32 @@ input double InpMoneyPerPtPerLot    = 0.0;        // account currency per 1.00 g
                                                   // any broker/account currency). Only override
                                                   // if the panel's money column looks wrong.
 
-input group "=== EXITS — all optional ones OFF because they measured worthless ==="
+input group "=== EXITS — break-even + trail ON: measured, see header ==="
 input bool   InpExitOnFlip          = true;       // exit when the opposite signal confirms.
                                                   // This IS the strategy's own exit. Keep ON.
-input double InpBreakEvenAtr        = 0.25;       // once profit reaches this x ATR, move the
-                                                  // stop to entry+spread. TRUE break-even: it
-                                                  // removes the loss WITHOUT capping the winner.
-                                                  // MEASURED BEST of everything tested: cuts the
-                                                  // loss 64% (-0.303 -> -0.109 pt/trade at his
-                                                  // real 0.320 spread). 0 = off.
-input double InpLockArmUSD          = 0.0;        // profit lock: arm at this gain. 0=off.
-                                                  // best tested variant, still -0.134 pt/trade.
-input double InpLockGiveUSD         = 0.0;        // ...and park the stop this far behind the peak
-input double InpTrailAtrMult        = 0.0;        // chandelier trail in ATR. 0=off (measured worse)
-input double InpTrailArmUSD         = 0.0;        // ...armed only past this gain
-input double InpTargetUSD           = 0.0;        // fixed target. 0=off (measured strictly worse)
+input double InpBreakEvenAtr        = 0.10;       // once PEAK profit reaches this x ATR, move the
+                                                  // stop to the FILL PRICE. True break-even: caps
+                                                  // the loss, leaves the upside wide open. That is
+                                                  // why it beats a target, which also amputates
+                                                  // the 6.7% of trades that carry everything.
+                                                  // MEASURED 0.10 best of 0.05-1.00. 0 = off.
+input double InpBreakEvenCushUSD    = 0.0;        // extra dollars ABOVE break-even to park the stop.
+                                                  // 0 = the fill price itself, which is exactly
+                                                  // flat. v1.20 wrongly added a spread here: a long
+                                                  // fills at ASK and exits on BID, so P/L = exit -
+                                                  // fill and a stop AT the fill is already flat.
+                                                  // That error booked +0.32pt that never filled.
+input double InpTrailAtrMult        = 0.25;       // chandelier trail in ATR, from the peak.
+                                                  // MEASURED: with break-even, this is what takes
+                                                  // -0.362 to -0.075 pt/trade. 0 = off.
+input double InpTrailArmUSD         = 0.0;        // ...arms past this gain in dollars (0 = ignore)
+input double InpTrailArmAtr         = 0.50;       // ...or past this x ATR. The LARGER of the two
+                                                  // applies, so both inputs bite.
+input double InpLockArmUSD          = 0.0;        // profit lock (arm X, give back Y): OFF. Strictly
+input double InpLockGiveUSD         = 0.0;        // worse than break-even in every test.
+input double InpTargetUSD           = 0.0;        // fixed target. 0=off (measured strictly worse:
+                                                  // tighter target = higher win rate = smaller
+                                                  // average win, and the product gets WORSE)
 input int    InpMaxHoldBars         = 0;          // time stop in signal-TF bars. 0=off
 
 input group "=== DIAGNOSTICS ==="
@@ -124,6 +162,8 @@ struct PosState
    double   mfe;          // best favourable excursion, USD
    double   mae;          // worst adverse excursion, USD
    double   peak;         // == mfe, kept separate for lock arithmetic
+   bool     beArmed;      // break-even stop has been placed
+   bool     trArmed;      // trail has been placed
 };
 PosState  g_pos[MAXPOS];
 
@@ -167,21 +207,36 @@ int       g_signalsSeen = 0;
 #define PENDN 64
 ulong     g_pendId[PENDN];
 double    g_pendPeak[PENDN];
+double    g_pendStop[PENDN];    // last protective level, to measure fill slippage
+bool      g_pendBe[PENDN];
+bool      g_pendTr[PENDN];
 int       g_pendW = 0;
 
-void StashPeak(ulong id, double peak)
+void StashPeak(ulong id, double peak, double stop, bool be, bool tr)
 {
-   g_pendId[g_pendW % PENDN] = id;
-   g_pendPeak[g_pendW % PENDN] = peak;
+   int k = g_pendW % PENDN;
+   g_pendId[k] = id; g_pendPeak[k] = peak; g_pendStop[k] = stop;
+   g_pendBe[k] = be; g_pendTr[k] = tr;
    g_pendW++;
 }
-double TakePeak(ulong id, bool &found)
+double TakePeak(ulong id, bool &found, double &stop, bool &be, bool &tr)
 {
    for(int i = 0; i < PENDN; i++)
-      if(g_pendId[i] == id) { found = true; g_pendId[i] = 0; return g_pendPeak[i]; }
-   found = false;
+      if(g_pendId[i] == id)
+      {
+         found = true; g_pendId[i] = 0;
+         stop = g_pendStop[i]; be = g_pendBe[i]; tr = g_pendTr[i];
+         return g_pendPeak[i];
+      }
+   found = false; stop = 0.0; be = false; tr = false;
    return 0.0;
 }
+
+//---- SLIPPAGE: the number that decides whether the trail is worth having.
+// With a trail, essentially EVERY trade exits on a stop, so every point of slippage
+// is a point per trade. Research says the whole break-even+trail gain (+0.287 pt) is
+// erased by 0.29 pt of average slippage. So we measure it instead of assuming it.
+double g_slipSum = 0.0; int g_slipN = 0; double g_slipWorst = 0.0;
 
 string    g_jrnl = "";
 bool      g_parityDone = false;
@@ -224,7 +279,8 @@ void ReleaseSlot(int i)
 {
    if(i < 0 || i >= MAXPOS) return;
    if(g_pos[i].live && g_pos[i].ticket != 0)
-      StashPeak(g_pos[i].ticket, g_pos[i].mfe);   // keep the peak for the book
+      StashPeak(g_pos[i].ticket, g_pos[i].mfe, g_pos[i].stop,
+                g_pos[i].beArmed, g_pos[i].trArmed);   // peak+stop, for slippage measurement
    g_pos[i].live = false;
    g_pos[i].ticket = 0;
 }
@@ -552,6 +608,7 @@ bool SendEntry(int dir, string why)
    g_pos[slot].opened   = TimeCurrent();
    g_pos[slot].barsHeld = 0;
    g_pos[slot].mfe = 0; g_pos[slot].mae = 0; g_pos[slot].peak = 0;
+   g_pos[slot].beArmed = false; g_pos[slot].trArmed = false;
 
    g_dayTrades++;
    PrintFormat("[%s] OPEN %s #%I64u %.2f lots @ %.3f  stop %.3f (%.2f USD = %.2f x ATR)  "
@@ -599,25 +656,53 @@ void RatchetStop(int i)
    double gain = (px - g_pos[i].entry) * d;
    double want = g_pos[i].stop;
 
-   // TRUE BREAK-EVEN. Note this is NOT a profit target: it caps the LOSS and leaves the
-   // upside completely open. That distinction is the whole reason it works where a fixed
-   // target does not -- a target also caps the 6.7% of trades that carry everything.
+   double lim0 = (d>0) ? px - g_minStopDist : px + g_minStopDist;   // placeable boundary
+
+   // TRUE BREAK-EVEN, at the FILL PRICE. A long fills at ASK and exits on BID, so
+   // P/L = exit - fill and a stop sitting AT the fill is exactly flat. v1.20 added a
+   // spread on top, which asked the broker for a level price had not reached.
    if(InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0
       && g_pos[i].peak >= InpBreakEvenAtr * g_pos[i].atr)
    {
-      double be = g_pos[i].entry + d*SpreadUSD();
-      want = (d>0) ? MathMax(want, be) : MathMin(want, be);
+      double be = g_pos[i].entry + d*InpBreakEvenCushUSD;
+      // Arm ONLY once the level is placeable. Clamping an unplaceable break-even to the
+      // broker minimum would park the stop on top of price -- a market exit in disguise.
+      if((d>0 && be <= lim0) || (d<0 && be >= lim0))
+      {
+         want = (d>0) ? MathMax(want, be) : MathMin(want, be);
+         if(!g_pos[i].beArmed)
+         {
+            g_pos[i].beArmed = true;
+            Log(StringFormat("#%I64u BREAK-EVEN armed at %.3f (peak %.2f = %.2f x ATR)",
+                g_pos[i].ticket, be, g_pos[i].peak, g_pos[i].peak/g_pos[i].atr));
+         }
+      }
    }
    if(InpLockArmUSD > 0.0 && g_pos[i].peak >= InpLockArmUSD)
    {
       double lvl = g_pos[i].entry + d*(g_pos[i].peak - InpLockGiveUSD);
       want = (d>0) ? MathMax(want, lvl) : MathMin(want, lvl);
    }
-   if(InpTrailAtrMult > 0.0 && gain >= InpTrailArmUSD && g_pos[i].atr > 0)
+   // CHANDELIER TRAIL. Arms off the PEAK, never the current price, so once armed it stays
+   // armed even if price pulls back.
+   if(InpTrailAtrMult > 0.0 && g_pos[i].atr > 0)
    {
-      double ext = g_pos[i].entry + d*g_pos[i].peak;
-      double lvl = ext - d*InpTrailAtrMult*g_pos[i].atr;
-      want = (d>0) ? MathMax(want, lvl) : MathMin(want, lvl);
+      double arm = MathMax(InpTrailArmUSD, InpTrailArmAtr*g_pos[i].atr);
+      if(g_pos[i].peak >= arm)
+      {
+         double ext = g_pos[i].entry + d*g_pos[i].peak;
+         double lvl = ext - d*InpTrailAtrMult*g_pos[i].atr;
+         if((d>0 && lvl <= lim0) || (d<0 && lvl >= lim0))
+         {
+            want = (d>0) ? MathMax(want, lvl) : MathMin(want, lvl);
+            if(!g_pos[i].trArmed)
+            {
+               g_pos[i].trArmed = true;
+               Log(StringFormat("#%I64u TRAIL armed at %.3f (peak %.2f, arm %.2f)",
+                   g_pos[i].ticket, lvl, g_pos[i].peak, arm));
+            }
+         }
+      }
    }
    // never place a stop the wrong side of price, or inside the broker minimum
    double lim = (d>0) ? px - g_minStopDist : px + g_minStopDist;
@@ -770,16 +855,34 @@ void BookClose(ulong posId)
    double ein = pxIn/volIn, eout = pxOut/volOut;
    double pts = (eout - ein) * dir;            // realised, spread already inside the fills
 
-   bool havePeak = false;
-   double peak = TakePeak(posId, havePeak);
+   bool havePeak = false, wasBe = false, wasTr = false;
+   double lastStop = 0.0;
+   double peak = TakePeak(posId, havePeak, lastStop, wasBe, wasTr);
    if(peak < pts) peak = pts;                  // peak can never be below what we realised
+
+   // Did we fill at the stop level, or worse? Only meaningful if the exit actually was
+   // the stop, which we infer from the fill landing at or beyond the level.
+   double slip = 0.0; bool stopHit = false;
+   if(havePeak && lastStop > 0.0)
+   {
+      bool beyond = (dir>0) ? (eout <= lastStop + 0.5) : (eout >= lastStop - 0.5);
+      if(beyond)
+      {
+         stopHit = true;
+         slip = (lastStop - eout) * dir;       // positive = filled WORSE than the level
+         g_slipSum += slip; g_slipN++;
+         if(slip > g_slipWorst) g_slipWorst = slip;
+      }
+   }
 
    g_dayPts += pts;   g_totPts += pts;   g_totTrades++;
    if(havePeak) { g_dayOffered += peak; g_totOffered += peak; }
 
-   PrintFormat("[%s] BOOKED #%I64u %s  took %+.2f pt of a %+.2f pt peak (%.0f%%)  %+.2f %s",
+   PrintFormat("[%s] BOOKED #%I64u %s  took %+.2f pt of a %+.2f pt peak (%.0f%%)  %+.2f %s"
+               "  [%s%s%s slip %+.3f]",
                EA_BUILD, posId, dir>0?"BUY":"SELL", pts, peak,
-               peak>0 ? 100.0*pts/peak : 0.0, cash, Ccy());
+               peak>0 ? 100.0*pts/peak : 0.0, cash, Ccy(),
+               wasBe?"BE ":"", wasTr?"TRAIL ":"", stopHit?"stop":"flip", slip);
 
    if(!InpJournal) return;
    if(g_jrnl == "") g_jrnl = StringFormat("lean_journal_%s.csv", _Symbol);
@@ -790,7 +893,8 @@ void BookClose(ulong posId)
    if(fresh)
       FileWrite(fh, "build","pos_id","dir","t_in","t_out","entry","exit",
                     "points","peak_points","capture_pct","money","secs_held",
-                    "spread_now","atr_now","lots");
+                    "spread_now","atr_now","lots",
+                    "stop_level","stop_hit","slip_pts","be_armed","trail_armed");
    FileWrite(fh, EA_BUILD, (string)posId, dir>0?"BUY":"SELL",
              TimeToString(tIn, TIME_DATE|TIME_SECONDS),
              TimeToString(tOut, TIME_DATE|TIME_SECONDS),
@@ -799,12 +903,14 @@ void BookClose(ulong posId)
              DoubleToString(peak>0 ? 100.0*pts/peak : 0.0, 1),
              DoubleToString(cash,2),
              (string)(int)(tOut-tIn), DoubleToString(SpreadUSD(),3),
-             DoubleToString(g_atr,3), DoubleToString(volIn,2));
+             DoubleToString(g_atr,3), DoubleToString(volIn,2),
+             DoubleToString(lastStop,3), stopHit?"1":"0",
+             DoubleToString(slip,3), wasBe?"1":"0", wasTr?"1":"0");
    FileClose(fh);
 }
 
 //==================== PANEL ========================================
-#define PLINES 16
+#define PLINES 19
 void Panel()
 {
    if(!InpPanel) return;
@@ -829,14 +935,14 @@ void Panel()
       openNow += g; openPeak += g_pos[i].mfe;
       if(nOpen == 1)
       {
-         bool beOn = (InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0 &&
-                      g_pos[i].mfe >= InpBreakEvenAtr*g_pos[i].atr);
+         bool beOn = g_pos[i].beArmed;
+         bool trOn = g_pos[i].trArmed;
          bool safe = (d>0) ? (g_pos[i].stop >= g_pos[i].entry)
                            : (g_pos[i].stop <= g_pos[i].entry);
          openTxt = StringFormat("#%I64u %s now %+.2f peak %+.2f stop %.3f  %s",
                                 g_pos[i].ticket, d>0?"BUY":"SELL", g, g_pos[i].mfe,
                                 g_pos[i].stop,
-                                safe ? "[RISK-FREE]" : (beOn ? "[BE arming]" : "[at risk]"));
+                                trOn ? "[TRAILING]" : (safe||beOn ? "[RISK-FREE]" : "[at risk]"));
       }
    }
 
@@ -862,6 +968,14 @@ void Panel()
               "capture %+.1f%%  %+.2f %s ----",
               g_totTrades, g_totOffered, g_totPts, capS, g_totPts*mpp, Ccy());
    L[k++] = "  OPEN: " + openTxt;
+   // THE DECIDING NUMBER. With a trail, nearly every trade exits on a stop, so slippage
+   // is a straight per-trade tax. Research says 0.29 pt of it erases the whole gain.
+   L[k++] = StringFormat("  stop fills %d | avg slippage %+.3f pt (%.2f %s/trade) | worst %+.3f",
+                         g_slipN, g_slipN>0 ? g_slipSum/g_slipN : 0.0,
+                         g_slipN>0 ? (g_slipSum/g_slipN)*mpp : 0.0, Ccy(), g_slipWorst);
+   if(g_slipN >= 20)
+      L[k++] = StringFormat("  %s  <- trail pays for itself only below 0.29 pt",
+                            (g_slipSum/g_slipN) < 0.29 ? "slippage OK so far" : "SLIPPAGE IS EATING IT");
    L[k++] = StringFormat("  signals seen %d | entries refused %d%s", g_signalsSeen, g_refused,
               g_refused > 0 ? ("  last: " + g_lastRefusal) : "");
    L[k++] = StringFormat("  %s%s", g_halted ? "*** DAILY LOSS HALT ***  " : "",
@@ -910,7 +1024,8 @@ int OnInit()
    if(g_minStopDist < 10*_Point) g_minStopDist = 10*_Point;
 
    for(int i=0; i<MAXPOS; i++) { g_pos[i].live=false; g_pos[i].ticket=0; }
-   for(int i=0; i<PENDN; i++) { g_pendId[i]=0; g_pendPeak[i]=0; }
+   for(int i=0; i<PENDN; i++)
+   { g_pendId[i]=0; g_pendPeak[i]=0; g_pendStop[i]=0; g_pendBe[i]=false; g_pendTr[i]=false; }
 
    // Filling mode must match what the broker supports or EVERY order is rejected with
    // "unsupported filling mode". This is the commonest reason an EA silently never trades.
@@ -941,8 +1056,17 @@ int OnInit()
       g_pos[s].entry  = PositionGetDouble(POSITION_PRICE_OPEN);
       g_pos[s].stop   = PositionGetDouble(POSITION_SL);
       g_pos[s].opened = (datetime)PositionGetInteger(POSITION_TIME);
-      g_pos[s].atr    = 0; g_pos[s].spreadIn = 0;
+      // ATR at the original entry is gone after a restart. Use the CURRENT ATR rather
+      // than 0, because 0 silently disables break-even and the trail for this position
+      // (both require atr > 0) -- an adopted trade would run naked to its hard stop.
+      g_pos[s].atr    = g_atr; g_pos[s].spreadIn = SpreadUSD();
       g_pos[s].mfe=0; g_pos[s].mae=0; g_pos[s].peak=0; g_pos[s].barsHeld=0;
+      // if the broker-side stop is already past entry, break-even was armed before.
+      int ad = g_pos[s].dir;
+      g_pos[s].beArmed = (g_pos[s].stop > 0.0) &&
+                         ((ad>0) ? (g_pos[s].stop >= g_pos[s].entry)
+                                 : (g_pos[s].stop <= g_pos[s].entry));
+      g_pos[s].trArmed = false;
       adopted++;
    }
 
