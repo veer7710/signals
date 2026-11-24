@@ -239,3 +239,72 @@ New defaults you will see working: `InpBreakEvenAtr 0.10`, `InpTrailAtrMult 0.25
 `InpTrailArmAtr 0.50`. The open-trade line now reads `[at risk]` → `[RISK-FREE]` →
 `[TRAILING]`, and the Experts tab logs `BREAK-EVEN armed` and `TRAIL armed` with the
 level each time.
+
+---
+
+# v1.40 — your rule, implemented and measured
+
+## What you asked for
+> *"have it bring sl to be at like floating 50p profits, it's better to be [risk-free]
+> than risk making loss for a chance of profit... but if we need to close at 50p it
+> should some go 50p some go 6 7 8 9 pounds, it depends on the trend"*
+
+Two separate mechanisms, and you were right to separate them:
+- **break-even on MONEY** (`InpBreakEvenGBP = 0.50`) — go risk-free at 50p floating
+- **trail, not a target** (`InpTrailAtrMult = 0.10`, arms at `0.15` ATR) — so the
+  runners still run
+
+The reason it is a trail and not a 50p close: **break-even alone banks nothing.**
+Measured, break-even with no trail leaves 86% of trades closing at the break-even stop
+for roughly zero. The trail is the part that converts "in profit" into "kept".
+
+One honest note: at normal gold ATR the 0.10-ATR arm fires **earlier** than 50p, so
+that is what you will usually see trigger. Protection comes sooner, which is your stated
+preference. Set `InpBreakEvenAtr = 0` if you want exactly 50p and nothing sooner.
+
+## Where the trades land — your own question, answered
+ATR ≥ 2.0 (the regime you are trading right now), 0.10 pt of slippage assumed:
+
+| outcome | share | average |
+|---|---|---|
+| a loss | 25.1% | −£2.55 |
+| flat | 10.1% | +£0.11 |
+| under £1 | 33.4% | +£0.55 |
+| £1–3 | 24.7% | +£1.70 |
+| £3–6 | 5.0% | +£4.05 |
+| **£6+** | **1.6%** | **+£9.55** |
+
+**69% of trades close flat or better, and the £6–9 runners are there at 1.6%.** That is
+the shape you described. The panel now shows this live under
+`---- WHERE THE TRADES LAND ----`.
+
+## Net, with the honest caveats
+
+| sample | slippage | pt/trade | £/day |
+|---|---|---|---|
+| all 2024–2026 | 0.00 | +0.046 | +3.62 |
+| all 2024–2026 | 0.10 | −0.054 | −4.30 |
+| all 2024–2026 | 0.20 | −0.154 | −12.23 |
+| **ATR ≥ 2.0** | 0.00 | +0.525 | +10.31 |
+| **ATR ≥ 2.0** | **0.10** | **+0.426** | **+8.36** |
+| **ATR ≥ 2.0** | 0.30 | +0.227 | +4.45 |
+
+Three things to be clear about:
+
+1. **Over the full period it only works at near-zero slippage.** Positive at 0.00,
+   negative from about 0.05 on. That is why the slippage line on the panel matters.
+2. **In your current volatility it survives even 0.30 of slippage.** ATR ≥ 2.0 happens
+   about 25% of the time on average; your ATR today is 2.824. If today stays there, the
+   same per-trade figure at full trade frequency is roughly **+£34/day**. That is a
+   conditional number, not a forecast.
+3. **A coin flip still gets most of it.** Signal +0.426 against coin-flip +0.362 in the
+   high-ATR regime; +0.027 edge over the full period. The *mechanism* is capped loss
+   plus open upside paying off when the market moves — not the Supertrend picking
+   direction. It works; it just isn't working for the reason the indicator claims.
+
+## Install
+Replace the file, F7, re-attach to XAUUSD.s M1. New defaults: `InpBreakEvenGBP 0.50`,
+`InpTrailAtrMult 0.10`, `InpTrailArmAtr 0.15`, `InpTrailMinUSD 0.0`. Experts tab logs
+`RISK-FREE: stop to X, peak was +Y pt = +Z GBP` and `TRAIL armed at X` per trade. If you
+see stop-modify rejections, raise `InpTrailMinUSD` to 0.20–0.30 (measured cost of a 0.30
+floor: 0.046 pt/trade).

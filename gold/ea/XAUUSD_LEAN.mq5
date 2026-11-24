@@ -73,8 +73,8 @@
 //|      is fitted in Signal_Compute().                               |
 //+------------------------------------------------------------------+
 #property copyright "personal"
-#property version   "1.30"
-#define EA_BUILD "LEAN v1.30"
+#property version   "1.40"
+#define EA_BUILD "LEAN v1.40"
 
 #include <Trade/Trade.mqh>
 CTrade  trade;
@@ -111,7 +111,20 @@ input double InpMoneyPerPtPerLot    = 0.0;        // account currency per 1.00 g
 input group "=== EXITS — break-even + trail ON: measured, see header ==="
 input bool   InpExitOnFlip          = true;       // exit when the opposite signal confirms.
                                                   // This IS the strategy's own exit. Keep ON.
-input double InpBreakEvenAtr        = 0.10;       // once PEAK profit reaches this x ATR, move the
+input double InpBreakEvenGBP        = 0.50;       // OWNER'S RULE: once floating profit reaches this
+                                                  // much ACCOUNT MONEY, move the stop to the fill
+                                                  // price. "better to be risk-free than risk a loss
+                                                  // for a chance of profit." Fixed money, not ATR,
+                                                  // so it behaves the same in every volatility.
+                                                  // Whichever of this and InpBreakEvenAtr triggers
+                                                  // FIRST wins, so protection comes as early as
+                                                  // possible. MEASURED: 0.25-1.00 all within noise
+                                                  // of each other, so this is his call, not a fit.
+                                                  // NOTE: at normal gold ATR the 0.10-ATR arm below
+                                                  // fires EARLIER than 50p, so that is what you will
+                                                  // usually see. Set InpBreakEvenAtr = 0 to get
+                                                  // exactly 50p and nothing sooner. 0 = off.
+input double InpBreakEvenAtr        = 0.10;       // ...or once PEAK profit reaches this x ATR, move the
                                                   // stop to the FILL PRICE. True break-even: caps
                                                   // the loss, leaves the upside wide open. That is
                                                   // why it beats a target, which also amputates
@@ -123,12 +136,23 @@ input double InpBreakEvenCushUSD    = 0.0;        // extra dollars ABOVE break-e
                                                   // fills at ASK and exits on BID, so P/L = exit -
                                                   // fill and a stop AT the fill is already flat.
                                                   // That error booked +0.32pt that never filled.
-input double InpTrailAtrMult        = 0.25;       // chandelier trail in ATR, from the peak.
-                                                  // MEASURED: with break-even, this is what takes
-                                                  // -0.362 to -0.075 pt/trade. 0 = off.
+input double InpTrailAtrMult        = 0.10;       // chandelier trail in ATR, behind the peak.
+                                                  // THIS IS THE CAPTURE MECHANISM. Break-even alone
+                                                  // makes you risk-free but banks nothing: 86% of
+                                                  // trades then close at the break-even stop. The
+                                                  // trail is what converts "in profit" into "kept".
+                                                  // MEASURED best of 0.10/0.15/0.25/0.40 in BOTH
+                                                  // the full sample and the high-ATR regime.
+                                                  // 0 = off.
+input double InpTrailMinUSD         = 0.0;        // floor on the trail distance, in dollars of gold.
+                                                  // Raise this if the broker rejects tight stops.
+                                                  // MEASURED cost: a 0.30 floor costs 0.046 pt per
+                                                  // trade, so only raise it if you see rejections.
 input double InpTrailArmUSD         = 0.0;        // ...arms past this gain in dollars (0 = ignore)
-input double InpTrailArmAtr         = 0.50;       // ...or past this x ATR. The LARGER of the two
-                                                  // applies, so both inputs bite.
+input double InpTrailArmAtr         = 0.15;       // ...or past this x ATR. The LARGER of the two
+                                                  // applies, so both inputs bite. MEASURED best of
+                                                  // 0.15/0.25/0.35/0.50/0.75/1.00 in both samples:
+                                                  // arming the trail LATE is what loses the money.
 input double InpLockArmUSD          = 0.0;        // profit lock (arm X, give back Y): OFF. Strictly
 input double InpLockGiveUSD         = 0.0;        // worse than break-even in every test.
 input double InpTargetUSD           = 0.0;        // fixed target. 0=off (measured strictly worse:
@@ -237,6 +261,24 @@ double TakePeak(ulong id, bool &found, double &stop, bool &be, bool &tr)
 // is a point per trade. Research says the whole break-even+trail gain (+0.287 pt) is
 // erased by 0.29 pt of average slippage. So we measure it instead of assuming it.
 double g_slipSum = 0.0; int g_slipN = 0; double g_slipWorst = 0.0;
+
+//---- OUTCOME DISTRIBUTION, in the owner's own words: "some go 50p, some go 6 7 8 9
+// pounds, it depends on the trend". Buckets are ACCOUNT MONEY, so the panel answers
+// that question directly instead of making him work it out from a points average.
+#define NBUK 6
+int    g_buk[NBUK];            // loss | flat | <1 | 1-3 | 3-6 | 6+
+double g_bukSum[NBUK];
+void Bucket(double gbp)
+{
+   int b;
+   if      (gbp < -0.05) b = 0;
+   else if (gbp <= 0.20) b = 1;
+   else if (gbp <  1.00) b = 2;
+   else if (gbp <  3.00) b = 3;
+   else if (gbp <  6.00) b = 4;
+   else                  b = 5;
+   g_buk[b]++; g_bukSum[b] += gbp;
+}
 
 string    g_jrnl = "";
 bool      g_parityDone = false;
@@ -661,8 +703,15 @@ void RatchetStop(int i)
    // TRUE BREAK-EVEN, at the FILL PRICE. A long fills at ASK and exits on BID, so
    // P/L = exit - fill and a stop sitting AT the fill is exactly flat. v1.20 added a
    // spread on top, which asked the broker for a level price had not reached.
-   if(InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0
-      && g_pos[i].peak >= InpBreakEvenAtr * g_pos[i].atr)
+   double mpp    = MoneyPerPt();
+   double beArmPt = 0.0;                                   // peak, in POINTS, needed to go risk-free
+   if(InpBreakEvenGBP > 0.0 && mpp > 0.0) beArmPt = InpBreakEvenGBP / mpp;
+   if(InpBreakEvenAtr > 0.0 && g_pos[i].atr > 0.0)
+   {
+      double a = InpBreakEvenAtr * g_pos[i].atr;
+      beArmPt = (beArmPt > 0.0) ? MathMin(beArmPt, a) : a;  // whichever comes FIRST
+   }
+   if(beArmPt > 0.0 && g_pos[i].peak >= beArmPt)
    {
       double be = g_pos[i].entry + d*InpBreakEvenCushUSD;
       // Arm ONLY once the level is placeable. Clamping an unplaceable break-even to the
@@ -673,8 +722,8 @@ void RatchetStop(int i)
          if(!g_pos[i].beArmed)
          {
             g_pos[i].beArmed = true;
-            Log(StringFormat("#%I64u BREAK-EVEN armed at %.3f (peak %.2f = %.2f x ATR)",
-                g_pos[i].ticket, be, g_pos[i].peak, g_pos[i].peak/g_pos[i].atr));
+            Log(StringFormat("#%I64u RISK-FREE: stop to %.3f, peak was %+.2f pt = %+.2f %s",
+                g_pos[i].ticket, be, g_pos[i].peak, g_pos[i].peak*mpp, Ccy()));
          }
       }
    }
@@ -691,7 +740,8 @@ void RatchetStop(int i)
       if(g_pos[i].peak >= arm)
       {
          double ext = g_pos[i].entry + d*g_pos[i].peak;
-         double lvl = ext - d*InpTrailAtrMult*g_pos[i].atr;
+         double tdist = MathMax(InpTrailAtrMult*g_pos[i].atr, InpTrailMinUSD);
+         double lvl = ext - d*tdist;
          if((d>0 && lvl <= lim0) || (d<0 && lvl >= lim0))
          {
             want = (d>0) ? MathMax(want, lvl) : MathMin(want, lvl);
@@ -874,6 +924,7 @@ void BookClose(ulong posId)
          if(slip > g_slipWorst) g_slipWorst = slip;
       }
    }
+   Bucket(cash);
 
    g_dayPts += pts;   g_totPts += pts;   g_totTrades++;
    if(havePeak) { g_dayOffered += peak; g_totOffered += peak; }
@@ -910,7 +961,7 @@ void BookClose(ulong posId)
 }
 
 //==================== PANEL ========================================
-#define PLINES 19
+#define PLINES 23
 void Panel()
 {
    if(!InpPanel) return;
@@ -968,6 +1019,21 @@ void Panel()
               "capture %+.1f%%  %+.2f %s ----",
               g_totTrades, g_totOffered, g_totPts, capS, g_totPts*mpp, Ccy());
    L[k++] = "  OPEN: " + openTxt;
+   int bTot=0; for(int bi=0; bi<NBUK; bi++) bTot += g_buk[bi];
+   if(bTot > 0)
+   {
+      L[k++] = "---- WHERE THE TRADES LAND (your 50p-to-9-quid question) ----";
+      string nmz[NBUK] = {"a loss  ","flat    ","under 1 ","1 to 3  ","3 to 6  ","6 plus  "};
+      string row = "  ";
+      for(int bi=0; bi<NBUK; bi++)
+         row += StringFormat("%s%3.0f%%  ", nmz[bi], 100.0*g_buk[bi]/bTot);
+      L[k++] = row;
+      L[k++] = StringFormat("  avg when it loses %+.2f %s | avg of the 3+ runners %+.2f %s",
+                            g_buk[0]>0 ? g_bukSum[0]/g_buk[0] : 0.0, Ccy(),
+                            (g_buk[4]+g_buk[5])>0 ? (g_bukSum[4]+g_bukSum[5])/(g_buk[4]+g_buk[5]) : 0.0,
+                            Ccy());
+   }
+
    // THE DECIDING NUMBER. With a trail, nearly every trade exits on a stop, so slippage
    // is a straight per-trade tax. Research says 0.29 pt of it erases the whole gain.
    L[k++] = StringFormat("  stop fills %d | avg slippage %+.3f pt (%.2f %s/trade) | worst %+.3f",
@@ -1026,6 +1092,7 @@ int OnInit()
    for(int i=0; i<MAXPOS; i++) { g_pos[i].live=false; g_pos[i].ticket=0; }
    for(int i=0; i<PENDN; i++)
    { g_pendId[i]=0; g_pendPeak[i]=0; g_pendStop[i]=0; g_pendBe[i]=false; g_pendTr[i]=false; }
+   for(int i=0; i<NBUK; i++) { g_buk[i]=0; g_bukSum[i]=0; }
 
    // Filling mode must match what the broker supports or EVERY order is rejected with
    // "unsupported filling mode". This is the commonest reason an EA silently never trades.
@@ -1084,10 +1151,13 @@ int OnInit()
             "InpMoneyPerPtPerLot manually or the panel's money column will read 0.");
    PrintFormat("exits active: FLIP=%s BREAKEVEN=%s TARGET=%s TIME=%s LOCK=%s TRAIL=%s",
                InpExitOnFlip?"on":"off",
-               InpBreakEvenAtr>0?StringFormat("%.2f ATR",InpBreakEvenAtr):"off",
+               (InpBreakEvenGBP>0||InpBreakEvenAtr>0)
+                  ? StringFormat("%.2f %s or %.2f ATR, first to hit",
+                                 InpBreakEvenGBP, Ccy(), InpBreakEvenAtr) : "off",
                InpTargetUSD>0?"on":"off",
                InpMaxHoldBars>0?"on":"off", InpLockArmUSD>0?"on":"off",
-               InpTrailAtrMult>0?"on":"off");
+               InpTrailAtrMult>0?StringFormat("%.2f ATR behind peak, arms at %.2f ATR",
+                                 InpTrailAtrMult, InpTrailArmAtr):"off");
    if(adopted>0) PrintFormat("adopted %d existing position(s) after restart", adopted);
 
    // honest preflight
